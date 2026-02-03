@@ -1,0 +1,48 @@
+{
+  "name": "guardskills",
+  "version": "1.0.0",
+  "description": "Security skill for AI agents - scan, registry, and action control",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "guardskills": "./dist/mcp-server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mcp-server.js",
+    "dev": "tsc -w",
+    "test": "node --test dist/tests/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "ai-agent",
+    "web3",
+    "goplus"
+  ],
+  "author": "GoPlusSecurity",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GoPlusSecurity/guardskills.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "axios": "^1.6.7",
+    "commander": "^12.0.0",
+    "glob": "^10.3.10",
+    "zod": "^3.25.32"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
+}
