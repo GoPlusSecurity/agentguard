@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.env.*
+.DS_Store
+coverage/
+*.tgz
+*.swp
+*.swo
+.idea/
+.vscode/
+tmp/
+.npmrc
+skills/agentguard/scripts/data/
+skills/agentguard/scripts/package-lock.json

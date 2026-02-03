@@ -1,0 +1,13 @@
+{
+  "name": "agentguard",
+  "version": "1.0.0",
+  "description": "GoPlus AgentGuard — AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
+  "author": {
+    "name": "GoPlus Security",
+    "url": "https://github.com/GoPlusSecurity"
+  },
+  "homepage": "https://github.com/GoPlusSecurity/agentguard",
+  "repository": "https://github.com/GoPlusSecurity/agentguard",
+  "license": "MIT",
+  "keywords": ["security", "agent-protection", "web3", "claude-code", "scanner", "trust-registry"]
+}

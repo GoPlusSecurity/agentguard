@@ -1,0 +1,19 @@
+{
+  "name": "goplus-agentguard",
+  "owner": {
+    "name": "GoPlus Security",
+    "url": "https://github.com/GoPlusSecurity"
+  },
+  "metadata": {
+    "description": "GoPlus AgentGuard — AI agent security framework",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "agentguard",
+      "description": "AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets.",
+      "source": "./",
+      "strict": true
+    }
+  ]
+}

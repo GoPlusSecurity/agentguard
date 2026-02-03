@@ -1,0 +1,66 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/auto-scan.js\"",
+            "timeout": 30,
+            "async": true,
+            "statusMessage": "GoPlus AgentGuard: scanning installed skills..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "timeout": 10,
+            "statusMessage": "GoPlus AgentGuard: checking command safety..."
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "timeout": 10,
+            "statusMessage": "GoPlus AgentGuard: checking file write safety..."
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "timeout": 10,
+            "statusMessage": "GoPlus AgentGuard: checking network request..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

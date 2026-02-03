@@ -1,0 +1,60 @@
+{
+  "name": "@goplus/agentguard",
+  "version": "1.0.0",
+  "description": "GoPlus AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "agentguard": "./dist/mcp-server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mcp-server.js",
+    "dev": "tsc -w",
+    "test": "node --test dist/tests/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude-code-skill",
+    "agent-skills",
+    "mcp",
+    "security",
+    "ai-agent",
+    "web3",
+    "goplus",
+    "claude-code",
+    "codex",
+    "scanner",
+    "trust-registry",
+    "hooks"
+  ],
+  "author": "GoPlusSecurity",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GoPlusSecurity/agentguard.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "axios": "^1.6.7",
+    "commander": "^12.0.0",
+    "glob": "^10.3.10",
+    "zod": "^3.25.32"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "typescript": "^5.3.3"
+  },
+  "homepage": "https://github.com/GoPlusSecurity/agentguard#readme",
+  "bugs": {
+    "url": "https://github.com/GoPlusSecurity/agentguard/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
