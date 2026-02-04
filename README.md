@@ -134,4 +134,8 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 Found a security vulnerability? See [SECURITY.md](SECURITY.md).
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=GoPlusSecurity/agentguard&type=Date)](https://star-history.com/#GoPlusSecurity/agentguard&Date)
+
 Built by [GoPlus Security](https://gopluslabs.io).
