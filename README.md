@@ -4,6 +4,7 @@
 
 Your AI agent can execute `rm -rf /`, read your SSH keys, and send passwords to Discord. GoPlus AgentGuard stops all of that.
 
+[![npm](https://img.shields.io/npm/v/@goplus/agentguard.svg)](https://www.npmjs.com/package/@goplus/agentguard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](https://www.typescriptlang.org)
@@ -42,7 +43,13 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 
 ## Quick Start
 
-### One-Click Install
+### Install via npm
+
+```bash
+npm install @goplus/agentguard
+```
+
+### One-Click Install (Plugin + Hooks)
 
 ```bash
 git clone https://github.com/GoPlusSecurity/agentguard.git
@@ -135,7 +142,7 @@ Expected output: **CRITICAL** risk level with **20 detection hits** across JavaS
   "mcpServers": {
     "agentguard": {
       "command": "npx",
-      "args": ["-y", "agentguard"],
+      "args": ["-y", "@goplus/agentguard"],
       "env": {
         "GOPLUS_API_KEY": "your_key",
         "GOPLUS_API_SECRET": "your_secret"
@@ -150,7 +157,7 @@ MCP tools: `skill_scanner_scan`, `registry_lookup`, `registry_attest`, `registry
 ### As SDK
 
 ```typescript
-import { createAgentGuard } from 'agentguard';
+import { createAgentGuard } from '@goplus/agentguard';
 
 const { scanner, registry, actionScanner } = createAgentGuard();
 

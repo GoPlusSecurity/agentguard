@@ -11,9 +11,9 @@
  *   node trust-cli.ts hash    --path <dir>
  */
 
-import { createAgentGuard } from 'agentguard';
-import { CAPABILITY_PRESETS } from 'agentguard/dist/policy/default.js';
-import { SkillScanner } from 'agentguard/dist/scanner/index.js';
+import { createAgentGuard } from '@goplus/agentguard';
+import { CAPABILITY_PRESETS } from '@goplus/agentguard/dist/policy/default.js';
+import { SkillScanner } from '@goplus/agentguard/dist/scanner/index.js';
 
 const args = process.argv.slice(2);
 const command = args[0];

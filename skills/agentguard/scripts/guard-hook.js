@@ -29,7 +29,7 @@ try {
 } catch {
   // Fallback: try to require from node_modules
   try {
-    const gs = await import('agentguard');
+    const gs = await import('@goplus/agentguard');
     createAgentGuard = gs.createAgentGuard || gs.default;
   } catch {
     // Cannot load agentguard — allow everything and warn

@@ -33,7 +33,7 @@ try {
   CAPABILITY_PRESETS = gs.CAPABILITY_PRESETS;
 } catch {
   try {
-    const gs = await import('agentguard');
+    const gs = await import('@goplus/agentguard');
     createAgentGuard = gs.createAgentGuard || gs.default;
     CAPABILITY_PRESETS = gs.CAPABILITY_PRESETS;
   } catch {

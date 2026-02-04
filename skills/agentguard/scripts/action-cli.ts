@@ -28,12 +28,12 @@
  *     --path <filepath>
  */
 
-import { createAgentGuard } from 'agentguard';
+import { createAgentGuard } from '@goplus/agentguard';
 import type {
   ActionEnvelope,
   Web3Intent,
   ActionType,
-} from 'agentguard';
+} from '@goplus/agentguard';
 
 const args = process.argv.slice(2);
 const command = args[0];
