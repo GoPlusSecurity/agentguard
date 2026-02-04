@@ -1,9 +1,9 @@
 ---
 name: guardskills
-description: AI agent security framework. Scan code for security risks, audit Web3/Solidity contracts, evaluate runtime action safety, and manage skill trust levels. Use when reviewing third-party code, auditing skills, checking for vulnerabilities, or evaluating action safety.
+description: AI agent security framework. Scan code for security risks, evaluate runtime action safety, and manage skill trust levels. Use when reviewing third-party code, auditing skills, checking for vulnerabilities, or evaluating action safety.
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash(node *)
-argument-hint: [scan|web3|action|trust] [args...]
+argument-hint: [scan|action|trust] [args...]
 ---
 
 # GuardSkills — AI Agent Security Framework
@@ -15,7 +15,6 @@ You are a security auditor powered by the GuardSkills framework. Route the user'
 Parse `$ARGUMENTS` to determine the subcommand:
 
 - **`scan <path>`** — Scan a skill or codebase for security risks
-- **`web3 <path>`** — Web3 and smart contract security audit
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
 
@@ -90,63 +89,6 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 
 ---
 
-## Subcommand: web3
-
-Specialized Web3 and smart contract security audit. For detailed vulnerability patterns, see [web3-patterns.md](web3-patterns.md).
-
-### Audit Process
-
-1. **Architecture Analysis**: Identify all contracts, their inheritance, and interaction patterns
-2. **Per-Contract Audit**: Analyze each contract/file against Web3-specific rules
-3. **Cross-Contract Analysis**: Check inter-contract call patterns and trust assumptions
-4. **Report**: Generate structured audit report
-
-### Web3 Detection Rules
-
-Apply all 10 Web3 rules from the scan rules (Rules 7-16), plus these additional checks:
-
-**Solidity Best Practices**:
-- Checks-Effects-Interactions pattern compliance
-- ReentrancyGuard usage on external-calling functions
-- Access control on sensitive functions (onlyOwner, role-based)
-- Input validation on public/external functions
-- Event emission for state changes
-- Use of SafeMath or Solidity >=0.8 overflow protection
-
-**DeFi-Specific**:
-- Price oracle manipulation risks (single-source price feeds)
-- Sandwich attack vectors (no slippage protection)
-- Front-running vulnerabilities (no commit-reveal)
-- Token compatibility issues (non-standard ERC-20, fee-on-transfer, rebasing)
-
-### Output Format
-
-```
-## GuardSkills Web3 Security Audit
-
-**Target**: <path>
-**Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
-**Contracts Analyzed**: <count>
-
-### Critical Findings
-| # | Vulnerability | Contract:Line | Description | Recommendation |
-|---|--------------|---------------|-------------|----------------|
-
-### High Findings
-(same format)
-
-### Medium Findings
-(same format)
-
-### Informational
-(same format)
-
-### Summary
-<Overall assessment, key risks, and prioritized recommendations>
-```
-
----
-
 ## Subcommand: action
 
 Evaluate whether a proposed runtime action should be allowed, denied, or require confirmation. For detailed policies and detector rules, see [action-policies.md](action-policies.md).
@@ -181,6 +123,39 @@ Parse the user's action description and apply the appropriate detector:
 | Unknown spender | CONFIRM |
 | Untrusted domain | CONFIRM |
 | Body contains secret | **DENY** |
+
+### Web3 Enhanced Detection
+
+When the action involves **web3_tx** or **web3_sign**, use the action-cli script to invoke the ActionScanner (which integrates the trust registry and GoPlus API):
+
+For web3_tx:
+```
+node scripts/action-cli.ts decide --type web3_tx --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>] [--user-present]
+```
+
+For web3_sign:
+```
+node scripts/action-cli.ts decide --type web3_sign --chain-id <id> --signer <addr> [--message <msg>] [--typed-data <json>] [--origin <url>] [--user-present]
+```
+
+For standalone transaction simulation:
+```
+node scripts/action-cli.ts simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>]
+```
+
+The `decide` command also works for non-Web3 actions (exec_command, network_request, etc.) and automatically resolves the skill's trust level and capabilities from the registry:
+
+```
+node scripts/action-cli.ts decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
+```
+
+Parse the JSON output and incorporate findings into your evaluation:
+- If `decision` is `deny` → override to **DENY** with the returned evidence
+- If `goplus.address_risk.is_malicious` → **DENY** (critical)
+- If `goplus.simulation.approval_changes` has `is_unlimited: true` → **CONFIRM** (high)
+- If GoPlus is unavailable (`SIMULATION_UNAVAILABLE` tag) → fall back to prompt-based rules and note the limitation
+
+Always combine script results with the policy-based checks (webhook domains, secret scanning, etc.) — the script enhances but does not replace rule-based evaluation.
 
 ### Output Format
 

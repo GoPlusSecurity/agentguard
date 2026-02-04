@@ -16,10 +16,10 @@ import type { SkillIdentity, CapabilityModel } from './types/skill.js';
 import type { ActionEnvelope, Web3Intent } from './types/action.js';
 import type { TrustLevel } from './types/registry.js';
 
-// Initialize modules
-const scanner = new SkillScanner();
-const registry = new SkillRegistry();
-const actionScanner = new ActionScanner({ registry });
+// Module instances (initialized in createServer)
+let scanner: SkillScanner;
+let registry: SkillRegistry;
+let actionScanner: ActionScanner;
 
 // Zod schemas for validation
 const SkillIdentitySchema = z.object({
@@ -44,7 +44,11 @@ const CapabilityModelSchema = z.object({
 /**
  * Create and configure the MCP server
  */
-function createServer(): Server {
+function createServer(options?: { registryPath?: string }): Server {
+  scanner = new SkillScanner();
+  registry = new SkillRegistry({ filePath: options?.registryPath });
+  actionScanner = new ActionScanner({ registry });
+
   const server = new Server(
     {
       name: 'guardskills',
@@ -433,7 +437,9 @@ async function main() {
     .option('--registry-path <path>', 'Path to registry file')
     .action(async (options) => {
       // Create server
-      const server = createServer();
+      const server = createServer({
+        registryPath: options.registryPath,
+      });
 
       // Connect via stdio
       const transport = new StdioServerTransport();

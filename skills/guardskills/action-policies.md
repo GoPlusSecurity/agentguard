@@ -187,3 +187,31 @@ network:
   }
 }
 ```
+
+## GoPlus Integration
+
+The `action-cli.ts decide` command integrates with the [GoPlus Security API](https://docs.gopluslabs.io/) for enhanced Web3 action evaluation. GoPlus provides three checks:
+
+| Check | Description | Triggers |
+|-------|-------------|----------|
+| **Phishing Site Detection** | Checks if the transaction origin URL is a known phishing site | `PHISHING_ORIGIN` → DENY (critical) |
+| **Address Security** | Checks if the target address is blacklisted, associated with phishing, stealing attacks, or honeypots | `MALICIOUS_ADDRESS` → DENY (critical), `HONEYPOT_RELATED` → flag (high) |
+| **Transaction Simulation** | Simulates the transaction to detect balance changes, approval changes, and risk indicators | `UNLIMITED_APPROVAL` → CONFIRM (high), `SIMULATION_FAILED` → flag (medium) |
+
+### Environment Variables
+
+```
+GOPLUS_API_KEY=your_key         # Required for simulation
+GOPLUS_API_SECRET=your_secret   # Required for simulation
+```
+
+Phishing site detection and address security checks work without API keys. Transaction simulation requires configured credentials.
+
+### Degradation Strategy
+
+When GoPlus is unavailable (no API keys, network errors, rate limiting):
+
+1. The `SIMULATION_UNAVAILABLE` or `SIMULATION_FAILED` risk tag is set
+2. Phishing and address checks that fail are silently skipped
+3. The decision falls back to **policy-based rules only** (capability model, webhook detection, secret scanning)
+4. For `web3_tx` and `web3_sign` without GoPlus, the skill should apply prompt-based rules and note the limitation in the output

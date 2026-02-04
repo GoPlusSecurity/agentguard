@@ -85,11 +85,10 @@ async function main() {
       const source = getArg('source');
       const key = getArg('key');
       const reason = getArg('reason') || 'Revoked via CLI';
-      const result = await registry.revoke({
-        source_pattern: source,
-        record_key: key,
-        reason,
-      });
+      const result = await registry.revoke(
+        { source, record_key: key },
+        reason
+      );
       console.log(JSON.stringify(result, null, 2));
       break;
     }

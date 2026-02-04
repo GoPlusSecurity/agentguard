@@ -6,3 +6,4 @@ dist/
 .DS_Store
 coverage/
 *.tgz
+skills/guardskills/scripts/data/

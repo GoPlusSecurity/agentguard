@@ -1,6 +1,6 @@
 # GuardSkills
 
-Security framework for AI agents. Provides code scanning, Web3 auditing, runtime action evaluation, and trust management.
+Security framework for AI agents. Provides code scanning, runtime action evaluation, and trust management.
 
 ## Skill
 
@@ -8,7 +8,6 @@ This project provides a unified Claude Code skill: `/guardskills`
 
 ```
 /guardskills scan <path>          — Scan code for security risks (20 detection rules)
-/guardskills web3 <path>          — Web3/Solidity smart contract audit
 /guardskills action <description> — Evaluate runtime action safety (allow/deny/confirm)
 /guardskills trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
 ```
@@ -20,15 +19,15 @@ This project provides a unified Claude Code skill: `/guardskills`
 - `data/` — Registry storage (`registry.json`)
 - `dist/` — Compiled JavaScript output
 
-## Setup for Trust Management
+## Setup for Trust & Action CLI
 
-The `trust` subcommand requires the guardskills package:
+The `trust` and `action` subcommands use CLI scripts that require the guardskills package:
 
 ```bash
 cd skills/guardskills/scripts && npm install
 ```
 
-For GoPlus API (optional Web3 enhancement):
+For GoPlus API (optional Web3 enhancement for action evaluation):
 
 ```bash
 export GOPLUS_API_KEY=your_key
