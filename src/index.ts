@@ -74,8 +74,4 @@ export function createAgentGuard(options?: {
 }
 
 // Default export
-// Backwards compatibility alias
-export const createGuardSkills = createAgentGuard;
-
-// Default export
 export default createAgentGuard;

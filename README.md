@@ -5,73 +5,66 @@
 Your AI agent can execute `rm -rf /`, read your SSH keys, and send passwords to Discord. GoPlus AgentGuard stops all of that.
 
 [![npm](https://img.shields.io/npm/v/@goplus/agentguard.svg)](https://www.npmjs.com/package/@goplus/agentguard)
+[![GitHub Stars](https://img.shields.io/github/stars/GoPlusSecurity/agentguard)](https://github.com/GoPlusSecurity/agentguard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](https://www.typescriptlang.org)
+[![CI](https://github.com/GoPlusSecurity/agentguard/actions/workflows/ci.yml/badge.svg)](https://github.com/GoPlusSecurity/agentguard/actions/workflows/ci.yml)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
+
+## Why AgentGuard?
+
+AI coding agents run hundreds of shell commands per session with zero security review. A single malicious skill or prompt injection can:
+
+- Execute destructive commands (`rm -rf /`, fork bombs)
+- Steal your private keys, mnemonics, and API secrets
+- Exfiltrate data to Discord/Telegram webhooks
+- Drain your crypto wallet with unlimited token approvals
+
+**No other tool provides real-time, hook-based protection for AI agents.** Generic linters don't understand agent-specific threats. Manual code review doesn't scale. AgentGuard installs in one command and protects automatically.
 
 ## What It Does
 
-GoPlus AgentGuard protects your AI coding agent with two layers:
-
-**Layer 1 — Automatic Guard (hooks)**: Install once, forget about it. GoPlus AgentGuard intercepts dangerous tool calls in real time:
+**Layer 1 — Automatic Guard (hooks)**: Install once, forget about it. Intercepts dangerous tool calls in real time:
 - Blocks `rm -rf /`, fork bombs, `curl | bash` and other destructive commands
 - Prevents writes to `.env`, `.ssh/`, credentials files
 - Detects data exfiltration to Discord/Telegram/Slack webhooks
-- Flags requests to high-risk domains
+- Identifies which skill initiated each action via transcript analysis
 
 **Layer 2 — Deep Scan (skill)**: On-demand security audit with 20 detection rules:
 - Static code analysis for secrets, backdoors, and vulnerabilities
 - Web3-specific: wallet draining, unlimited approvals, reentrancy, proxy exploits
 - Runtime action evaluation with GoPlus API integration
-- Trust registry for managing skill permissions
-
-## Compatibility
-
-GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standard and works with:
-
-| Platform | Support |
-|----------|---------|
-| **Claude Code** | Full (skill + hooks auto-guard) |
-| **OpenAI Codex CLI** | Skill (scan/action/trust commands) |
-| **Gemini CLI** | Skill |
-| **Cursor** | Skill |
-| **GitHub Copilot** | Skill |
-| **Any Agent Skills-compatible agent** | Skill |
-
-> Hooks-based auto-guard (Layer 1) is currently specific to Claude Code's plugin system. The skill commands (Layer 2) work on any platform that supports the Agent Skills standard.
+- Trust registry with automatic skill scanning on session start
 
 ## Quick Start
-
-### Install via npm
 
 ```bash
 npm install @goplus/agentguard
 ```
 
-### One-Click Install (Plugin + Hooks)
+<details>
+<summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
 ```bash
 git clone https://github.com/GoPlusSecurity/agentguard.git
 cd agentguard && ./setup.sh
-```
-
-This installs the skill, builds the project, and configures your protection level.
-
-To enable automatic hook protection, add GoPlus AgentGuard as a Claude Code plugin:
-
-```bash
 claude plugin add /path/to/agentguard
 ```
 
-### Manual Install (Skill Only)
+This installs the skill, configures hooks, and sets your protection level.
+
+</details>
+
+<details>
+<summary><b>Manual install (skill only)</b></summary>
 
 ```bash
 git clone https://github.com/GoPlusSecurity/agentguard.git
 cp -r agentguard/skills/agentguard ~/.claude/skills/agentguard
 ```
 
-Then use `/agentguard` in Claude Code:
+</details>
+
+Then use `/agentguard` in your agent:
 
 ```
 /agentguard scan ./src                     # Scan code for security risks
@@ -81,28 +74,6 @@ Then use `/agentguard` in Claude Code:
 /agentguard config balanced                # Set protection level
 ```
 
-## How It Works
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Layer 1: Auto Guard (hooks — install once, forget)  │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐  │
-│  │ PreToolUse   │ │ PostToolUse  │ │ Config       │  │
-│  │ Block danger │ │ Audit log    │ │ 3 levels     │  │
-│  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘  │
-│         └────────┬───────┘               │           │
-│                  ▼                       │           │
-│        ActionScanner Engine ◄────────────┘           │
-└──────────────────────────────────────────────────────┘
-┌──────────────────────────────────────────────────────┐
-│  Layer 2: Deep Scan (skill — on demand)              │
-│  /agentguard scan   — 20-rule static analysis        │
-│  /agentguard action — Runtime action evaluation      │
-│  /agentguard trust  — Skill trust management         │
-│  /agentguard report — Security event log             │
-└──────────────────────────────────────────────────────┘
-```
-
 ## Protection Levels
 
 | Level | Behavior |
@@ -110,8 +81,6 @@ Then use `/agentguard` in Claude Code:
 | `strict` | Block all risky actions. Every dangerous or suspicious command is denied. |
 | `balanced` | Block dangerous, confirm risky. Good for daily use. **(default)** |
 | `permissive` | Only block critical threats. For experienced users who want minimal friction. |
-
-Change with: `/agentguard config <level>`
 
 ## Detection Rules (20)
 
@@ -131,112 +100,29 @@ Scan the included vulnerable demo project:
 /agentguard scan examples/vulnerable-skill
 ```
 
-Expected output: **CRITICAL** risk level with **20 detection hits** across JavaScript and Solidity files. This demo contains intentionally vulnerable code (curl|bash, hardcoded keys, webhook exfil, reentrancy, etc.) to showcase all 20 detection rules.
+Expected output: **CRITICAL** risk level with **20 detection hits** across JavaScript and Solidity files.
 
-## Advanced Usage
+## Compatibility
 
-### As MCP Server
+GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
 
-```json
-{
-  "mcpServers": {
-    "agentguard": {
-      "command": "npx",
-      "args": ["-y", "@goplus/agentguard"],
-      "env": {
-        "GOPLUS_API_KEY": "your_key",
-        "GOPLUS_API_SECRET": "your_secret"
-      }
-    }
-  }
-}
-```
+| Platform | Support |
+|----------|---------|
+| **Claude Code** | Full (skill + hooks auto-guard) |
+| **OpenAI Codex CLI** | Skill (scan/action/trust commands) |
+| **Gemini CLI** | Skill |
+| **Cursor** | Skill |
+| **GitHub Copilot** | Skill |
 
-MCP tools: `skill_scanner_scan`, `registry_lookup`, `registry_attest`, `registry_revoke`, `registry_list`, `action_scanner_decide`, `action_scanner_simulate_web3`
+> Hooks-based auto-guard (Layer 1) is specific to Claude Code's plugin system. The skill commands (Layer 2) work on any Agent Skills-compatible platform.
 
-### As SDK
+## Documentation
 
-```typescript
-import { createAgentGuard } from '@goplus/agentguard';
-
-const { scanner, registry, actionScanner } = createAgentGuard();
-
-// Scan code
-const result = await scanner.scan({
-  skill: { id: 'my-skill', source: 'github.com/org/skill', version_ref: 'v1.0.0', artifact_hash: '' },
-  payload: { type: 'dir', ref: '/path/to/skill' },
-});
-console.log(result.risk_level); // 'low' | 'medium' | 'high' | 'critical'
-
-// Evaluate action
-const decision = await actionScanner.decide({
-  actor: { skill: { id: 'my-skill', source: 'cli', version_ref: '1.0.0', artifact_hash: '' } },
-  action: { type: 'exec_command', data: { command: 'rm -rf /' } },
-  context: { session_id: 's1', user_present: true, env: 'prod', time: new Date().toISOString() },
-});
-console.log(decision.decision); // 'deny'
-```
-
-### Trust Management
-
-```
-/agentguard trust attest --id my-bot --source github.com/org/bot --version v1.0.0 --hash abc --trust-level restricted --preset trading_bot --reviewed-by admin
-/agentguard trust lookup --source github.com/org/bot
-/agentguard trust revoke --source github.com/org/bot --reason "security concern"
-/agentguard trust list --trust-level trusted
-```
-
-Presets: `none` | `read_only` | `trading_bot` | `defi`
-
-### GoPlus API (Web3)
-
-For enhanced Web3 security (phishing detection, address security, transaction simulation):
-
-```bash
-export GOPLUS_API_KEY=your_key
-export GOPLUS_API_SECRET=your_secret
-```
-
-Get keys at: https://gopluslabs.io/security-api
-
-### External Scanner
-
-GoPlus AgentGuard integrates with [cisco-ai-defense/skill-scanner](https://github.com/cisco-ai-defense/skill-scanner) for YAML/YARA patterns, Python AST analysis, and VirusTotal integration:
-
-```bash
-pip install cisco-ai-skill-scanner
-```
-
-## Project Structure
-
-```
-agentguard/
-├── skills/agentguard/        # Agent Skills definition
-│   ├── SKILL.md               # Skill entry point
-│   ├── scan-rules.md          # Detection rule reference
-│   ├── action-policies.md     # Action policy reference
-│   ├── web3-patterns.md       # Web3 patterns reference
-│   └── scripts/               # CLI tools (trust-cli, action-cli, guard-hook)
-├── hooks/hooks.json           # Plugin hooks configuration
-├── src/                       # TypeScript source
-│   ├── scanner/               # 20-rule static analysis engine
-│   ├── action/                # Runtime action evaluator + GoPlus integration
-│   ├── registry/              # Trust level management
-│   ├── policy/                # Default policies and presets
-│   └── tests/                 # Test suite
-├── examples/vulnerable-skill/ # Demo project for testing
-├── data/registry.json         # Trust registry storage
-├── setup.sh                   # One-click install script
-└── dist/                      # Compiled output
-```
-
-## Testing
-
-```bash
-npm install && npm run build && npm test
-```
-
-32 tests across 4 suites: scanner rules, exec command detector, network request detector, and registry CRUD.
+- [MCP Server Setup](docs/mcp-server.md) — Run as a Model Context Protocol server
+- [SDK Usage](docs/sdk.md) — Use as a TypeScript/JavaScript library
+- [Trust Management](docs/trust-cli.md) — Manage skill trust levels and capability presets
+- [GoPlus API (Web3)](docs/goplus-api.md) — Enhanced Web3 security with GoPlus integration
+- [Architecture](docs/architecture.md) — Project structure and testing
 
 ## License
 
@@ -245,5 +131,7 @@ npm install && npm run build && npm test
 ## Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+Found a security vulnerability? See [SECURITY.md](SECURITY.md).
 
 Built by [GoPlus Security](https://gopluslabs.io).

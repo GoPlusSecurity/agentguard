@@ -10,6 +10,8 @@ This project provides a unified Claude Code skill: `/agentguard`
 /agentguard scan <path>          — Scan code for security risks (20 detection rules)
 /agentguard action <description> — Evaluate runtime action safety (allow/deny/confirm)
 /agentguard trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
+/agentguard report               — View security event audit log
+/agentguard config <level>       — Set protection level (strict/balanced/permissive)
 ```
 
 ## Project Structure
