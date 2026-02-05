@@ -67,6 +67,34 @@ cp -r agentguard/skills/agentguard ~/.claude/skills/agentguard
 
 </details>
 
+<details>
+<summary><b>OpenClaw plugin install</b></summary>
+
+```bash
+npm install @goplus/agentguard
+```
+
+Register in your OpenClaw plugin config:
+
+```typescript
+import register from '@goplus/agentguard/openclaw';
+export default register;
+```
+
+Or register manually:
+
+```typescript
+import { registerOpenClawPlugin } from '@goplus/agentguard';
+
+export default function setup(api) {
+  registerOpenClawPlugin(api);
+};
+```
+
+AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
+
+</details>
+
 Then use `/agentguard` in your agent:
 
 ```
@@ -113,18 +141,19 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 | Platform | Support |
 |----------|---------|
 | **Claude Code** | Full (skill + hooks auto-guard) |
+| **OpenClaw** | Full (plugin hooks auto-guard) |
 | **OpenAI Codex CLI** | Skill (scan/action/trust commands) |
 | **Gemini CLI** | Skill |
 | **Cursor** | Skill |
 | **GitHub Copilot** | Skill |
 
-> Hooks-based auto-guard (Layer 1) is specific to Claude Code's plugin system. The skill commands (Layer 2) work on any Agent Skills-compatible platform.
+> Hooks-based auto-guard (Layer 1) works on Claude Code (PreToolUse/PostToolUse) and OpenClaw (before_tool_call/after_tool_call). The skill commands (Layer 2) work on any Agent Skills-compatible platform.
 
 ## Hook Limitations
 
 The auto-guard hooks (Layer 1) have the following constraints:
 
-- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` / `SessionStart` events. Other platforms do not yet support this hook system.
+- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events or OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks. Both share the same decision engine via the adapter abstraction layer.
 - **Default-deny policy**: First-time use may trigger confirmation prompts for certain commands. A built-in safe-command allowlist (`ls`, `echo`, `pwd`, `git status`, etc.) reduces false positives.
 - **Skill source tracking is heuristic**: AgentGuard infers which skill initiated an action by analyzing the conversation transcript. This is not 100% precise in all cases.
 - **Cannot intercept skill installation itself**: Hooks can only intercept tool calls (Bash, Write, WebFetch, etc.) that a skill makes *after* loading — they cannot block the Skill tool invocation itself.
@@ -139,8 +168,9 @@ The auto-guard hooks (Layer 1) have the following constraints:
 - [x] Plugin manifest (`.claude-plugin/`) for one-step install
 
 ### v2.0 — Multi-Platform
-- [ ] OpenClaw gateway plugin integration
-- [ ] `before_tool_call` / `after_tool_call` hook wiring
+- [x] OpenClaw gateway plugin integration
+- [x] `before_tool_call` / `after_tool_call` hook wiring
+- [x] Multi-platform adapter abstraction layer (Claude Code + OpenClaw)
 - [ ] OpenAI Codex CLI sandbox adapter
 - [ ] Federated trust registry across platforms
 

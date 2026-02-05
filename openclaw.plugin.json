@@ -1,0 +1,21 @@
+{
+  "id": "agentguard",
+  "name": "GoPlus AgentGuard",
+  "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "level": {
+        "type": "string",
+        "enum": ["strict", "balanced", "permissive"],
+        "default": "balanced",
+        "description": "Protection level: strict (block all risky), balanced (block dangerous, confirm risky), permissive (only block critical)"
+      }
+    }
+  },
+  "uiHints": {
+    "level": {
+      "label": "Protection Level"
+    }
+  }
+}

@@ -44,6 +44,19 @@ export {
   SENSITIVE_PATTERNS,
 } from './utils/patterns.js';
 
+// Export adapters (multi-platform hook support)
+export {
+  ClaudeCodeAdapter,
+  OpenClawAdapter,
+  evaluateHook,
+  registerOpenClawPlugin,
+  loadConfig,
+  type HookAdapter,
+  type HookInput,
+  type HookOutput,
+  type EngineOptions,
+} from './adapters/index.js';
+
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';
