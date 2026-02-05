@@ -19,6 +19,7 @@ import { analyzeExecCommand } from './detectors/exec.js';
 import { detectSecretLeak, containsCriticalSecrets } from './detectors/secret-leak.js';
 import { GoPlusClient, goplusClient } from './goplus/client.js';
 import { extractDomain } from '../utils/patterns.js';
+import * as nodePath from 'path';
 
 /**
  * Action Scanner options
@@ -555,19 +556,38 @@ export class ActionScanner {
     type: 'read_file' | 'write_file',
     capabilities: CapabilityModel
   ): PolicyDecision {
-    // Check if path is in allowlist
+    // Normalize path to prevent traversal attacks (e.g. ./allowed/../../../etc/passwd)
+    const normalizedPath = nodePath.normalize(file.path);
+    if (normalizedPath !== file.path && file.path.includes('..')) {
+      return {
+        decision: 'deny',
+        risk_level: 'high',
+        risk_tags: ['PATH_TRAVERSAL'],
+        evidence: [
+          {
+            type: 'path_traversal',
+            field: 'path',
+            match: file.path,
+            description: `Path traversal detected: "${file.path}" resolves to "${normalizedPath}"`,
+          },
+        ],
+        explanation: 'Path traversal attack blocked',
+      };
+    }
+
+    // Check if path is in allowlist (use normalized path)
     const isAllowed = capabilities.filesystem_allowlist.some((pattern) => {
       if (pattern === '*') return true;
       if (pattern.endsWith('/**')) {
         const prefix = pattern.slice(0, -3);
-        return file.path.startsWith(prefix);
+        return normalizedPath.startsWith(prefix);
       }
       if (pattern.endsWith('/*')) {
         const prefix = pattern.slice(0, -2);
-        const remainder = file.path.slice(prefix.length);
-        return file.path.startsWith(prefix) && !remainder.includes('/');
+        const remainder = normalizedPath.slice(prefix.length);
+        return normalizedPath.startsWith(prefix) && !remainder.includes('/');
       }
-      return file.path === pattern || file.path.startsWith(pattern + '/');
+      return normalizedPath === pattern || normalizedPath.startsWith(pattern + '/');
     });
 
     if (isAllowed) {

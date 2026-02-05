@@ -33,6 +33,13 @@ const WEBHOOK_DOMAINS = [
   'ngrok-free.app',
   'beeceptor.com',
   'mockbin.org',
+  'workers.dev',
+  'vercel.app',
+  'netlify.app',
+  'deno.dev',
+  'burpcollaborator.net',
+  'interact.sh',
+  'oast.pro',
 ];
 
 /**

@@ -79,16 +79,18 @@ describe('Exec Command Detector', () => {
     assert.ok(result.risk_tags.includes('SENSITIVE_ENV_VAR'));
   });
 
-  it('should allow npm install as safe command even when exec not allowed', () => {
+  it('should flag npm install as medium risk (can run postinstall scripts)', () => {
     const result = analyzeExecCommand({ command: 'npm install express' }, false);
-    assert.equal(result.risk_level, 'low');
+    assert.equal(result.risk_level, 'medium');
     assert.ok(!result.should_block, 'npm install should not be blocked');
+    assert.ok(result.risk_tags.includes('INSTALL_COMMAND'));
   });
 
-  it('should allow git clone as safe command even when exec not allowed', () => {
+  it('should flag git clone as medium risk (can run hooks)', () => {
     const result = analyzeExecCommand({ command: 'git clone https://github.com/org/repo.git' }, false);
-    assert.equal(result.risk_level, 'low');
+    assert.equal(result.risk_level, 'medium');
     assert.ok(!result.should_block, 'git clone should not be blocked');
+    assert.ok(result.risk_tags.includes('INSTALL_COMMAND'));
   });
 
   it('should allow mkdir as safe command', () => {

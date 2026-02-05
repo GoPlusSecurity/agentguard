@@ -29,11 +29,10 @@ const SAFE_COMMAND_PREFIXES = [
   'mkdir', 'cp', 'mv', 'touch',
   // Git (read + common write operations)
   'git status', 'git log', 'git diff', 'git branch', 'git show', 'git remote',
-  'git clone', 'git checkout', 'git pull', 'git fetch', 'git merge', 'git add', 'git commit', 'git push',
-  // Package managers
-  'npm install', 'npm run', 'npm test', 'npm ci', 'npm start',
+  'git checkout', 'git pull', 'git fetch', 'git merge', 'git add', 'git commit', 'git push',
+  // Package managers (run/test/start only — install commands moved to audit list)
+  'npm run', 'npm test', 'npm ci', 'npm start',
   'npx', 'yarn', 'pnpm',
-  'pip install', 'pip3 install',
   // Version checks
   'node --version', 'node -v', 'npm --version', 'npm -v', 'npx --version',
   'python --version', 'python3 --version', 'pip --version',
@@ -45,9 +44,17 @@ const SAFE_COMMAND_PREFIXES = [
 ];
 
 /**
+ * Commands that are not blocked but should be logged with elevated risk
+ * (can execute arbitrary code via postinstall scripts, hooks, or setup.py)
+ */
+const AUDIT_COMMAND_PREFIXES = [
+  'npm install', 'pip install', 'pip3 install', 'git clone',
+];
+
+/**
  * Shell metacharacters that disqualify a command from the safe list
  */
-const SHELL_METACHAR_PATTERN = /[;|&`$(){}]/;
+const SHELL_METACHAR_PATTERN = /[;|&`$(){}<>!#\n\t]/;
 
 /**
  * Fork bomb patterns (regex-based for variants with spaces)
@@ -197,6 +204,23 @@ export function analyzeExecCommand(
           risk_level: 'low',
           risk_tags: [],
           evidence: [],
+          should_block: false,
+        };
+      }
+
+      // Audit commands: allow but flag as medium risk (can run arbitrary code via hooks/scripts)
+      const isAudit = AUDIT_COMMAND_PREFIXES.some(prefix =>
+        lowerCommand === prefix || lowerCommand.startsWith(prefix + ' ')
+      );
+      if (isAudit) {
+        return {
+          risk_level: 'medium',
+          risk_tags: ['INSTALL_COMMAND'],
+          evidence: [{
+            type: 'install_command',
+            field: 'command',
+            description: 'Package install or clone command can execute arbitrary code via hooks',
+          }],
           should_block: false,
         };
       }

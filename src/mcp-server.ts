@@ -41,6 +41,46 @@ const CapabilityModelSchema = z.object({
   }).optional(),
 });
 
+const ActionContextSchema = z.object({
+  session_id: z.string(),
+  user_present: z.boolean(),
+  env: z.enum(['prod', 'dev', 'test']),
+  time: z.string().optional(),
+  initiating_skill: z.string().optional(),
+});
+
+const ActionEnvelopeSchema = z.object({
+  actor: z.object({
+    skill: SkillIdentitySchema,
+    record_key: z.string().optional(),
+  }),
+  action: z.object({
+    type: z.enum([
+      'network_request', 'exec_command', 'read_file',
+      'write_file', 'secret_access', 'web3_tx', 'web3_sign',
+    ]),
+    data: z.record(z.unknown()),
+  }),
+  context: ActionContextSchema,
+});
+
+/**
+ * Reject objects containing prototype pollution keys
+ */
+function containsProtoKeys(obj: unknown): boolean {
+  if (obj === null || typeof obj !== 'object') return false;
+  for (const key of Object.keys(obj as Record<string, unknown>)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return true;
+    if (containsProtoKeys((obj as Record<string, unknown>)[key])) return true;
+  }
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      if (containsProtoKeys(item)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Create and configure the MCP server
  */
@@ -365,7 +405,10 @@ function createServer(options?: { registryPath?: string }): Server {
 
         // Action scanner: decide
         case 'action_scanner_decide': {
-          const envelope = args as unknown as ActionEnvelope;
+          if (containsProtoKeys(args)) {
+            throw new Error('Invalid input: prototype pollution attempt detected');
+          }
+          const envelope = ActionEnvelopeSchema.parse(args) as unknown as ActionEnvelope;
           envelope.context.time = new Date().toISOString();
 
           const result = await actionScanner.decide(envelope);
