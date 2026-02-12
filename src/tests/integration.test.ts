@@ -99,6 +99,9 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   function createMockApi() {
     const handlers: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
     const api = {
+      id: 'test-plugin',
+      name: 'Test Plugin',
+      source: '/tmp/test-plugin/index.ts',
       on(event: string, ...args: unknown[]) {
         handlers[event] = args[args.length - 1] as (...args: unknown[]) => Promise<unknown>;
       },
@@ -109,7 +112,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should register before_tool_call and after_tool_call handlers', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, () => ctx.agentguard as never);
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+    });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
     assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
   });
@@ -117,7 +123,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should return undefined (allow) for safe command', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, () => ctx.agentguard as never);
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+    });
 
     const result = await handlers['before_tool_call']({
       toolName: 'exec',
@@ -129,7 +138,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, () => ctx.agentguard as never);
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+    });
 
     const result = await handlers['before_tool_call']({
       toolName: 'exec',
@@ -144,7 +156,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should block write to .env via OpenClaw', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, () => ctx.agentguard as never);
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+    });
 
     const result = await handlers['before_tool_call']({
       toolName: 'write',
@@ -157,7 +172,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should handle after_tool_call without error', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, () => ctx.agentguard as never);
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+    });
 
     await handlers['after_tool_call']({
       toolName: 'exec',

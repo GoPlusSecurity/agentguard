@@ -2,7 +2,12 @@ export type { HookAdapter, HookInput, HookOutput, EngineOptions, AgentGuardInsta
 export { ClaudeCodeAdapter } from './claude-code.js';
 export { OpenClawAdapter } from './openclaw.js';
 export { evaluateHook } from './engine.js';
-export { registerOpenClawPlugin } from './openclaw-plugin.js';
+export {
+  registerOpenClawPlugin,
+  getPluginIdFromTool,
+  getPluginScanResult,
+  type OpenClawPluginOptions,
+} from './openclaw-plugin.js';
 export {
   loadConfig,
   isSensitivePath,
