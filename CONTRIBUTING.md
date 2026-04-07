@@ -35,10 +35,7 @@ npm test
 
 ## Documentation Translations
 
-- Keep the canonical source in English unless maintainers decide otherwise
-- Store translated README files in `docs/i18n/`
-- Use locale-based names such as `README.zh-Hans.md`, `README.zh-Hant.md`, and `README.ja.md`
-- When updating translated files, preserve the same section order as the main `README.md`
+Translation guidelines, naming conventions, and maintenance rules are documented in [`docs/i18n/README.md`](docs/i18n/README.md).
 
 ## Adding Detection Rules
 
