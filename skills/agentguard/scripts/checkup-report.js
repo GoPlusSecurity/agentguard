@@ -1371,6 +1371,9 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
   // mode, console.log() is non-blocking and process.exit() can terminate before
   // the buffer is flushed, causing the caller (Claude) to receive an empty path.
+  // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
+  // mode, console.log() is non-blocking and process.exit() can terminate before
+  // the buffer is flushed, causing the caller (Claude) to receive an empty path.
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
       // 'start ""' is a cmd.exe built-in and must be invoked via cmd /c on Windows
@@ -1381,8 +1384,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
         if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
       });
     }
-    // Let Node drain all I/O naturally instead of forcing an early exit.
-    // process.exitCode avoids the race between setTimeout and stdout flush.
-    process.exitCode = 0;
+    // Hard exit after 3s — guards against exec child process hanging and
+    // blocking Node from exiting naturally (e.g. xdg-open on misconfigured Linux).
+    setTimeout(() => process.exit(0), 3000).unref();
   });
 }
