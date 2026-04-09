@@ -1,6 +1,6 @@
 ---
 name: agentguard
-description: GoPlus AgentGuard — AI agent security guard. Run /agentguard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
+description: GoPlus AgentGuard — AI agent security guard. Run /agentguard checkup for a full security health check, scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
 license: MIT
 compatibility: Requires Node.js 18+. Optional GoPlus API credentials for enhanced Web3 simulation.
 metadata:
