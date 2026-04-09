@@ -1364,17 +1364,28 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
   const outPath = join(tmpdir(), `agentguard-checkup-${Date.now()}.html`);
   writeFileSync(outPath, html, 'utf8');
-  console.log(outPath);
 
   // Skip browser open for headless/bot environments (Qclaw, OpenClaw, CI)
   const isHeadless = process.env.OPENCLAW_STATE_DIR || process.env.QCLAW || process.env.CI;
-  if (!isHeadless) {
-    const cmd = process.platform === 'darwin' ? 'open'
-      : process.platform === 'win32' ? 'start ""'
-      : 'xdg-open';
-    exec(`${cmd} "${outPath}"`, (err) => {
-      if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
-    });
-  }
-  setTimeout(() => process.exit(0), 3000);
+
+  // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
+  // mode, console.log() is non-blocking and process.exit() can terminate before
+  // the buffer is flushed, causing the caller (Claude) to receive an empty path.
+  // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
+  // mode, console.log() is non-blocking and process.exit() can terminate before
+  // the buffer is flushed, causing the caller (Claude) to receive an empty path.
+  process.stdout.write(outPath + '\n', () => {
+    if (!isHeadless) {
+      // 'start ""' is a cmd.exe built-in and must be invoked via cmd /c on Windows
+      const cmd = process.platform === 'darwin' ? 'open'
+        : process.platform === 'win32' ? 'cmd /c start ""'
+        : 'xdg-open';
+      exec(`${cmd} "${outPath}"`, (err) => {
+        if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
+      });
+    }
+    // Hard exit after 3s — guards against exec child process hanging and
+    // blocking Node from exiting naturally (e.g. xdg-open on misconfigured Linux).
+    setTimeout(() => process.exit(0), 3000).unref();
+  });
 }
