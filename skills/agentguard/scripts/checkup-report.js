@@ -15,7 +15,7 @@
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Try to load favicon from agentguard-server or fallback
@@ -1376,13 +1376,20 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   // the buffer is flushed, causing the caller (Claude) to receive an empty path.
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
-      // 'start ""' is a cmd.exe built-in and must be invoked via cmd /c on Windows
-      const cmd = process.platform === 'darwin' ? 'open'
-        : process.platform === 'win32' ? 'cmd /c start ""'
-        : 'xdg-open';
-      exec(`${cmd} "${outPath}"`, (err) => {
-        if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
-      });
+      if (process.platform === 'win32') {
+        // Use spawn with windowsHide:true to open the file without flashing a
+        // visible cmd window — a known UX issue in GUI hosts like workbuddy (#23)
+        spawn('cmd', ['/c', 'start', '', outPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        }).unref();
+      } else {
+        const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+        exec(`${cmd} "${outPath}"`, (err) => {
+          if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
+        });
+      }
     }
     // Hard exit after 3s — guards against exec child process hanging and
     // blocking Node from exiting naturally (e.g. xdg-open on misconfigured Linux).
