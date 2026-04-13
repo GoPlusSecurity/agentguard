@@ -1377,13 +1377,13 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
       if (process.platform === 'win32') {
-        // Use spawn with windowsHide:true to open the file without flashing a
-        // visible cmd window — a known UX issue in GUI hosts like workbuddy (#23)
-        spawn('cmd', ['/c', 'start', '', outPath], {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-        }).unref();
+        // Use PowerShell Start-Process to open the file via Shell Execute API,
+        // bypassing cmd.exe entirely — cmd /c start creates a visible intermediate
+        // window whose title is the file path, which is the UX bug in #23.
+        spawn('powershell', [
+          '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+          `Start-Process '${outPath.replace(/'/g, "''")}'`,
+        ], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       } else {
         const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
         exec(`${cmd} "${outPath}"`, (err) => {
