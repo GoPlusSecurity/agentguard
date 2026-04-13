@@ -18,6 +18,14 @@ import { tmpdir, homedir } from 'node:os';
 import { exec, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+const DIM_META = {
+  code_safety:          { icon: 'find_in_page', name: 'Skill & Code Safety', zh: '技能与代码安全' },
+  credential_safety:    { icon: 'key',          name: 'Credential & Secrets', zh: '凭证与密钥安全' },
+  network_exposure:     { icon: 'lan',          name: 'Network & System', zh: '网络与系统暴露' },
+  runtime_protection:   { icon: 'shield',       name: 'Runtime Protection', zh: '运行时防护' },
+  web3_safety:          { icon: 'token',        name: 'Web3 Safety', zh: 'Web3 安全' },
+};
+
 // Try to load favicon from agentguard-server or fallback
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let faviconB64 = '';
@@ -87,13 +95,7 @@ function getTier(score) {
   ])};
 }
 
-const DIM_META = {
-  code_safety:          { icon: 'find_in_page', name: 'Skill & Code Safety', zh: '技能与代码安全' },
-  credential_safety:    { icon: 'key',          name: 'Credential & Secrets', zh: '凭证与密钥安全' },
-  network_exposure:     { icon: 'lan',          name: 'Network & System', zh: '网络与系统暴露' },
-  runtime_protection:   { icon: 'shield',       name: 'Runtime Protection', zh: '运行时防护' },
-  web3_safety:          { icon: 'token',        name: 'Web3 Safety', zh: 'Web3 安全' },
-};
+
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
