@@ -746,7 +746,8 @@ function generateReport(data) {
     autoRecs.push({ severity: 'LOW', text: 'Enable auto-scan on session start: export AGENTGUARD_AUTO_SCAN=1', zh: '启用会话启动时自动扫描：export AGENTGUARD_AUTO_SCAN=1' });
 
   // Merge: user recs first, then auto recs (dedup by text similarity)
-  const allRecs = [...recommendations];
+  // Guard against malformed entries where text may be undefined (#37)
+  const allRecs = recommendations.filter(r => r && typeof r.text === 'string');
   for (const ar of autoRecs) {
     if (!allRecs.some(r => r.text.toLowerCase().includes(ar.text.slice(0, 30).toLowerCase()))) {
       allRecs.push(ar);
