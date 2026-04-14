@@ -15,8 +15,16 @@
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+const DIM_META = {
+  code_safety:          { icon: 'find_in_page', name: 'Skill & Code Safety', zh: '技能与代码安全' },
+  credential_safety:    { icon: 'key',          name: 'Credential & Secrets', zh: '凭证与密钥安全' },
+  network_exposure:     { icon: 'lan',          name: 'Network & System', zh: '网络与系统暴露' },
+  runtime_protection:   { icon: 'shield',       name: 'Runtime Protection', zh: '运行时防护' },
+  web3_safety:          { icon: 'token',        name: 'Web3 Safety', zh: 'Web3 安全' },
+};
 
 // Try to load favicon from agentguard-server or fallback
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -87,13 +95,7 @@ function getTier(score) {
   ])};
 }
 
-const DIM_META = {
-  code_safety:          { icon: 'find_in_page', name: 'Skill & Code Safety', zh: '技能与代码安全' },
-  credential_safety:    { icon: 'key',          name: 'Credential & Secrets', zh: '凭证与密钥安全' },
-  network_exposure:     { icon: 'lan',          name: 'Network & System', zh: '网络与系统暴露' },
-  runtime_protection:   { icon: 'shield',       name: 'Runtime Protection', zh: '运行时防护' },
-  web3_safety:          { icon: 'token',        name: 'Web3 Safety', zh: 'Web3 安全' },
-};
+
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
@@ -1376,13 +1378,20 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   // the buffer is flushed, causing the caller (Claude) to receive an empty path.
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
-      // 'start ""' is a cmd.exe built-in and must be invoked via cmd /c on Windows
-      const cmd = process.platform === 'darwin' ? 'open'
-        : process.platform === 'win32' ? 'cmd /c start ""'
-        : 'xdg-open';
-      exec(`${cmd} "${outPath}"`, (err) => {
-        if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
-      });
+      if (process.platform === 'win32') {
+        // Use PowerShell Start-Process to open the file via Shell Execute API,
+        // bypassing cmd.exe entirely — cmd /c start creates a visible intermediate
+        // window whose title is the file path, which is the UX bug in #23.
+        spawn('powershell', [
+          '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+          `Start-Process '${outPath.replace(/'/g, "''")}'`,
+        ], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      } else {
+        const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+        exec(`${cmd} "${outPath}"`, (err) => {
+          if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
+        });
+      }
     }
     // Hard exit after 3s — guards against exec child process hanging and
     // blocking Node from exiting naturally (e.g. xdg-open on misconfigured Linux).
