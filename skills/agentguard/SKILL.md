@@ -805,30 +805,26 @@ The script outputs the HTML file path to stdout (e.g. `/tmp/agentguard-checkup-1
 
 💡 Top recommendation: <first recommendation text>
 
-### Action Items
-(Only include this section if there are HIGH or CRITICAL findings. List each one with a concrete fix command.)
+### Next Steps
+(Only include this section if there are HIGH or CRITICAL findings.)
 
-For each HIGH or CRITICAL finding, output a numbered action item in this format:
+List each HIGH or CRITICAL finding as a plain-language suggestion — no commands, no JSON, no technical details. One sentence per item. Ask the user to confirm if they'd like help with any of them.
+
+Format:
 ```
-🔴 [CRITICAL] / 🟠 [HIGH] <finding description>
-   → <exact command or step to fix it>
+⚠️ A few things need your attention:
+1. 🔴 <plain description of critical issue and why it matters>
+2. 🟠 <plain description of high issue and why it matters>
+...
+
+Reply with the number(s) you'd like help with and I'll walk you through it.
 ```
 
-Common fix commands to use when applicable:
-- No security hooks installed → show the exact JSON snippet to add to `~/.claude/settings.json` (for Claude Code) or `~/.openclaw/openclaw.json` / `~/.qclaw/openclaw.json` (for OpenClaw/QClaw):
-  ```json
-  // Add to the "hooks" > "PreToolUse" array in settings.json:
-  {
-    "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
-    "hooks": [{ "type": "command", "command": "node \"<skill_dir>/scripts/guard-hook.js\"", "timeout": 10 }]
-  }
-  ```
-  where `<skill_dir>` is the absolute path to the installed agentguard skill directory.
-- Skill not attested in trust registry → show the exact `node scripts/trust-cli.ts attest ...` command with the correct `--source` path
-- `~/.ssh/` permissions too open → `chmod 700 ~/.ssh/`
-- `~/.gnupg/` permissions too open → `chmod 700 ~/.gnupg/`
-- Plaintext credential found → specify the exact file and line where it was found
-```
+Examples of plain-language descriptions:
+- No hooks: "Security monitoring isn't active — AgentGuard can't block threats in real-time until hooks are configured."
+- Unregistered skills: "10 installed skills haven't been security-reviewed — they're running with no trust level assigned."
+- SSH permissions: "Your SSH key folder has loose permissions — other processes on this machine could potentially read your private keys."
+- Plaintext credential: "A private key or API token was found in plain text in a file — it should be removed and rotated."
 
 ### Step 6: Deliver the Report to the User
 
