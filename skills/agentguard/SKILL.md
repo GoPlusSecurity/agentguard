@@ -804,6 +804,30 @@ The script outputs the HTML file path to stdout (e.g. `/tmp/agentguard-checkup-1
 **Full visual report**: <path> (opened in browser)
 
 💡 Top recommendation: <first recommendation text>
+
+### Action Items
+(Only include this section if there are HIGH or CRITICAL findings. List each one with a concrete fix command.)
+
+For each HIGH or CRITICAL finding, output a numbered action item in this format:
+```
+🔴 [CRITICAL] / 🟠 [HIGH] <finding description>
+   → <exact command or step to fix it>
+```
+
+Common fix commands to use when applicable:
+- No security hooks installed → show the exact JSON snippet to add to `~/.claude/settings.json` (for Claude Code) or `~/.openclaw/openclaw.json` / `~/.qclaw/openclaw.json` (for OpenClaw/QClaw):
+  ```json
+  // Add to the "hooks" > "PreToolUse" array in settings.json:
+  {
+    "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+    "hooks": [{ "type": "command", "command": "node \"<skill_dir>/scripts/guard-hook.js\"", "timeout": 10 }]
+  }
+  ```
+  where `<skill_dir>` is the absolute path to the installed agentguard skill directory.
+- Skill not attested in trust registry → show the exact `node scripts/trust-cli.ts attest ...` command with the correct `--source` path
+- `~/.ssh/` permissions too open → `chmod 700 ~/.ssh/`
+- `~/.gnupg/` permissions too open → `chmod 700 ~/.gnupg/`
+- Plaintext credential found → specify the exact file and line where it was found
 ```
 
 ### Step 6: Deliver the Report to the User
