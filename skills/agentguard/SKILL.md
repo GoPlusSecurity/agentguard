@@ -804,7 +804,27 @@ The script outputs the HTML file path to stdout (e.g. `/tmp/agentguard-checkup-1
 **Full visual report**: <path> (opened in browser)
 
 💡 Top recommendation: <first recommendation text>
+
+### Next Steps
+(Only include this section if there are HIGH or CRITICAL findings.)
+
+List each HIGH or CRITICAL finding as a plain-language suggestion — no commands, no JSON, no technical details. One sentence per item. Ask the user to confirm if they'd like help with any of them.
+
+Format:
 ```
+⚠️ A few things need your attention:
+1. 🔴 <plain description of critical issue and why it matters>
+2. 🟠 <plain description of high issue and why it matters>
+...
+
+Reply with the number(s) you'd like help with and I'll walk you through it.
+```
+
+Examples of plain-language descriptions:
+- No hooks: "Security monitoring isn't active — AgentGuard can't block threats in real-time until hooks are configured."
+- Unregistered skills: "10 installed skills haven't been security-reviewed — they're running with no trust level assigned."
+- SSH permissions: "Your SSH key folder has loose permissions — other processes on this machine could potentially read your private keys."
+- Plaintext credential: "A private key or API token was found in plain text in a file — it should be removed and rotated."
 
 ### Step 6: Deliver the Report to the User
 

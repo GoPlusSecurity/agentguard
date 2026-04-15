@@ -764,11 +764,10 @@ function generateReport(data) {
       const sc = sevColor(sev);
       const zhText = r.zh || r.text;
       return `
-      <div class="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-[#262a31]/30 transition-colors group">
+      <div class="flex items-center gap-3 px-4 py-3 rounded-lg">
         <span class="w-5 text-xs font-headline font-bold text-[#849588]/60">${i+1}</span>
         <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide text-white shrink-0" style="background:${sc}">${sev}</span>
         <span class="text-sm text-[#b9cbbd] leading-snug rec-text" data-en="${esc(r.text)}" data-zh="${esc(zhText)}">${esc(r.text)}</span>
-        <span class="material-symbols-outlined text-sm text-[#849588]/0 group-hover:text-[#849588]/50 transition-colors ml-auto shrink-0">chevron_right</span>
       </div>`;
     }).join('')}</div>`
     : '<div class="text-center py-12 text-[#849588]" data-i18n="no_recs">No recommendations.</div>';
@@ -776,12 +775,7 @@ function generateReport(data) {
   // ── AI Analysis report ──
   const analysisText = data.analysis || '';
   const analysisHtml = analysisText
-    ? `<div class="relative group">
-        <div class="bg-[#0a0e14] border border-[#3a4a3f]/10 rounded-xl p-5 text-sm text-[#b9cbbd] leading-relaxed whitespace-pre-line" id="analysisText">${esc(analysisText)}</div>
-        <button onclick="copyReport()" id="copyBtn" class="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 bg-[#262a31] border border-[#3a4a3f]/30 rounded-lg text-[11px] font-semibold text-[#849588] hover:text-[#dfe2eb] hover:border-[#849588]/50 transition-all opacity-0 group-hover:opacity-100">
-          <span class="material-symbols-outlined text-sm" id="copyIcon">content_copy</span><span id="copyLabel" data-i18n="copy_report">Copy Report</span>
-        </button>
-      </div>`
+    ? `<div class="bg-[#0a0e14] border border-[#3a4a3f]/10 rounded-xl p-5 text-sm text-[#b9cbbd] leading-relaxed whitespace-pre-line" id="analysisText">${esc(analysisText)}</div>`
     : '';
 
   // ── Health status label ──
@@ -936,6 +930,9 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
             <p class="text-[10px] font-label uppercase tracking-[0.2em] text-[#849588] mb-1" data-i18n="sec_analysis">Security Analysis</p>
             <h1 class="text-2xl font-headline font-bold text-[#f5fff5] tracking-tight flex items-center gap-3">
               <span class="material-symbols-outlined" style="color:${tier.color}">analytics</span><span data-i18n="diag_report">Diagnostic Report</span>
+              <button onclick="copyReport()" id="copyBtn" class="flex items-center gap-1 px-2 py-1 bg-[#262a31] border border-[#3a4a3f]/30 rounded-lg text-[11px] font-semibold text-[#849588] hover:text-[#dfe2eb] hover:border-[#849588]/50 transition-all ml-1">
+                <span class="material-symbols-outlined text-sm" id="copyIcon">content_copy</span><span id="copyLabel" class="hidden sm:inline" data-i18n="copy_report">Copy Report</span>
+              </button>
             </h1>
           </div>
           <div class="bg-[#262a31] border border-[#3a4a3f]/15 rounded-lg px-4 py-2 flex items-center gap-2">
