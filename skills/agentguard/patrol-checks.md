@@ -75,6 +75,7 @@ Detailed commands, patterns, and thresholds for the 8 patrol checks. This docume
 
 ### Permission Checks
 
+**macOS/Linux:**
 ```bash
 # SSH directory — should be 700
 stat -f "%Lp" ~/.ssh/ 2>/dev/null || stat -c "%a" ~/.ssh/ 2>/dev/null
@@ -82,10 +83,19 @@ stat -f "%Lp" ~/.ssh/ 2>/dev/null || stat -c "%a" ~/.ssh/ 2>/dev/null
 stat -f "%Lp" ~/.gnupg/ 2>/dev/null || stat -c "%a" ~/.gnupg/ 2>/dev/null
 ```
 
+**Windows (use icacls instead of stat):**
+```powershell
+icacls $env:USERPROFILE\.ssh 2>$null
+icacls $env:USERPROFILE\.gnupg 2>$null
+```
+
 | Condition | Severity |
 |-----------|----------|
-| `~/.ssh/` permissions > 700 | HIGH |
-| `~/.gnupg/` permissions > 700 | MEDIUM |
+| macOS/Linux: `~/.ssh/` exists AND permissions > 700 | HIGH |
+| macOS/Linux: `~/.gnupg/` exists AND permissions > 700 | MEDIUM |
+| Windows: `~/.ssh/` exists AND ACL grants access to Everyone/Users/Authenticated Users | HIGH |
+| Windows: `~/.gnupg/` exists AND ACL grants access to Everyone/Users/Authenticated Users | MEDIUM |
+| Directory does not exist (stat/icacls returns empty) | N/A — not a finding |
 
 ---
 
