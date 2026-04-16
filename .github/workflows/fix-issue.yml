@@ -1,0 +1,149 @@
+name: Fix Issue with Codex
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to fix'
+        required: true
+        type: number
+      max_bugs:
+        description: 'Max number of bugs to fix in one run (default: 3)'
+        required: false
+        default: '3'
+        type: choice
+        options: ['1', '2', '3', '5']
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  fix-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Fetch issue content
+        id: issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE=$(gh api repos/${{ github.repository }}/issues/${{ inputs.issue_number }})
+          TITLE=$(echo "$ISSUE" | jq -r '.title')
+          BODY=$(echo "$ISSUE" | jq -r '.body // "No description provided."')
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          # Truncate body to 2000 chars to keep prompt size reasonable
+          BODY_TRUNCATED=$(echo "$BODY" | head -c 2000)
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY_TRUNCATED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check for existing fix branch
+        id: branch_check
+        run: |
+          SLUG=$(echo "${{ steps.issue.outputs.title }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40)
+          BRANCH="fix/issue-${{ inputs.issue_number }}-${SLUG}"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          if git ls-remote --exit-code origin "$BRANCH" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Abort if branch already exists
+        if: steps.branch_check.outputs.exists == 'true'
+        run: |
+          echo "Branch ${{ steps.branch_check.outputs.branch }} already exists. Aborting to avoid duplicate work."
+          exit 1
+
+      - name: Run Codex to fix bugs
+        id: codex
+        timeout-minutes: 10
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          MAX_BUGS="${{ inputs.max_bugs }}"
+          PROMPT="You are fixing bugs in the GoPlus AgentGuard project (a TypeScript security framework for AI agents).
+
+          Project structure:
+          - src/ — TypeScript source files (scanner rules, registry, action detectors, MCP server)
+          - dist/ — compiled output (do not edit)
+          - skills/agentguard/ — Claude Code skill definition
+
+          Issue #${{ inputs.issue_number }}: ${{ steps.issue.outputs.title }}
+
+          ${{ steps.issue.outputs.body }}
+
+          Instructions:
+          1. Fix at most ${MAX_BUGS} distinct bugs from this issue. If there are more, fix the most critical ones first.
+          2. Only modify files under src/ or skills/agentguard/. Do NOT touch test files or dist/.
+          3. After fixing, briefly list what you changed and why (this will be used as the PR description).
+          4. If the issue describes more bugs than the limit, note which ones were skipped."
+
+          codex --approval-mode full-auto "$PROMPT"
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        id: tests
+        run: npm test
+
+      - name: Comment on issue if tests fail
+        if: failure() && steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ inputs.issue_number }} \
+            --body "Automated fix attempt failed: tests did not pass after applying changes. Manual review required."
+
+      - name: Create branch and commit
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${{ steps.branch_check.outputs.branch }}"
+          git add src/ skills/agentguard/
+          git commit -m "fix: auto-fix for issue #${{ inputs.issue_number }} (${{ inputs.max_bugs }} bugs max)
+
+          Automated fix via Codex workflow.
+          Closes #${{ inputs.issue_number }}"
+          git push origin "${{ steps.branch_check.outputs.branch }}"
+
+      - name: Create Pull Request
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "fix: resolve issue #${{ inputs.issue_number }} - ${{ steps.issue.outputs.title }}" \
+            --body "## Summary
+          Automated fix for issue #${{ inputs.issue_number }} using Codex.
+          Max bugs fixed in this run: ${{ inputs.max_bugs }}
+
+          ## Changes
+          See commit diff for details. Codex was instructed to fix at most ${{ inputs.max_bugs }} bug(s) from the issue.
+          If the issue contained more bugs, remaining ones were left for a follow-up run.
+
+          ## Test Results
+          All tests passed (Node --test runner).
+
+          Closes #${{ inputs.issue_number }}" \
+            --base main \
+            --head "${{ steps.branch_check.outputs.branch }}"
