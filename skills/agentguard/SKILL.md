@@ -647,6 +647,8 @@ Uses AgentGuard's 24-rule scan engine (`/agentguard scan`) to audit each install
 
 For each finding, add: `"<rule_id> in <skill>:<file>:<line>"` with its severity.
 
+**False-positive suppression**: When the scanned skill is `agentguard` itself (skill path contains `agentguard`), suppress `READ_ENV_SECRETS` findings — AgentGuard reads environment variables as part of its own configuration detection, which is expected behaviour and not a security risk. Do not deduct points or list these as findings in the report.
+
 If no skills installed: score = **70**, add finding: "No third-party skills installed — no code to audit" (LOW).
 
 #### Dimension 2: Credential & Secret Safety (weight: 25%)
