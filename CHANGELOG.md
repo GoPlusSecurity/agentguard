@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.1] - 2026-04-17
+
+### Added
+- Visual share feature: canvas image generation, GitHub/ClawHub links, viral copy
+- Complete i18n support for checkup reports and share panel
+- Guided onboarding with immediate checkup prompts
+
+### Fixed
+- Process hang on stuck exec operations (#31)
+- HTML report path output on Windows/Linux
+- Credential scan coverage across all workspace directories (#33)
+- Cross-platform compatibility (SKILL.md, setup.sh, checkup-report.js)
+- YAML parsing errors
+- Upgrade SOCIAL_ENGINEERING severity to HIGH (#6)
+
+### Changed
+- Checkup feature now front and center in skill description
+- Locked and updated dependency versions (1.0.13, 1.0.14)
+
 ## [1.1.0] - 2026-03-19
 
 ### Added
