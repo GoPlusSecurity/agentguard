@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@goplus/agentguard": "^1.0.6"
+    "@goplus/agentguard": "^1.0.6",
+    "open": "11.0.0"
   }
 }
