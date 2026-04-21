@@ -15,7 +15,7 @@
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { exec, spawn } from 'node:child_process';
+import open from 'open';
 import { fileURLToPath } from 'node:url';
 
 const DIM_META = {
@@ -1376,20 +1376,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   // the buffer is flushed, causing the caller (Claude) to receive an empty path.
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
-      if (process.platform === 'win32') {
-        // Use PowerShell Start-Process to open the file via Shell Execute API,
-        // bypassing cmd.exe entirely — cmd /c start creates a visible intermediate
-        // window whose title is the file path, which is the UX bug in #23.
-        spawn('powershell', [
-          '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
-          `Start-Process '${outPath.replace(/'/g, "''")}'`,
-        ], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      } else {
-        const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-        exec(`${cmd} "${outPath}"`, (err) => {
-          if (err) process.stderr.write(`Could not open browser: ${err.message}\n`);
-        });
-      }
+      open(outPath).catch(err => process.stderr.write(`Could not open browser: ${err.message}\n`));
     }
     // Hard exit after 3s — guards against exec child process hanging and
     // blocking Node from exiting naturally (e.g. xdg-open on misconfigured Linux).

@@ -7,6 +7,25 @@ metadata:
   author: GoPlusSecurity
   version: "1.1"
   optional_env: "GOPLUS_API_KEY, GOPLUS_API_SECRET (for Web3 transaction simulation only)"
+filesystem-access:
+  - path: "~/.ssh/"
+    access: read-only
+    reason: "Credential safety audit — check directory permissions (stat only, no key content read)"
+  - path: "~/.gnupg/"
+    access: read-only
+    reason: "Credential safety audit — check directory permissions (stat only)"
+  - path: "~/.claude/"
+    access: read-only
+    reason: "Discover installed skills and read security hook configuration"
+  - path: "~/.openclaw/"
+    access: read-only
+    reason: "Discover installed skills and read OpenClaw config for patrol checks"
+  - path: "~/.qclaw/"
+    access: read-only
+    reason: "Discover installed skills in QClaw environments"
+  - path: "~/.agentguard/"
+    access: read-write
+    reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
 allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
 argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
