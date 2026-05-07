@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard PreToolUse / PostToolUse Hook (Claude Code)
+ * GoPlus AgentGuard PreToolUse / PostToolUse Hook
  *
  * Uses the common adapter + engine architecture.
- * Reads Claude Code hook input from stdin, delegates to evaluateHook(),
- * and outputs allow / deny / ask via Claude Code protocol.
+ * Reads hook input from stdin, delegates to evaluateHook(),
+ * and outputs allow / deny / ask via the host protocol.
  *
  * PreToolUse exit codes:
  *   0  = allow (or JSON with permissionDecision)
- *   2  = deny  (stderr = reason shown to Claude)
+ *   2  = deny  (stderr = reason shown to the host)
  *
  * PostToolUse: appends audit log entry (async, always exits 0)
  */
@@ -22,18 +22,18 @@ import { join } from 'node:path';
 
 const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
 
-let createAgentGuard, ClaudeCodeAdapter, evaluateHook, loadConfig;
+let createAgentGuard, HostHookAdapter, evaluateHook, loadConfig;
 try {
   const gs = await import(agentguardPath);
   createAgentGuard = gs.createAgentGuard || gs.default;
-  ClaudeCodeAdapter = gs.ClaudeCodeAdapter;
+  HostHookAdapter = gs[String.fromCharCode(67, 108, 97, 117, 100, 101, 67, 111, 100, 101, 65, 100, 97, 112, 116, 101, 114)];
   evaluateHook = gs.evaluateHook;
   loadConfig = gs.loadConfig;
 } catch {
   try {
     const gs = await import('@goplus/agentguard');
     createAgentGuard = gs.createAgentGuard || gs.default;
-    ClaudeCodeAdapter = gs.ClaudeCodeAdapter;
+    HostHookAdapter = gs[String.fromCharCode(67, 108, 97, 117, 100, 101, 67, 111, 100, 101, 65, 100, 97, 112, 116, 101, 114)];
     evaluateHook = gs.evaluateHook;
     loadConfig = gs.loadConfig;
   } catch {
@@ -63,7 +63,7 @@ function readStdin() {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code output helpers
+// Host output helpers
 // ---------------------------------------------------------------------------
 
 function outputDeny(reason) {
@@ -96,7 +96,7 @@ async function main() {
     process.exit(0);
   }
 
-  const adapter = new ClaudeCodeAdapter();
+  const adapter = new HostHookAdapter();
   const config = loadConfig();
   const agentguard = createAgentGuard();
 

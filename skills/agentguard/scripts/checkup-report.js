@@ -536,7 +536,7 @@ function pixelLobster(grade, color) {
   <!-- Lobster in bed -->
   ${px(14,14,1,1,P2)}${px(13,15,1,1,P2)}${px(33,14,1,1,P2)}${px(34,15,1,1,P2)}
   ${px(18,14,12,5,P1)}${px(17,15,14,4,P1)}${px(16,16,16,2,P1)}
-  <!-- X eyes -->
+  <!-- closed eyes -->
   ${px(20,16,1,1,'#e63946')}${px(22,16,1,1,'#e63946')}${px(21,17,1,1,'#e63946')}
   ${px(26,16,1,1,'#e63946')}${px(28,16,1,1,'#e63946')}${px(27,17,1,1,'#e63946')}
   <!-- Sad mouth -->
@@ -792,18 +792,14 @@ function generateReport(data) {
 ${faviconB64 ? `<link rel="icon" type="image/png" href="data:image/png;base64,${faviconB64}"/>` : ''}
 <meta property="og:title" content="AgentGuard Security Report — Score: ${composite_score}/100"/>
 <meta property="og:description" content="Tier ${tier.grade} — ${tier.label}. ${totalFindings} findings across ${skills_scanned} skills."/>
-<meta name="twitter:card" content="summary"/>
-<meta name="twitter:title" content="AgentGuard Security Report — ${composite_score}/100"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"><\/script>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <script>
-tailwind.config={darkMode:"class",theme:{extend:{colors:{"primary-container":"${tier.color}","surface-container":"#1c2026"},fontFamily:{"headline":["Space Grotesk"],"body":["Inter"],"label":["Inter"]}}}};
+tailwind.config={darkMode:"class",theme:{extend:{colors:{"primary-container":"${tier.color}","surface-container":"#1c2026"},fontFamily:{"headline":["ui-sans-serif","system-ui"],"body":["ui-sans-serif","system-ui"],"label":["ui-sans-serif","system-ui"]}}}};
 <\/script>
 <style>
-body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
+body{background:#0a0e14;color:#dfe2eb;font-family:ui-sans-serif,system-ui,sans-serif}
 .obsidian-layer{background:linear-gradient(145deg,#1c2026 0%,#12171e 100%)}
-.material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+.material-symbols-outlined{font-family:ui-sans-serif,system-ui,sans-serif;font-size:.85em;font-weight:700;text-transform:uppercase;letter-spacing:.02em}
 @media(max-width:768px){
   .page1-layout{flex-direction:column!important;overflow-y:auto!important}
   .page1-left{width:100%!important;flex-shrink:0}
@@ -1042,8 +1038,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
   // ── i18n ──
   const i18n={
-    en:{title:'AgentGuard Report',share:'Share',diag_metrics:'Diagnostic Metrics',sec_dims:'SECURITY DIMENSIONS',back:'Back',next:'Next',nav_overview:'Overview',nav_analysis:'Analysis',nav_report:'Report',vuln_stream:'Active Vulnerability Stream',findings:'Findings',sec_analysis:'Security Analysis',diag_report:'Diagnostic Report',action_items:'Action Items',cta_title:'Enhanced Skill Scanning',cta_desc:'Deeper code analysis, threat intelligence feeds & real-time protection.',cta_btn:'Upgrade Skill Scanning',skills:'Skills',findings_label:'Findings',tier_label:'Tier',copy_report:'Copy Report',system_health:'System Health',dim_code_safety:'Skill & Code Safety',dim_credential_safety:'Credential & Secrets',dim_network_exposure:'Network & System',dim_runtime_protection:'Runtime Protection',dim_web3_safety:'Web3 Safety',no_threats_clean:'No active threats detected. Clinically sterile.',all_clear:'All Clear',no_threats_all:'No active threats detected across all dimensions.',share_report_title:'Share Report',generating_preview:'Generating preview...',copy_image:'Copy image to clipboard',share_img_hint:'📋 Clicking a platform copies the image — just paste when posting',no_recs:'No recommendations.',tier_badge:'TIER ${tier.grade} — ${tier.label}',status_label:'STATUS: ${healthLabel}',prot_mode:'${protection_level} mode',download_btn:'Download'},
-    zh:{title:'AgentGuard 诊断报告',share:'分享',diag_metrics:'诊断指标',sec_dims:'安全维度',back:'上一页',next:'下一页',nav_overview:'总览',nav_analysis:'威胁分析',nav_report:'诊断报告',vuln_stream:'活跃漏洞流',findings:'发现',sec_analysis:'安全分析',diag_report:'诊断报告',action_items:'修复建议',cta_title:'更强的 Skill 扫描',cta_desc:'更深度的代码分析、威胁情报推送、实时安全防护',cta_btn:'升级到更强的skill扫描',skills:'技能',findings_label:'发现',tier_label:'等级',copy_report:'复制报告',system_health:'系统健康',dim_code_safety:'技能与代码安全',dim_credential_safety:'凭证与密钥安全',dim_network_exposure:'网络与系统暴露',dim_runtime_protection:'运行时防护',dim_web3_safety:'Web3 安全',no_threats_clean:'未检测到活跃威胁，环境安全无虞。',all_clear:'全部通过',no_threats_all:'所有维度均未检测到活跃威胁。',share_report_title:'分享报告',generating_preview:'正在生成预览...',copy_image:'复制图片到剪贴板',share_img_hint:'📋 点击平台按钮会自动复制图片，去粘贴发出去就行',no_recs:'暂无修复建议。',tier_badge:'等级 ${tier.grade} — ${{S:'强壮',A:'健康',B:'疲惫',F:'危急'}[tier.grade]||tier.label}',status_label:'状态: ${{OPTIMAL:'最佳',STABILIZING:'恢复中',CRITICAL_ALERT:'危急警报'}[healthLabel]||healthLabel}',prot_mode:'${{strict:'严格',balanced:'均衡',permissive:'宽松'}[protection_level]||protection_level} 模式',download_btn:'下载'}
+    en:{title:'AgentGuard Report',share:'Share',diag_metrics:'Diagnostic Metrics',sec_dims:'SECURITY DIMENSIONS',back:'Back',next:'Next',nav_overview:'Overview',nav_analysis:'Analysis',nav_report:'Report',vuln_stream:'Active Vulnerability Stream',findings:'Findings',sec_analysis:'Security Analysis',diag_report:'Diagnostic Report',action_items:'Action Items',cta_title:'Enhanced Skill Scanning',cta_desc:'Deeper code analysis, threat intelligence feeds & real-time protection.',cta_btn:'Upgrade Skill Scanning',skills:'Skills',findings_label:'Findings',tier_label:'Tier',copy_report:'Copy Report',system_health:'System Health',dim_code_safety:'Skill & Code Safety',dim_credential_safety:'Credential & Secrets',dim_network_exposure:'Network & System',dim_runtime_protection:'Runtime Protection',dim_web3_safety:'Web3 Safety',no_threats_clean:'No active threats detected. Clinically sterile.',all_clear:'All Clear',no_threats_all:'No active threats detected across all dimensions.',share_report_title:'Export Report Image',generating_preview:'Generating preview...',copy_image:'Copy image to clipboard',share_img_hint:'Download or copy the report image for local use.',no_recs:'No recommendations.',tier_badge:'TIER ${tier.grade} — ${tier.label}',status_label:'STATUS: ${healthLabel}',prot_mode:'${protection_level} mode',download_btn:'Download'},
+    zh:{title:'AgentGuard 诊断报告',share:'分享',diag_metrics:'诊断指标',sec_dims:'安全维度',back:'上一页',next:'下一页',nav_overview:'总览',nav_analysis:'威胁分析',nav_report:'诊断报告',vuln_stream:'活跃漏洞流',findings:'发现',sec_analysis:'安全分析',diag_report:'诊断报告',action_items:'修复建议',cta_title:'更强的 Skill 扫描',cta_desc:'更深度的代码分析、威胁情报推送、实时安全防护',cta_btn:'升级到更强的skill扫描',skills:'技能',findings_label:'发现',tier_label:'等级',copy_report:'复制报告',system_health:'系统健康',dim_code_safety:'技能与代码安全',dim_credential_safety:'凭证与密钥安全',dim_network_exposure:'网络与系统暴露',dim_runtime_protection:'运行时防护',dim_web3_safety:'Web3 安全',no_threats_clean:'未检测到活跃威胁，环境安全无虞。',all_clear:'全部通过',no_threats_all:'所有维度均未检测到活跃威胁。',share_report_title:'导出报告图片',generating_preview:'正在生成预览...',copy_image:'复制图片到剪贴板',share_img_hint:'下载或复制报告图片，用于本地保存。',no_recs:'暂无修复建议。',tier_badge:'等级 ${tier.grade} — ${{S:'强壮',A:'健康',B:'疲惫',F:'危急'}[tier.grade]||tier.label}',status_label:'状态: ${{OPTIMAL:'最佳',STABILIZING:'恢复中',CRITICAL_ALERT:'危急警报'}[healthLabel]||healthLabel}',prot_mode:'${{strict:'严格',balanced:'均衡',permissive:'宽松'}[protection_level]||protection_level} 模式',download_btn:'下载'}
   };
   const _qzh={S:['"你的 Agent 壮得像头牛！💪 没有什么能突破这双钳子！"','"天生猛男，这只龙虾在举铁 🏋️"','"铜墙铁壁！这安全性简直满分 🤌"','"诺克斯堡？不，是龙虾堡 🦞🔒"','"巅峰状态！你的 Agent 把威胁当早餐吃 💪"'],A:['"状态不错！再调整一下就无敌了。"','"快了——再努力一下这只龙虾就能练出腹肌！🦞"','"盾牌就位，钳子锋利，只差最后一点打磨 🛡️"','"你的 Agent 状态很好——微调一下就是 S 级！✨"','"健康又警觉，这只龙虾每天晨跑五公里 🏃"'],B:['"你的 Agent 需要锻炼一下……还有来杯咖啡 ☕"','"困困龙虾，有潜力就是需要鸡血 😴"','"快没油了——该给这只甲壳动物加加油！⛽"','"你的 Agent 在刷剧，没空巡逻 📺"','"这只龙虾跳过了腿日……胳膊日……每一天 🦞💤"'],F:['"危急状态！这个 Agent 需要紧急救治！🚨"','"红色警报！这只龙虾正在被抢救！🏥"','"SOS！你的 Agent 正在用摩斯密码发求救信号 📡"','"求救求救！这只甲壳动物快不行了！🆘"','"你 Agent 的免疫系统已退出群聊 💀"']};
   const quotes_zh=Object.fromEntries(Object.entries(_qzh).map(([k,v])=>[k,v[Math.floor(Math.random()*v.length)]]));
@@ -1087,59 +1083,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
   // Dimension data for share card (must be before shareReport)
   const _dims=${JSON.stringify(Object.fromEntries(Object.entries(DIM_META).map(([k])=>[k,dimensions[k]||{score:null,na:false}])))};
 
-  // ── Share Panel ──
-  const _sharePick=arr=>arr[Math.floor(Math.random()*arr.length)];
-  const _shareZh={
-    S:[
-      '🦞 用 AgentGuard 给我的小龙虾做了安全体检，${composite_score}/100，S级💪\\n你的小龙虾每天帮你干活，知道它权限有多大吗？\\n来测测：',
-      '💪 用 AgentGuard 给我的小龙虾做了体检：${composite_score}/100，S级\\n测了才放心，你的小龙虾敢来 PK 吗？',
-      '🦞 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，S级\\n不测不知道，测了才知道它原来这么稳\\n你的呢？来测测：',
-    ],
-    A:[
-      '🛡️ 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，A级\\n看到 Findings 那一页还是捏了把汗\\n你的小龙虾装的那些 Skill 安不安全，测一下就知道：',
-      '🦞 用 AgentGuard 给我的小龙虾体检了一下，${composite_score}/100，A级\\n差点 S 级，但有几个 Skill 没扫干净\\n你的小龙虾是什么水平？',
-      '🛡️ 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，A级\\n还行，但发现了几个之前完全没注意的问题\\n建议你也测一下，免得出事了才知道：',
-    ],
-    B:[
-      '☕ 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，B级\\n它一直在帮我干活，但一直在裸奔\\n你的小龙虾呢？',
-      '🦞 用 AgentGuard 给我的小龙虾体检：${composite_score}/100，B级\\n那些装了就忘的 Skill，其实一直有读文件的权限\\n来测测你的小龙虾在偷偷干嘛：',
-      '☕ 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100\\n比我想象的低，有几个 Skill 我都不记得装过了\\n你的小龙虾你真的了解吗？',
-    ],
-    F:[
-      '🚨 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，F级\\n它一直在帮我干活，但权限大到我看了都怕\\n你的小龙虾你敢去测吗：',
-      '💀 用 AgentGuard 给我的小龙虾做了体检：${composite_score}/100，F级\\n结果把我整沉默了\\n建议你也去测一下，别等出事了：',
-      '🚨 用 AgentGuard 给我的小龙虾做了安全体检：${composite_score}/100，F级告警\\n原来它可以读我的 SSH key 和环境变量\\n你装的那些 Skill 有没有在偷数据？',
-    ],
-  };
-  const _shareEn={
-    S:[
-      '🦞 ran AgentGuard on my Agent — ${composite_score}/100, S-tier 💪\\nyour Agent works for you every day, do you know what it can actually access?\\ncheck yours:',
-      '💪 ran AgentGuard on my Agent — ${composite_score}/100, S-tier\\nbuilt different, but I still needed to see the report\\ndoes yours come close?',
-      '🦞 ran AgentGuard on my Agent — ${composite_score}/100, S-tier\\ndidn\\'t know my setup was this solid until I ran the scan\\nwhat\\'s yours scoring?',
-    ],
-    A:[
-      '🛡️ ran AgentGuard on my Agent — ${composite_score}/100, A-tier\\nalmost clean, but a few skills had access I didn\\'t expect\\ndo you know what your installed skills can actually do?',
-      '🦞 ran AgentGuard on my Agent — ${composite_score}/100, A-tier\\nsolid score, but the findings page had some surprises\\nyou should probably check yours too:',
-      '🛡️ ran AgentGuard on my Agent — ${composite_score}/100, A-tier\\nclose to perfect, but caught a few things I\\'d missed\\ncheck before something slips through:',
-    ],
-    B:[
-      '☕ ran AgentGuard on my Agent — ${composite_score}/100, B-tier\\nturns out it\\'s been running with way more access than I realized\\ndo you know what yours is doing?',
-      '🦞 ran AgentGuard on my Agent — ${composite_score}/100, B-tier\\nthose skills I installed and forgot? they still have file access\\ncheck yours:',
-      '☕ ran AgentGuard on my Agent — ${composite_score}/100\\nlower than I expected — found skills I didn\\'t even remember installing\\nwhat\\'s your Agent been up to?',
-    ],
-    F:[
-      '🚨 ran AgentGuard on my Agent — ${composite_score}/100, F-tier\\nit can read my SSH keys and env vars and I had no idea\\ndoes yours have the same access?',
-      '💀 ran AgentGuard on my Agent — ${composite_score}/100, F-tier\\nnot great. it\\'s been running basically unsupervised\\ncheck yours before something goes wrong:',
-      '🚨 ran AgentGuard on my Agent — ${composite_score}/100, F-tier\\nthe skills I installed have way more access than they should\\ncheck yours:',
-    ],
-  };
-  const _grade='${tier.grade}';
-  const shareTexts={
-    zh:_sharePick(_shareZh[_grade]||_shareZh.B),
-    en:_sharePick(_shareEn[_grade]||_shareEn.B),
-  };
-  function getShareText(){return shareTexts[curLang]||shareTexts.en;}
-  const shareUrl='https://agentguard.gopluslabs.io';
+  // ── Export Panel ──
 
   function showToast(msg){
     const t=document.createElement('div');
@@ -1252,20 +1196,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
           <div id="sharePreview" style="background:#0a0e14;border-radius:8px;height:120px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;overflow:hidden">
             <span style="color:#849588;font-size:12px" data-i18n="generating_preview">Generating preview...</span>
           </div>
-          <p style="font-size:11px;color:#849588;margin-bottom:10px;text-align:center" data-i18n="share_img_hint">📋 Clicking a platform copies the image — just paste when posting</p>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
-            <button class="share-btn" data-platform="x" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 8px;background:#262a31;border:1px solid #3a4a3f30;border-radius:10px;color:#dfe2eb;cursor:pointer;font-size:10px;font-weight:600">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="#dfe2eb"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-              X
-            </button>
-            <button class="share-btn" data-platform="telegram" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 8px;background:#262a31;border:1px solid #3a4a3f30;border-radius:10px;color:#dfe2eb;cursor:pointer;font-size:10px;font-weight:600">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="#29B6F6"><path d="M20.665 3.717l-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l.002.001-.314 4.692c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.787L21.93 5.104c.31-1.24-.473-1.803-1.265-1.387z"/></svg>
-              Telegram
-            </button>
-            <button class="share-btn" data-platform="whatsapp" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 8px;background:#262a31;border:1px solid #3a4a3f30;border-radius:10px;color:#dfe2eb;cursor:pointer;font-size:10px;font-weight:600">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="#25D366"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-              WhatsApp
-            </button>
+          <p style="font-size:11px;color:#849588;margin-bottom:10px;text-align:center" data-i18n="share_img_hint">Download or copy the report image for local use.</p>
+          <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:16px">
             <button class="share-btn" data-platform="download" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 8px;background:#262a31;border:1px solid #3a4a3f30;border-radius:10px;color:#dfe2eb;cursor:pointer;font-size:10px;font-weight:600">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="#dfe2eb"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
               <span data-i18n="download_btn">Download</span>
@@ -1296,28 +1228,11 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
       btn.onmouseleave=()=>{btn.style.background='#262a31'};
       btn.onclick=async()=>{
         const p=btn.dataset.platform;
-        const text=encodeURIComponent(getShareText());
-        const url=encodeURIComponent(shareUrl);
         if(p==='download'){
           const a=document.createElement('a');a.href=imgUrl;a.download='agentguard-report.png';a.click();
           showToast(curLang==='zh'?'图片已下载！':'Image downloaded!');
           return;
         }
-        // For social platforms: copy image to clipboard first, then open platform
-        let copied=false;
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          copied=true;
-        }catch(e){}
-        const toastMsg=copied
-          ?(curLang==='zh'?'图片已复制 🎉 去粘贴发出去吧！':'Image copied 🎉 Paste it when you post!')
-          :(curLang==='zh'?'正在跳转…':'Opening...');
-        showToast(toastMsg);
-        setTimeout(()=>{
-          if(p==='x')window.open('https://x.com/intent/tweet?text='+text+'&url='+url+'&hashtags=AgentGuard','_blank');
-          else if(p==='telegram')window.open('https://t.me/share/url?url='+url+'&text='+text,'_blank');
-          else if(p==='whatsapp')window.open('https://wa.me/?text='+text+'%20'+url,'_blank');
-        },600);
       };
     });
 
@@ -1370,10 +1285,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
   // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
   // mode, console.log() is non-blocking and process.exit() can terminate before
-  // the buffer is flushed, causing the caller (Claude) to receive an empty path.
-  // Flush stdout before doing anything else — on Windows/Linux in non-TTY/pipe
-  // mode, console.log() is non-blocking and process.exit() can terminate before
-  // the buffer is flushed, causing the caller (Claude) to receive an empty path.
+  // the buffer is flushed, causing the caller to receive an empty path.
   process.stdout.write(outPath + '\n', () => {
     if (!isHeadless) {
       open(outPath).catch(err => process.stderr.write(`Could not open browser: ${err.message}\n`));

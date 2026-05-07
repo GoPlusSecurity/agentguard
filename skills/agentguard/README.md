@@ -50,7 +50,7 @@ Scores are combined into a composite 0–100 health score with a tier:
 | 50–69 | **B** | ☕ Tired — 5 random sleepy variants |
 | 0–49 | **F** | 🚨 Critical — 5 random sick variants |
 
-The report opens automatically in your browser. It includes a shareable image you can post to X, Telegram, or WhatsApp — with tier-specific copy in Chinese and English.
+The report opens automatically in your browser. It includes a downloadable summary image with tier-specific copy in Chinese and English.
 
 ## Requirements
 

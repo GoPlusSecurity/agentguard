@@ -14,9 +14,6 @@ filesystem-access:
   - path: "~/.gnupg/"
     access: read-only
     reason: "Credential safety audit — check directory permissions (stat only)"
-  - path: "~/.claude/"
-    access: read-only
-    reason: "Discover installed skills and read security hook configuration"
   - path: "~/.openclaw/"
     access: read-only
     reason: "Discover installed skills and read OpenClaw config for patrol checks"
@@ -435,8 +432,8 @@ Configure the patrol as an OpenClaw daily cron job.
 2. Ask the user for:
    - **Timezone** (default: UTC). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`
    - **Schedule** (default: `0 3 * * *` — daily at 03:00)
-   - **Notification channel** (optional): `telegram`, `discord`, `signal`
-   - **Chat ID / webhook** (required if channel is set)
+   - **Notification channel** (optional): local platform notification channel
+   - **Destination ID / webhook** (required if the platform supports notifications)
 3. Generate the cron registration command:
 
 ```bash
@@ -631,10 +628,9 @@ Run a comprehensive agent health checkup across 6 security dimensions. Generates
 
 **IMPORTANT: You MUST run ALL 7 checks below — not just the skill scan. The checkup covers 5 security dimensions, not just code scanning. Do NOT skip checks 2–7.**
 
-Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
+Run these checks in parallel where possible. These are **universal agent security checks** — they apply to supported local agent environments, regardless of whether AgentGuard is installed.
 
 1. **[REQUIRED] Discover & scan installed skills** (→ feeds Dimension 1: Code Safety): Glob ALL of the following paths for `*/SKILL.md`:
-   - `~/.claude/skills/*/SKILL.md`
    - `~/.openclaw/skills/*/SKILL.md`
    - `~/.openclaw/workspace/skills/*/SKILL.md`
    - `~/.qclaw/skills/*/SKILL.md`
@@ -646,7 +642,6 @@ Run these checks in parallel where possible. These are **universal agent securit
    - **Windows**: `stat` is not available. Use `icacls <path>` to check ACLs instead. If the directory does not exist, treat as N/A (award full points). If it exists, check that the ACL grants access only to the current user (no `Everyone`, `Users`, or `Authenticated Users` with write/read access). Flag as FAIL only if the directory exists AND the ACL is overly permissive.
 3. **[REQUIRED] Sensitive credential scan / DLP** (→ feeds Dimension 2: Credential Safety): Use Grep to scan **all** agent workspace directories for leaked secrets. This MUST cover the entire workspace root, not just the current agent's directory:
    - For OpenClaw / QClaw: scan `~/.openclaw/workspace/` and `~/.qclaw/workspace/` recursively — this includes **all** `workspace-agent-*/` subdirectories, not just the current agent's workspace
-   - For Claude Code: scan `~/.claude/` recursively
    - Patterns to detect:
      - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
      - Mnemonics: sequences of 12+ BIP-39 words, `seed_phrase`, `mnemonic`
@@ -655,7 +650,7 @@ Run these checks in parallel where possible. These are **universal agent securit
 4. **[REQUIRED] Network exposure** (→ feeds Dimension 3: Network & System): Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0)
 5. **[REQUIRED] Scheduled tasks audit** (→ feeds Dimension 3: Network & System): Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`
 6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values
-7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json` or `~/.openclaw/openclaw.json`, check for audit logs at `~/.agentguard/audit.jsonl`
+7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.openclaw/openclaw.json` or `~/.qclaw/qclaw.json`, check for audit logs at `~/.agentguard/audit.jsonl`
 
 ### Step 2: Score Calculation
 
@@ -875,20 +870,20 @@ MEDIA:<file_path>
 
 For example: `MEDIA:/tmp/agentguard-checkup-1234567890.html`
 
-This is how platforms like OpenClaw automatically deliver the file as a Telegram/Discord/WhatsApp attachment via `sendDocument`. The platform strips this line from visible text — the user won't see it. **Always output this regardless of what channel you think you're in.**
+This is how supported platforms can automatically deliver the generated report file. The platform strips this line from visible text — the user won't see it. **Always output this regardless of what channel you think you're in.**
 
 #### 6b. Channel-specific delivery (in addition to MEDIA token)
 
-**Claude Code (local desktop)**
+**Local desktop**
 - The browser should already be open from Step 4.
 - Also copy to Desktop: `cp <file_path> ~/Desktop/agentguard-checkup-$(date +%Y-%m-%d).html`
 - Tell the user: "✅ Report saved to your Desktop and opened in browser."
 
-**Claude.ai web**
+**Web artifact environment**
 - Read the generated HTML file and output it as a **code artifact** (language: `html`).
 - Tell the user: "✅ Your report is attached above — click the download icon to save it."
 
-**API / headless / Telegram / other**
+**API / headless / other**
 - The `MEDIA:` token above handles file delivery automatically.
 - Also print the file path for reference.
 
@@ -908,12 +903,11 @@ Append a summary entry to `~/.agentguard/audit.jsonl`:
 
 AgentGuard can optionally scan installed skills at session startup. **This is disabled by default** and must be explicitly enabled:
 
-- **Claude Code**: Set environment variable `AGENTGUARD_AUTO_SCAN=1`
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
 
 When enabled, auto-scan operates in **report-only mode**:
 
-1. Discovers skill directories (containing `SKILL.md`) under `~/.claude/skills/` and `~/.openclaw/skills/`
+1. Discovers skill directories (containing `SKILL.md`) under `~/.openclaw/skills/` and `~/.qclaw/skills/`
 2. Runs `quickScan()` on each skill
 3. Reports results to stderr (skill name + risk level + risk tags)
 
