@@ -98,7 +98,7 @@ Detailed Grep patterns for all 24 detection rules. Use this as reference when ex
 | `Windows.*Credentials` (i) | Windows credentials |
 | `credential.*manager` (i) | Credential manager |
 
-## Rule 7: PRIVATE_KEY_PATTERN (CRITICAL)
+## Rule 7: PRIVATE_KEY_PATTERN (CRITICAL*)
 **Files**: All
 
 | Pattern | Description |
@@ -107,7 +107,16 @@ Detailed Grep patterns for all 24 detection rules. Use this as reference when ex
 | `private[_\s]?key\s*[:=]\s*['"\x60]0x[a-fA-F0-9]{64}` (i) | Named private key |
 | `PRIVATE_KEY\s*[:=]\s*['"\x60][a-fA-F0-9]{64}` (i) | PRIVATE_KEY assignment |
 
-## Rule 8: MNEMONIC_PATTERN (CRITICAL)
+**Git-aware severity** (apply after initial match — see SKILL.md "Git Context Check"):
+
+| Condition | Severity |
+|-----------|----------|
+| File ever appeared in git history (`git log --all`) | **CRITICAL** |
+| File tracked by git but NOT gitignored | **HIGH** |
+| File gitignored (`git check-ignore`) | **MEDIUM** |
+| Not inside a git repository | **CRITICAL** |
+
+## Rule 8: MNEMONIC_PATTERN (CRITICAL*)
 **Files**: All
 
 | Pattern | Description |
@@ -116,6 +125,8 @@ Detailed Grep patterns for all 24 detection rules. Use this as reference when ex
 | `seed[_\s]?phrase\s*[:=]\s*['"\x60]` (i) | Seed phrase assignment |
 | `mnemonic\s*[:=]\s*['"\x60]` (i) | Mnemonic assignment |
 | `recovery[_\s]?phrase\s*[:=]\s*['"\x60]` (i) | Recovery phrase assignment |
+
+**Git-aware severity**: same table as Rule 7 above.
 
 ## Rule 9: WALLET_DRAINING (CRITICAL)
 **Files**: `*.js`, `*.ts`, `*.sol`
