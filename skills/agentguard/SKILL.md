@@ -27,7 +27,7 @@ filesystem-access:
     access: read-write
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
 argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
 ---
 
@@ -158,10 +158,10 @@ After outputting the scan report, if the scanned target appears to be a skill (c
    - `id`: the directory name of the scanned path
    - `source`: the absolute path to the scanned directory
    - `version`: read the `version` field from `package.json` in the scanned directory using the Read tool (if present), otherwise use `unknown`
-   - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.ts hash --path <scanned_path>` and extracting the `hash` field from the JSON output
+   - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.js hash --path <scanned_path>` and extracting the `hash` field from the JSON output
 3. Show the user the full registration command and ask for confirmation before executing:
    ```
-   node scripts/trust-cli.ts attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by agentguard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
+   node scripts/trust-cli.js attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by agentguard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
    ```
 4. Only execute after user approval. Show the registration result.
 
@@ -206,27 +206,27 @@ Parse the user's action description and apply the appropriate detector:
 
 ### Web3 Enhanced Detection
 
-When the action involves **web3_tx** or **web3_sign**, use AgentGuard's bundled `action-cli.ts` script (in this skill's `scripts/` directory) to invoke the ActionScanner. This script integrates the trust registry and optionally the GoPlus API (requires `GOPLUS_API_KEY` and `GOPLUS_API_SECRET` environment variables, if available):
+When the action involves **web3_tx** or **web3_sign**, use AgentGuard's bundled `action-cli.js` script (in this skill's `scripts/` directory) to invoke the ActionScanner. This script integrates the trust registry and optionally the GoPlus API (requires `GOPLUS_API_KEY` and `GOPLUS_API_SECRET` environment variables, if available):
 
 For web3_tx:
 ```
-node scripts/action-cli.ts decide --type web3_tx --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>] [--user-present]
+node scripts/action-cli.js decide --type web3_tx --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>] [--user-present]
 ```
 
 For web3_sign:
 ```
-node scripts/action-cli.ts decide --type web3_sign --chain-id <id> --signer <addr> [--message <msg>] [--typed-data <json>] [--origin <url>] [--user-present]
+node scripts/action-cli.js decide --type web3_sign --chain-id <id> --signer <addr> [--message <msg>] [--typed-data <json>] [--origin <url>] [--user-present]
 ```
 
 For standalone transaction simulation:
 ```
-node scripts/action-cli.ts simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>]
+node scripts/action-cli.js simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>]
 ```
 
 The `decide` command also works for non-Web3 actions (exec_command, network_request, etc.) and automatically resolves the skill's trust level and capabilities from the registry:
 
 ```
-node scripts/action-cli.ts decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
+node scripts/action-cli.js decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
 ```
 
 Parse the JSON output and incorporate findings into your evaluation:
@@ -292,8 +292,8 @@ Detect tampered or unregistered skill packages by comparing file hashes against 
 
 **Steps**:
 1. Discover skill directories under `$OC/skills/` (look for dirs containing `SKILL.md`)
-2. For each skill, compute hash: `node scripts/trust-cli.ts hash --path <skill_dir>`
-3. Look up the attested hash: `node scripts/trust-cli.ts lookup --source <skill_dir>`
+2. For each skill, compute hash: `node scripts/trust-cli.js hash --path <skill_dir>`
+3. Look up the attested hash: `node scripts/trust-cli.js lookup --source <skill_dir>`
 4. If hash differs from attested → **INTEGRITY_DRIFT** (HIGH)
 5. If skill has no trust record → **UNREGISTERED_SKILL** (MEDIUM)
 6. For drifted skills, run the scan rules against the changed files to detect new threats
@@ -374,7 +374,7 @@ Verify security configuration is production-appropriate.
 Check for expired, stale, or over-privileged trust records.
 
 **Steps**:
-1. List all records: `node scripts/trust-cli.ts list`
+1. List all records: `node scripts/trust-cli.js list`
 2. Flag:
    - Expired attestations (`expires_at` in the past)
    - Trusted skills not re-scanned in 30+ days
@@ -528,7 +528,7 @@ List all trust records with optional filters.
 
 If the agentguard package is installed, execute trust operations via AgentGuard's own bundled script:
 ```
-node scripts/trust-cli.ts <subcommand> [args]
+node scripts/trust-cli.js <subcommand> [args]
 ```
 
 For operations that modify the trust registry (`attest`, `revoke`), always show the user the exact command and ask for explicit confirmation before executing.
