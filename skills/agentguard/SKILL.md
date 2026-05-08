@@ -27,8 +27,8 @@ filesystem-access:
     access: read-write
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
+allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(*scan-to-sarif.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...] [--format sarif|json] [--output <file>]"
 ---
 
 # GoPlus AgentGuard — AI Agent Security Framework
@@ -69,6 +69,13 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 ## Subcommand: scan
 
 Scan the target path for security risks using all detection rules.
+
+**Argument parsing**: Extract from `$ARGUMENTS`:
+- The scan target path (first positional argument, or value after `scan`)
+- `--format <fmt>` flag: supported values are `sarif` (SARIF 2.1.0 JSON) and `text` (default markdown)
+- `--output <file>` flag: write output to this file instead of stdout
+
+If `--format sarif` is present, follow the **SARIF Output Flow** at the end of this section instead of the standard Output Format.
 
 ### File Discovery
 
@@ -166,6 +173,44 @@ After outputting the scan report, if the scanned target appears to be a skill (c
 4. Only execute after user approval. Show the registration result.
 
 If scripts are not available (e.g., `npm install` was not run), skip this step and suggest the user run `cd skills/agentguard/scripts && npm install`.
+
+### SARIF Output Flow (when `--format sarif` is present)
+
+**Run Steps 1–3 (File Discovery, Detection Rules, Risk Level Calculation) exactly as above.** Then, instead of the standard markdown Output Format, do the following:
+
+**Step A — Assemble findings as structured JSON** and write to `/tmp/agentguard-scan-findings.json`:
+
+```json
+{
+  "target": "<scanned path>",
+  "scanned_at": "<ISO 8601 timestamp>",
+  "files_scanned": <number>,
+  "risk_level": "<CRITICAL|HIGH|MEDIUM|LOW>",
+  "findings": [
+    {
+      "rule_id": "<RULE_ID>",
+      "severity": "<CRITICAL|HIGH|MEDIUM|LOW>",
+      "file": "<relative/path/to/file.ext>",
+      "line": <line number>,
+      "evidence": "<matched content snippet>"
+    }
+  ]
+}
+```
+
+Use relative paths for `file` (relative to the scan target root). If no findings, use `"findings": []`.
+
+**Step B — Run the SARIF converter** (cd into the skill directory first):
+
+```bash
+cd <skill_directory> && node scripts/scan-to-sarif.js --file /tmp/agentguard-scan-findings.json
+```
+
+**Step C — Handle output**:
+- If `--output <file>` was specified: write the SARIF JSON to that file using the Write tool, then tell the user the file path.
+- Otherwise: print the SARIF JSON to stdout (the user will redirect it, e.g. `> findings.sarif`).
+
+**Do NOT** output the standard markdown report when `--format sarif` is active. Skip the Post-Scan Trust Registration offer.
 
 ---
 
@@ -627,6 +672,12 @@ If the log file doesn't exist, inform the user that no security events have been
 
 Run a comprehensive agent health checkup across 6 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
 
+**Argument parsing**: Extract from `$ARGUMENTS`:
+- `--format json` flag: skip HTML generation and write the checkup JSON to a file instead
+- `--output <file>` flag: path for the JSON output file (required when `--format json` is used; defaults to `/tmp/agentguard-checkup-data.json` if omitted)
+
+If `--format json` is present, follow the modified flow noted in Step 4 below.
+
 ### Step 1: Data Collection
 
 **IMPORTANT: You MUST run ALL 7 checks below — not just the skill scan. The checkup covers 5 security dimensions, not just code scanning. Do NOT skip checks 2–7.**
@@ -782,7 +833,7 @@ Also generate a list of actionable recommendations as `{ "severity": "...", "tex
 
 ### Step 4: Generate Report
 
-Assemble the results into a JSON object and pipe it to the report generator:
+Assemble the results into a JSON object:
 
 ```json
 {
@@ -805,10 +856,15 @@ Assemble the results into a JSON object and pipe it to the report generator:
 }
 ```
 
-Execute the report generator. **Use the `--file` method for cross-platform compatibility** (the `echo | pipe` method fails on Windows due to shell quoting differences):
+**If `--format json` was specified**:
+1. Write this JSON to the `--output <file>` path (or `/tmp/agentguard-checkup-data.json` if no `--output` given) using the Write tool.
+2. Tell the user: "Checkup JSON written to `<file>`." — include the composite score and tier in the message.
+3. **Stop here** — skip Steps 5 and 6 (HTML generation and MEDIA delivery). The terminal summary in Step 5 is also skipped since the user is consuming the raw JSON programmatically.
 
-1. First, write the JSON to a temporary file using the Write tool (e.g. `/tmp/agentguard-checkup-data.json`)
-2. Then run (remember to `cd` into the skill directory first — see "Resolving Script Paths" above):
+**Otherwise (default HTML flow)**:
+
+Write the JSON to a temporary file using the Write tool (e.g. `/tmp/agentguard-checkup-data.json`), then run (remember to `cd` into the skill directory first — see "Resolving Script Paths" above):
+
 ```bash
 cd <skill_directory> && node scripts/checkup-report.js --file /tmp/agentguard-checkup-data.json
 ```
