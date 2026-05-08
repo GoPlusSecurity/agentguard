@@ -3,12 +3,35 @@ set -euo pipefail
 
 # GoPlus AgentGuard — One-click setup
 # Supports: Claude Code, OpenClaw, ClawHub
-# Detects the platform and installs to the correct location.
+# Auto-detects the agent platform; use --target for custom paths.
+#
+# Usage:
+#   ./setup.sh                        Auto-detect platform
+#   ./setup.sh --target <path>        Install to <path>/agentguard (explicit override)
+#   ./setup.sh --uninstall            Remove installed skill
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/skills/agentguard"
 AGENTGUARD_DIR="$HOME/.agentguard"
 MIN_NODE_VERSION=18
+
+# ---- Parse arguments ----
+TARGET_DIR=""
+UNINSTALL=false
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target)
+      TARGET_DIR="${2:-}"
+      [ -z "$TARGET_DIR" ] && { echo "  ERROR: --target requires a path argument."; exit 1; }
+      shift 2
+      ;;
+    --uninstall|uninstall) UNINSTALL=true; shift ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 echo ""
 echo "  GoPlus AgentGuard — AI Agent Security Guard"
@@ -38,10 +61,28 @@ fi
 
 # ---- Detect platform ----
 detect_platform() {
-  # Check OpenClaw first (workspace skills or managed skills)
-  if [ -d "$HOME/.openclaw" ]; then
-    # Prefer workspace skills if workspace exists
-    if [ -d "$HOME/.openclaw/workspace" ]; then
+  # --target overrides all detection
+  if [ -n "$TARGET_DIR" ]; then
+    # Expand leading ~ manually (eval is unsafe with user input)
+    case "$TARGET_DIR" in
+      "~/"*) TARGET_DIR="$HOME/${TARGET_DIR#~/}" ;;
+      "~")   TARGET_DIR="$HOME" ;;
+    esac
+    SKILLS_DIR="$TARGET_DIR/agentguard"
+    PLATFORM="custom"
+    return
+  fi
+
+  # $OPENCLAW_STATE_DIR: per-agent state directory set by the platform at runtime
+  if [ -n "${OPENCLAW_STATE_DIR:-}" ] && [ -d "$OPENCLAW_STATE_DIR" ] && [ -w "$OPENCLAW_STATE_DIR" ]; then
+    SKILLS_DIR="$OPENCLAW_STATE_DIR/skills/agentguard"
+    PLATFORM="openclaw-agent"
+    return
+  fi
+
+  # Fall back to global ~/.openclaw
+  if [ -d "$HOME/.openclaw" ] && [ -w "$HOME/.openclaw" ]; then
+    if [ -d "$HOME/.openclaw/workspace" ] && [ -w "$HOME/.openclaw/workspace" ]; then
       SKILLS_DIR="$HOME/.openclaw/workspace/skills/agentguard"
       PLATFORM="openclaw-workspace"
     else
@@ -58,9 +99,11 @@ detect_platform() {
     return
   fi
 
-  # Fallback: create Claude Code dir (most common)
-  SKILLS_DIR="$HOME/.claude/skills/agentguard"
-  PLATFORM="claude-code"
+  # Nothing detected — require explicit --target
+  echo "  ERROR: Could not detect a supported agent platform."
+  echo "  Set \$OPENCLAW_STATE_DIR, or use --target <path> to specify the skills directory."
+  echo "  Example: ./setup.sh --target ~/minax/agents/cto-owen/skills"
+  exit 1
 }
 
 detect_platform
@@ -69,7 +112,7 @@ echo "  Install target:    $SKILLS_DIR"
 echo ""
 
 # ---- Uninstall mode ----
-if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+if [ "$UNINSTALL" = true ]; then
   echo "  Uninstalling GoPlus AgentGuard..."
   rm -rf "$SKILLS_DIR" 2>/dev/null && echo "  Removed skill from $SKILLS_DIR" || true
   # Also clean up other possible locations
@@ -95,45 +138,37 @@ else
   exit 1
 fi
 
-# ---- Step 2: Install CLI dependencies ----
-echo "[2/5] Installing CLI dependencies..."
-if [ -d "$SKILL_SRC/scripts" ]; then
-  cd "$SKILL_SRC/scripts"
-  npm install 2>/dev/null
-  echo "  OK: CLI dependencies installed"
-fi
-
-# ---- Step 3: Copy skill files ----
-echo "[3/5] Installing skill files..."
+# ---- Step 2: Copy skill files ----
+echo "[2/5] Installing skill files..."
 mkdir -p "$SKILLS_DIR"
 for f in SKILL.md README.md scan-rules.md action-policies.md web3-patterns.md evals.md patrol-checks.md .clawignore; do
   [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
 done
 echo "  OK: Skill files installed"
 
-# ---- Step 4: Copy scripts + node_modules ----
-echo "[4/5] Installing scripts and dependencies..."
+# ---- Step 3: Copy scripts ----
+echo "[3/5] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
 
-# Copy script files
-for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.ts action-cli.ts package.json package-lock.json; do
+for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.ts action-cli.ts; do
   [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
 done
 
-# Copy data directory
 if [ -d "$SKILL_SRC/scripts/data" ]; then
   mkdir -p "$SKILLS_DIR/scripts/data"
   cp -r "$SKILL_SRC/scripts/data/"* "$SKILLS_DIR/scripts/data/" 2>/dev/null || true
 fi
+echo "  OK: Scripts installed"
 
-# Install node_modules in the target (avoids symlink issues in containers)
-cd "$SKILLS_DIR/scripts"
-if [ -f "package.json" ]; then
-  npm install 2>/dev/null
-  echo "  OK: Scripts and dependencies installed"
-else
-  echo "  WARN: No package.json found in scripts directory"
-fi
+# ---- Step 4: Install dependencies ----
+echo "[4/5] Installing dependencies..."
+# Scripts run as: cd $SKILLS_DIR && node scripts/<script>
+# so node_modules must live at $SKILLS_DIR root for Node resolution.
+cp "$SKILL_SRC/package.json" "$SKILLS_DIR/package.json"
+[ -f "$SKILL_SRC/package-lock.json" ] && cp "$SKILL_SRC/package-lock.json" "$SKILLS_DIR/package-lock.json" || true
+cd "$SKILLS_DIR"
+npm install 2>/dev/null
+echo "  OK: Dependencies installed"
 
 # ---- Step 5: Create config directory ----
 echo "[5/5] Setting up configuration..."
