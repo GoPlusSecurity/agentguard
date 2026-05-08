@@ -631,6 +631,8 @@ Run a comprehensive agent health checkup across 6 security dimensions. Generates
 
 **IMPORTANT: You MUST run ALL 7 checks below — not just the skill scan. The checkup covers 5 security dimensions, not just code scanning. Do NOT skip checks 2–7.**
 
+**EVIDENCE RULE: Every finding you report MUST be backed by actual tool output collected in this step. You MUST quote the exact command output (or "no output" if the command returned nothing) in the finding's evidence field. Findings without concrete evidence from tool execution are FORBIDDEN — do not infer, assume, or fabricate results.**
+
 Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
 
 1. **[REQUIRED] Discover & scan installed skills** (→ feeds Dimension 1: Code Safety): Glob ALL of the following paths for `*/SKILL.md`:
@@ -640,10 +642,10 @@ Run these checks in parallel where possible. These are **universal agent securit
    - `~/.qclaw/skills/*/SKILL.md`
    - `~/.qclaw/workspace/skills/*/SKILL.md`
 
-   For **every** discovered skill, **run `/agentguard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Do NOT skip any skill regardless of how many are found. Collect the scan results (risk level, findings count, risk tags) for each skill.
+   For **every** discovered skill, **run `/agentguard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Do NOT skip any skill regardless of how many are found. Collect the scan results (risk level, findings count, risk tags) for each skill. **Record the exact file paths and line numbers returned by the scan — these are required evidence for any finding you report.**
 2. **[REQUIRED] Credential file permissions** (→ feeds Dimension 2: Credential Safety): Platform-aware check — behavior differs by OS:
-   - **macOS/Linux**: Run `stat -f '%Lp' <path> 2>/dev/null || stat -c '%a' <path> 2>/dev/null` on `~/.ssh/`, `~/.gnupg/`, and if OpenClaw: on `$OC/openclaw.json`, `$OC/devices/paired.json`. **If the command returns empty output, the directory does not exist — treat as N/A (award full points), do NOT flag as a failure.**
-   - **Windows**: `stat` is not available. Use `icacls <path>` to check ACLs instead. If the directory does not exist, treat as N/A (award full points). If it exists, check that the ACL grants access only to the current user (no `Everyone`, `Users`, or `Authenticated Users` with write/read access). Flag as FAIL only if the directory exists AND the ACL is overly permissive.
+   - **macOS/Linux**: Run `stat -f '%Lp' <path> 2>/dev/null || stat -c '%a' <path> 2>/dev/null` on `~/.ssh/`, `~/.gnupg/`, and if OpenClaw: on `$OC/openclaw.json`, `$OC/devices/paired.json`. **If the command returns empty output, the directory does not exist — treat as N/A (award full points), do NOT flag as a failure.** **Record the exact numeric permission string returned (e.g. "700") as evidence.**
+   - **Windows**: `stat` is not available. Use `icacls <path>` to check ACLs instead. If the directory does not exist, treat as N/A (award full points). If it exists, check that the ACL grants access only to the current user (no `Everyone`, `Users`, or `Authenticated Users` with write/read access). Flag as FAIL only if the directory exists AND the ACL is overly permissive. **Record the exact `icacls` output as evidence.**
 3. **[REQUIRED] Sensitive credential scan / DLP** (→ feeds Dimension 2: Credential Safety): Use Grep to scan **all** agent workspace directories for leaked secrets. This MUST cover the entire workspace root, not just the current agent's directory:
    - For OpenClaw / QClaw: scan `~/.openclaw/workspace/` and `~/.qclaw/workspace/` recursively — this includes **all** `workspace-agent-*/` subdirectories, not just the current agent's workspace
    - For Claude Code: scan `~/.claude/` recursively
@@ -652,10 +654,11 @@ Run these checks in parallel where possible. These are **universal agent securit
      - Mnemonics: sequences of 12+ BIP-39 words, `seed_phrase`, `mnemonic`
      - API keys/tokens: `AKIA[0-9A-Z]{16}`, `gh[pousr]_[A-Za-z0-9_]{36}`, plaintext passwords
    - **Important**: Use the workspace *root* directory as the scan target (e.g. `~/.qclaw/workspace/`), not a specific agent subdirectory. All sibling `workspace-agent-*` directories must be included.
-4. **[REQUIRED] Network exposure** (→ feeds Dimension 3: Network & System): Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0)
-5. **[REQUIRED] Scheduled tasks audit** (→ feeds Dimension 3: Network & System): Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`
-6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values
-7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json` or `~/.openclaw/openclaw.json`, check for audit logs at `~/.agentguard/audit.jsonl`
+   - **Record the exact file path and matched line for every hit. If Grep returns no matches, record "no matches found" as evidence. A finding is only valid if Grep returned a match.**
+4. **[REQUIRED] Network exposure** (→ feeds Dimension 3: Network & System): Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0). **Record the exact command output. Only flag a port as exposed if it appears in the actual output.**
+5. **[REQUIRED] Scheduled tasks audit** (→ feeds Dimension 3: Network & System): Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`. **Record the full crontab output (or "no crontab" if empty). Only flag entries that appear verbatim in the output.**
+6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values. **Record the matched variable names from the actual `env` output. Do not flag variables that were not present in the output.**
+7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json` or `~/.openclaw/openclaw.json`, check for audit logs at `~/.agentguard/audit.jsonl`. **Record whether each file exists and its relevant content (hook config, log entry count) as evidence.**
 
 ### Step 2: Score Calculation
 
@@ -755,6 +758,8 @@ Round to the nearest integer.
 
 ### Step 3: Generate Analysis Report
 
+**EVIDENCE GATE: Before writing the analysis, verify that every finding you intend to include has a corresponding tool output collected in Step 1. If a finding cannot be traced back to actual command output, a matched file path, or a real log entry — drop it. Do not include findings based on inference, assumption, or knowledge of what "typically" exists. A clean report with fewer findings is always preferable to a report with fabricated ones.**
+
 Based on all collected data and findings, write a **comprehensive security analysis report** as a single text block. This is where you use your AI reasoning ability — don't just list facts, **analyze** them:
 
 - Summarize the overall security posture in 2-3 sentences
@@ -779,6 +784,8 @@ Also generate a list of actionable recommendations as `{ "severity": "...", "tex
 - [ ] `web3_safety` — from Step 2 (only if Web3 detected, otherwise `{ "score": null, "na": true }`)
 
 **If any dimension is missing data, go back and run the missing checks. Do NOT submit a report with only code_safety filled in.**
+
+**Evidence check: every entry in every `findings` array must reference a concrete artifact — a file path with line number, a command output snippet, or a log entry. Remove any finding that lacks this before proceeding.**
 
 ### Step 4: Generate Report
 
