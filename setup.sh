@@ -97,8 +97,8 @@ fi
 
 # ---- Step 2: Install CLI dependencies ----
 echo "[2/5] Installing CLI dependencies..."
-if [ -d "$SKILL_SRC/scripts" ]; then
-  cd "$SKILL_SRC/scripts"
+if [ -f "$SKILL_SRC/package.json" ]; then
+  cd "$SKILL_SRC"
   npm install 2>/dev/null
   echo "  OK: CLI dependencies installed"
 fi
@@ -116,7 +116,7 @@ echo "[4/5] Installing scripts and dependencies..."
 mkdir -p "$SKILLS_DIR/scripts"
 
 # Copy script files
-for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.ts action-cli.ts package.json package-lock.json; do
+for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.ts action-cli.ts; do
   [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
 done
 
@@ -125,6 +125,10 @@ if [ -d "$SKILL_SRC/scripts/data" ]; then
   mkdir -p "$SKILLS_DIR/scripts/data"
   cp -r "$SKILL_SRC/scripts/data/"* "$SKILLS_DIR/scripts/data/" 2>/dev/null || true
 fi
+
+# Copy package.json and node_modules from skills/agentguard/ (where npm install was run)
+cp "$SKILL_SRC/package.json" "$SKILLS_DIR/scripts/package.json" 2>/dev/null || true
+[ -f "$SKILL_SRC/package-lock.json" ] && cp "$SKILL_SRC/package-lock.json" "$SKILLS_DIR/scripts/package-lock.json" 2>/dev/null || true
 
 # Install node_modules in the target (avoids symlink issues in containers)
 cd "$SKILLS_DIR/scripts"
