@@ -59,6 +59,7 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
+- **`checkup --history <period>`** — Show score trend and findings diff across past checkup runs (e.g. `--history 30d`)
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
 
@@ -899,8 +900,98 @@ Regardless of channel, always end with:
 
 Append a summary entry to `~/.agentguard/audit.jsonl`:
 ```json
-{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>}
+{
+  "timestamp": "...",
+  "event": "checkup",
+  "composite_score": <n>,
+  "tier": "<grade>",
+  "checks": 6,
+  "findings": <total finding count>,
+  "skills_scanned": <count>,
+  "dimension_scores": {
+    "code_safety": <n>,
+    "credential_safety": <n>,
+    "network_exposure": <n>,
+    "runtime_protection": <n>,
+    "web3_safety": <n|null>
+  },
+  "finding_keys": ["<RULE_ID>:<file>:<line>"]
+}
 ```
+
+`finding_keys` contains one entry per finding in the format `"RULE_ID:relative/file/path:line"`. Do NOT include evidence content — only the rule ID, file path, and line number. This enables findings diff across runs without storing sensitive matched content.
+
+---
+
+## Subcommand: checkup --history
+
+Show score trend and findings diff across past checkup runs.
+
+**Trigger**: `$ARGUMENTS` contains `checkup` and `--history <period>` (e.g. `--history 30d`, `--history 7d`, `--history 90d`).
+
+### Step 1: Parse Period and Load History
+
+1. Parse the `--history` value: extract the number and unit (`d` = days). Default to `30d` if the value is missing or unparseable.
+2. Compute the cutoff timestamp: current time minus the period (e.g. `--history 30d` → entries from the last 30 days).
+3. Read `~/.agentguard/audit.jsonl` using the Read tool.
+4. Parse each line as JSON. Filter to lines where `event === "checkup"` AND `timestamp >= cutoff`. Sort ascending by timestamp.
+5. If fewer than 1 matching entry: output `No checkup history found in the last <period>. Run /agentguard checkup to start tracking.` and stop.
+6. If exactly 1 entry: show the single-run summary and note `Only 1 run found — run checkup again to see trends.`
+
+### Step 2: Score Trend Table
+
+Output a markdown table with one row per historical run:
+
+```
+## 🦞 AgentGuard Checkup History — Last <period>
+
+| Date | Score | Tier | Code | Creds | Network | Runtime | Web3 |
+|------|-------|------|------|-------|---------|---------|------|
+| 2026-04-08 14:32 | 78 | A | 100 | 80 | 85 | 30 | N/A |
+| 2026-04-15 09:11 | 82 | A | 100 | 85 | 90 | 40 | N/A |
+| 2026-05-01 18:44 | 71 | A |  92 | 80 | 85 | 30 | N/A |
+```
+
+- Format `timestamp` as `YYYY-MM-DD HH:mm` in local time.
+- For `web3_safety`: show the score if present and non-null, otherwise `N/A`.
+- For dimension scores missing from older entries (recorded before this format was added): show `—`.
+- After the table, add a one-line trend summary: e.g. `Trend: ↑ +4 pts over 30 days (78 → 82)` or `Trend: ↓ −7 pts over 30 days (78 → 71)` or `Trend: → no change`.
+
+### Step 3: Findings Diff
+
+Compare the **oldest** entry in the period against the **most recent** entry. Use the `finding_keys` arrays to compute:
+
+- **New findings** (in recent but not in oldest): these appeared since the start of the period — potential regressions.
+- **Resolved findings** (in oldest but not in recent): these were fixed — improvements.
+- **Persistent findings** (in both): unchanged issues.
+
+If either entry is missing `finding_keys` (older format), skip the diff and note: `Findings diff not available — older entries predate finding_keys tracking.`
+
+Output:
+
+```
+### Findings Diff (oldest → most recent in period)
+
+🔴 New findings (N): appeared since <oldest date>
+  - RULE_ID: file/path:line
+  - ...
+
+✅ Resolved findings (N): fixed since <oldest date>
+  - RULE_ID: file/path:line
+  - ...
+
+⚪ Persistent findings (N): unchanged
+  (list only if ≤ 10; otherwise show count only)
+```
+
+If there are no new findings and no resolved findings: output `✅ No change in findings over this period.`
+
+### Step 4: Recommendations
+
+Based on the trend and diff:
+- If score dropped > 5 pts: `⚠️ Score dropped <n> pts — review new findings above.`
+- If new CRITICAL/HIGH findings appeared: list them with a one-line fix suggestion each.
+- If score improved: acknowledge the improvement briefly.
 
 ---
 
