@@ -258,29 +258,25 @@ Always combine script results with the policy-based checks (webhook domains, sec
 
 ## Subcommand: patrol
 
-**OpenClaw-specific daily security patrol.** Runs 8 automated checks that leverage AgentGuard's scan engine, trust registry, and audit log to assess the security posture of an OpenClaw deployment.
+**Daily security patrol.** Runs 8 automated checks that leverage AgentGuard's scan engine, trust registry, and audit log to assess the security posture of your agent deployment. Works on OpenClaw and standard cron environments.
 
 For detailed check definitions, commands, and thresholds, see [patrol-checks.md](patrol-checks.md).
 
 ### Sub-subcommands
 
 - **`patrol`** or **`patrol run`** — Execute all 8 checks and output a patrol report
-- **`patrol setup`** — Configure as an OpenClaw daily cron job
+- **`patrol setup`** — Configure as a daily cron job (OpenClaw or system crontab)
 - **`patrol status`** — Show last patrol results and cron schedule
 
-### Pre-flight: OpenClaw Detection
+### Platform Detection
 
-Before running any checks, verify the OpenClaw environment:
+Before running `patrol setup` or `patrol status`, detect the available scheduling platform:
 
-1. Check for `$OPENCLAW_STATE_DIR` env var, fall back to `~/.openclaw/`
-2. Verify the directory exists and contains `openclaw.json`
-3. Check if `openclaw` CLI is available in PATH
+1. **OpenClaw**: Check for `$OPENCLAW_STATE_DIR` env var (fall back to `~/.openclaw/`), verify the directory exists and contains `openclaw.json`, and check if `openclaw` CLI is in PATH. If all three pass → use OpenClaw path.
+2. **System crontab**: Check if `crontab` command is available in PATH → use crontab path.
+3. **Neither available**: Inform the user and output the manual cron entry for them to add themselves.
 
-If OpenClaw is not detected, output:
-```
-This command requires an OpenClaw environment. Detected: <what was found/missing>
-For non-OpenClaw environments, use /agentguard scan and /agentguard report instead.
-```
+For `patrol run`, no scheduling platform is needed — run checks on any platform.
 
 Set `$OC` to the resolved OpenClaw state directory for all subsequent checks.
 
@@ -427,17 +423,20 @@ After outputting the report, append a summary entry to `~/.agentguard/audit.json
 
 ### patrol setup
 
-Configure the patrol as an OpenClaw daily cron job.
+Configure the patrol as a daily cron job. Detects the available platform and uses the appropriate method.
 
 **Steps**:
 
-1. Verify OpenClaw environment (same pre-flight as `patrol run`)
+1. Run platform detection (see above).
 2. Ask the user for:
-   - **Timezone** (default: UTC). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`
    - **Schedule** (default: `0 3 * * *` — daily at 03:00)
-   - **Notification channel** (optional): `telegram`, `discord`, `signal`
+   - **Timezone** (default: UTC). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`
+   - **Notification channel** (optional, OpenClaw only): `telegram`, `discord`, `signal`
    - **Chat ID / webhook** (required if channel is set)
-3. Generate the cron registration command:
+
+#### Path A — OpenClaw available
+
+Generate and show the OpenClaw cron registration command:
 
 ```bash
 openclaw cron add \
@@ -455,11 +454,36 @@ openclaw cron add \
   --to <chat-id>
 ```
 
-4. **Show the exact command to the user and wait for explicit confirmation** before executing
-5. After execution, verify with `openclaw cron list`
-6. Output confirmation with the cron schedule
+**Show the exact command and wait for explicit user confirmation before executing.**
+After execution, verify with `openclaw cron list`.
 
-> **Note**: `--timeout-seconds 300` is required because isolated sessions need cold-start time. The default 120s is not enough.
+> **Note**: `--timeout-seconds 300` is required because isolated sessions need cold-start time.
+
+#### Path B — System crontab available (OpenClaw not available)
+
+Resolve the absolute path to this skill's directory (parent of this SKILL.md file) as `<SKILL_DIR>`.
+
+Generate the crontab entry:
+```
+<schedule> cd <SKILL_DIR> && node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1
+```
+
+**Show the exact entry and wait for explicit user confirmation before writing.**
+
+After confirmation, add the entry to the user's crontab:
+```bash
+(crontab -l 2>/dev/null; echo "<schedule> cd <SKILL_DIR> && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1") | crontab -
+```
+
+Verify with `crontab -l | grep agentguard`.
+
+#### Path C — Neither available
+
+Output the crontab entry for the user to add manually:
+```
+<schedule> cd <SKILL_DIR> && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1
+```
+Explain that neither `openclaw` nor `crontab` was found in PATH, so the entry must be added manually.
 
 ### patrol status
 
@@ -467,11 +491,10 @@ Show the current patrol state.
 
 **Steps**:
 
-1. Read `~/.agentguard/audit.jsonl`, find the most recent `event: "patrol"` entry
-2. If found, display: timestamp, overall status, finding counts
-3. Run `openclaw cron list` and look for `agentguard-patrol` job
-4. If cron is configured, show: schedule, timezone, last run time, next run time
-5. If cron is not configured, suggest: `/agentguard patrol setup`
+1. Read `~/.agentguard/audit.jsonl`, find the most recent `event: "patrol"` or `event: "auto_scan"` entry. If found, display: timestamp, overall status, finding counts.
+2. **OpenClaw available**: run `openclaw cron list` and look for `agentguard-patrol`. Show schedule, timezone, last/next run time if found.
+3. **System crontab available**: run `crontab -l 2>/dev/null | grep agentguard`. Show the matching entry if found.
+4. If no cron is configured on any platform, suggest: `/agentguard patrol setup`.
 
 ---
 
