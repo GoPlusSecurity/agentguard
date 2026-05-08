@@ -55,7 +55,7 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
-- **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
+- **`trust <lookup|attest|revoke|list|seed> [args]`** — Manage skill trust levels
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
@@ -523,6 +523,110 @@ Revoke trust for a skill. Supports `--source-pattern` for wildcards.
 
 **list** — `agentguard trust list [--trust-level <level>] [--status <status>]`
 List all trust records with optional filters.
+
+**seed** — `agentguard trust seed [--auto-attest-low-risk] [--auto-attest-medium-risk] [--dry-run]`
+Batch-scan all installed skills and auto-attest those meeting the risk threshold. Designed for initial baseline setup when many skills are already installed.
+
+Flags:
+- `--auto-attest-low-risk` (default when `seed` is invoked): attest LOW-risk skills as `trusted` with `read_only` preset.
+- `--auto-attest-medium-risk`: also attest MEDIUM-risk skills as `restricted` with `none` preset.
+- `--dry-run`: preview only — show the plan table without executing any attest commands.
+
+**HIGH and CRITICAL risk skills are never auto-attested** regardless of flags. They must be reviewed and attested manually.
+
+#### seed Flow
+
+**Step 1 — Discover skills**
+
+Glob all of the following paths for `*/SKILL.md` (same as checkup):
+- `~/.claude/skills/*/SKILL.md`
+- `~/.openclaw/skills/*/SKILL.md`
+- `~/.openclaw/workspace/skills/*/SKILL.md`
+- `~/.qclaw/skills/*/SKILL.md`
+- `~/.qclaw/workspace/skills/*/SKILL.md`
+
+Skip `agentguard` itself. Collect the parent directory of each found `SKILL.md` as the skill path.
+
+**Step 2 — Filter unregistered skills**
+
+For each discovered skill, run:
+```
+node scripts/trust-cli.ts lookup --source <skill_path>
+```
+If the lookup returns a record with `status: active`, the skill is already registered — skip it and note "already registered" in the summary. Only proceed with skills that have no active trust record.
+
+**Step 3 — Scan unregistered skills**
+
+For each unregistered skill, run the full scan (24 detection rules, same as `/agentguard scan <skill_path>`). Record: skill name, skill path, risk level (LOW/MEDIUM/HIGH/CRITICAL), finding count.
+
+**Step 4 — Build preview table**
+
+Output a plan table before taking any action:
+
+```
+## AgentGuard Trust Seed — Plan
+
+Scanned <N> unregistered skills. Proposed actions:
+
+| Skill | Path | Risk | Findings | Proposed Action |
+|-------|------|------|----------|-----------------|
+| foo   | ~/.claude/skills/foo | LOW    | 0 | ✅ attest trusted/read_only |
+| bar   | ~/.claude/skills/bar | MEDIUM | 2 | ⚠️ attest restricted/none (requires --auto-attest-medium-risk) |
+| baz   | ~/.claude/skills/baz | HIGH   | 5 | 🚫 SKIP — manual review required |
+| qux   | ~/.claude/skills/qux | CRITICAL | 8 | 🚫 SKIP — manual review required |
+
+Already registered (skipped): <M> skills
+Will attest: <K> skills
+Will skip (HIGH/CRITICAL): <J> skills
+```
+
+If `--dry-run` is present: output this table and stop. Add: `Dry run complete — no changes made. Remove --dry-run to execute.`
+
+**Step 5 — User confirmation (REQUIRED)**
+
+After showing the plan table, **always ask for explicit user confirmation** before executing any attest commands:
+
+> "Ready to attest <K> skill(s). Confirm? (yes/no)"
+
+Do NOT proceed without a clear affirmative response. If the user declines, stop and suggest `--dry-run` for future previews.
+
+**Step 6 — Batch attest**
+
+For each skill approved for attestation, compute its hash and run attest:
+
+```bash
+# Compute hash
+node scripts/trust-cli.ts hash --path <skill_path>
+
+# Attest
+node scripts/trust-cli.ts attest \
+  --id <skill_dir_name> \
+  --source <skill_path> \
+  --version <version_from_package.json_or_unknown> \
+  --hash <computed_hash> \
+  --trust-level <trusted|restricted> \
+  --preset <read_only|none> \
+  --reviewed-by agentguard-seed \
+  --notes "Auto-attested by trust seed. Scan risk: <risk_level>. Findings: <count>." \
+  --force
+```
+
+Run these sequentially (not in parallel) to avoid registry write conflicts.
+
+**Step 7 — Result summary**
+
+```
+## Trust Seed Complete
+
+✅ Attested: <N> skills
+⚠️  Skipped (already registered): <M> skills
+🚫 Skipped (HIGH/CRITICAL risk — manual review required): <J> skills
+❌ Failed: <K> skills (list errors)
+
+Skills requiring manual review:
+- <skill_name> (<path>) — Risk: HIGH/CRITICAL, <N> findings
+  Run: /agentguard scan <path>  then  /agentguard trust attest ...
+```
 
 ### Script Execution
 
