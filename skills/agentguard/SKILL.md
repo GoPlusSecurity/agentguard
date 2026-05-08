@@ -70,6 +70,26 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 
 Scan the target path for security risks using all detection rules.
 
+### Suppression Rules (read first)
+
+Before running any detection, check for a suppression config file in the scan target root:
+
+1. Use the Read tool to read `<scan_target>/.agentguard-suppress.yaml`. If the file does not exist (Read returns an error or empty), skip suppression — no findings will be filtered.
+2. Parse the `suppress:` list. Each entry has:
+   - `rule` (required): rule ID to suppress (e.g. `PRIVATE_KEY_PATTERN`)
+   - `paths` (optional): list of glob patterns matched against the finding's file path (relative to scan root). `*` matches within one directory level; `**` matches across directories.
+   - `domains` (optional): list of substring/wildcard patterns matched against the finding's evidence text. `*` acts as a wildcard prefix or suffix.
+   - `reason` (required): explanation shown in the suppression summary.
+3. Keep this suppression list in memory — you will apply it after all detection rules have run.
+
+**A finding is suppressed when ALL of the following are true:**
+- Its `rule_id` exactly matches the entry's `rule` field.
+- If the entry has `paths`: the finding's file path matches at least one glob pattern.
+- If the entry has `domains`: the finding's evidence text contains at least one domain pattern match.
+- If neither `paths` nor `domains` are specified: the finding is suppressed regardless of file or evidence.
+
+Suppressed findings are **excluded from the findings table and risk level calculation**. At the end of the report, add a note: `> N finding(s) suppressed via .agentguard-suppress.yaml — run with details to review.`
+
 ### File Discovery
 
 Use Glob to find all scannable files at the given path. Include: `*.js`, `*.ts`, `*.jsx`, `*.tsx`, `*.mjs`, `*.cjs`, `*.py`, `*.json`, `*.yaml`, `*.yml`, `*.toml`, `*.sol`, `*.sh`, `*.bash`, `*.md`
@@ -125,7 +145,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 **Target**: <scanned path>
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
 **Files Scanned**: <count>
-**Total Findings**: <count>
+**Total Findings**: <count of non-suppressed findings>
 
 ### Findings
 
@@ -135,7 +155,10 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 
 ### Summary
 <Human-readable summary of key risks, impact, and recommendations>
+
+> N finding(s) suppressed via .agentguard-suppress.yaml
 ```
+(Omit the suppression note line if no suppression file was found or no findings were suppressed.)
 
 ### Post-Scan Trust Registration
 

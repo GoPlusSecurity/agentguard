@@ -106,7 +106,7 @@ fi
 # ---- Step 3: Copy skill files ----
 echo "[3/5] Installing skill files..."
 mkdir -p "$SKILLS_DIR"
-for f in SKILL.md README.md scan-rules.md action-policies.md web3-patterns.md evals.md patrol-checks.md .clawignore; do
+for f in SKILL.md README.md scan-rules.md action-policies.md web3-patterns.md evals.md patrol-checks.md suppress.example.yaml .clawignore; do
   [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
 done
 echo "  OK: Skill files installed"
