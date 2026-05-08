@@ -61,7 +61,9 @@ const SKILLS_DIRS = [
   join(homedir(), '.claude', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
-const AGENTGUARD_DIR = join(homedir(), '.agentguard');
+const AGENTGUARD_DIR = process.env.OPENCLAW_STATE_DIR
+  ? join(process.env.OPENCLAW_STATE_DIR, 'agentguard')
+  : process.env.AGENTGUARD_HOME || join(homedir(), '.agentguard');
 const AUDIT_PATH = join(AGENTGUARD_DIR, 'audit.jsonl');
 
 function ensureDir() {
