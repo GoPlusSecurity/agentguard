@@ -30,7 +30,13 @@ export class RegistryStorage {
   constructor(options: StorageOptions = {}) {
     this.filePath =
       options.filePath ||
-      path.join(homedir(), '.agentguard', 'registry.json');
+      (process.env.OPENCLAW_STATE_DIR
+        ? path.join(process.env.OPENCLAW_STATE_DIR, 'agentguard', 'registry.json')
+        : process.env.AGENTGUARD_NAMESPACE
+          ? path.join(homedir(), '.agentguard', 'namespaces', process.env.AGENTGUARD_NAMESPACE, 'registry.json')
+          : process.env.AGENTGUARD_HOME
+            ? path.join(process.env.AGENTGUARD_HOME, 'registry.json')
+            : path.join(homedir(), '.agentguard', 'registry.json'));
   }
 
   /**

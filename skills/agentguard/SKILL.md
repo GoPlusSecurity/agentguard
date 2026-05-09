@@ -535,6 +535,29 @@ For operations that modify the trust registry (`attest`, `revoke`), always show 
 
 If scripts are not available, help the user inspect `data/registry.json` directly using Read tool.
 
+### Per-Agent / Per-Namespace Registry Isolation
+
+By default all agents on a machine share `~/.agentguard/registry.json`. For deployments that require strict isolation, the registry path is resolved in this priority order:
+
+| Priority | Condition | Registry path |
+|----------|-----------|---------------|
+| 1 | `--registry-path <path>` CLI flag | `<path>` (explicit override) |
+| 2 | `$OPENCLAW_STATE_DIR` is set | `$OPENCLAW_STATE_DIR/agentguard/registry.json` |
+| 3 | `$AGENTGUARD_NAMESPACE` is set | `~/.agentguard/namespaces/<namespace>/registry.json` |
+| 4 | `$AGENTGUARD_HOME` is set | `$AGENTGUARD_HOME/registry.json` |
+| 5 | Default | `~/.agentguard/registry.json` |
+
+**OpenClaw**: `$OPENCLAW_STATE_DIR` is set automatically per-agent by the platform — no configuration needed. Each agent gets its own isolated registry.
+
+**Other platforms**: Set `AGENTGUARD_NAMESPACE=<agent-name>` in the agent's environment to give it an isolated registry under `~/.agentguard/namespaces/<agent-name>/registry.json`. Different agents use different namespace values.
+
+**Explicit path**: Pass `--registry-path <path>` to `trust-cli.ts` for full control:
+```
+node scripts/trust-cli.ts list --registry-path /path/to/agent-specific/registry.json
+```
+
+When helping users diagnose registry isolation issues, check which env vars are set (`env | grep -E 'OPENCLAW_STATE_DIR|AGENTGUARD'`) to determine which registry file is actually in use.
+
 ---
 
 ## Subcommand: config
