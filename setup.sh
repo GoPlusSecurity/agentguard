@@ -4,11 +4,37 @@ set -euo pipefail
 # GoPlus AgentGuard — One-click setup
 # Supports: Claude Code, OpenClaw, ClawHub
 # Detects the platform and installs to the correct location.
+#
+# Flags:
+#   --shared              Use shared node_modules to reduce disk usage in
+#                         multi-agent environments. node_modules is installed
+#                         once at AGENTGUARD_SHARED_DIR (default:
+#                         ~/.agentguard/shared/scripts) and each agent's
+#                         scripts/node_modules becomes a symlink to it.
+#   --shared-dir <path>   Override the shared node_modules location.
+#                         Equivalent to setting AGENTGUARD_SHARED_DIR.
+#   --uninstall           Remove the installed skill and config directory.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/skills/agentguard"
 AGENTGUARD_DIR="$HOME/.agentguard"
 MIN_NODE_VERSION=18
+
+# ---- Parse flags ----
+SHARED_MODE=false
+# Allow env var override; --shared-dir flag takes precedence below
+SHARED_DIR="${AGENTGUARD_SHARED_DIR:-$HOME/.agentguard/shared/scripts}"
+
+_args=("$@")
+for ((i=0; i<${#_args[@]}; i++)); do
+  case "${_args[$i]}" in
+    --shared) SHARED_MODE=true ;;
+    --shared-dir)
+      SHARED_MODE=true
+      SHARED_DIR="${_args[$((i+1))]:-$SHARED_DIR}"
+      ;;
+  esac
+done
 
 echo ""
 echo "  GoPlus AgentGuard — AI Agent Security Guard"
@@ -69,6 +95,7 @@ echo "  Install target:    $SKILLS_DIR"
 echo ""
 
 # ---- Uninstall mode ----
+# ---- Uninstall mode ----
 if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
   echo "  Uninstalling GoPlus AgentGuard..."
   rm -rf "$SKILLS_DIR" 2>/dev/null && echo "  Removed skill from $SKILLS_DIR" || true
@@ -77,6 +104,10 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
   rm -rf "$HOME/.openclaw/skills/agentguard" 2>/dev/null || true
   rm -rf "$HOME/.openclaw/workspace/skills/agentguard" 2>/dev/null || true
   rm -rf "$AGENTGUARD_DIR" 2>/dev/null && echo "  Removed config from $AGENTGUARD_DIR" || true
+  # Remove shared node_modules only if explicitly requested
+  if [ "$SHARED_MODE" = "true" ]; then
+    rm -rf "$SHARED_DIR" 2>/dev/null && echo "  Removed shared deps from $SHARED_DIR" || true
+  fi
   echo ""
   echo "  GoPlus AgentGuard has been uninstalled."
   echo ""
@@ -126,13 +157,35 @@ if [ -d "$SKILL_SRC/scripts/data" ]; then
   cp -r "$SKILL_SRC/scripts/data/"* "$SKILLS_DIR/scripts/data/" 2>/dev/null || true
 fi
 
-# Install node_modules in the target (avoids symlink issues in containers)
-cd "$SKILLS_DIR/scripts"
-if [ -f "package.json" ]; then
-  npm install 2>/dev/null
-  echo "  OK: Scripts and dependencies installed"
+if [ "$SHARED_MODE" = "true" ]; then
+  # Shared mode: install node_modules once to the shared dir, then symlink
+  echo "  Shared mode: node_modules -> $SHARED_DIR/node_modules"
+  mkdir -p "$SHARED_DIR"
+
+  # Copy package files to shared dir if not already present or outdated
+  cp "$SKILL_SRC/scripts/package.json" "$SHARED_DIR/package.json" 2>/dev/null || true
+  cp "$SKILL_SRC/scripts/package-lock.json" "$SHARED_DIR/package-lock.json" 2>/dev/null || true
+
+  # Install once in the shared dir
+  cd "$SHARED_DIR"
+  if [ -f "package.json" ]; then
+    npm install 2>/dev/null
+    echo "  OK: Shared node_modules installed at $SHARED_DIR"
+  fi
+
+  # Replace any existing node_modules in the skill dir with a symlink
+  rm -rf "$SKILLS_DIR/scripts/node_modules"
+  ln -s "$SHARED_DIR/node_modules" "$SKILLS_DIR/scripts/node_modules"
+  echo "  OK: Symlinked scripts/node_modules -> $SHARED_DIR/node_modules"
 else
-  echo "  WARN: No package.json found in scripts directory"
+  # Default mode: install node_modules directly in the target (container-safe)
+  cd "$SKILLS_DIR/scripts"
+  if [ -f "package.json" ]; then
+    npm install 2>/dev/null
+    echo "  OK: Scripts and dependencies installed"
+  else
+    echo "  WARN: No package.json found in scripts directory"
+  fi
 fi
 
 # ---- Step 5: Create config directory ----
@@ -171,6 +224,9 @@ echo "  ━━━━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo "  Installed to: $SKILLS_DIR"
 echo "  Platform:     $PLATFORM"
+if [ "$SHARED_MODE" = "true" ]; then
+  echo "  Shared deps:  $SHARED_DIR/node_modules"
+fi
 echo ""
 echo "  Other commands:"
 echo "    /agentguard scan <path>    Scan code for security risks"
@@ -178,4 +234,5 @@ echo "    /agentguard trust list     View trusted skills"
 echo "    /agentguard report         View security event log"
 echo ""
 echo "  To uninstall: ./setup.sh --uninstall"
+echo "  Shared mode:  ./setup.sh --shared  (saves ~67MB per extra agent)"
 echo ""
