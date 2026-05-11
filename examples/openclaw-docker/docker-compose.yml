@@ -1,0 +1,8 @@
+services:
+  agentguard-openclaw-demo:
+    build: .
+    working_dir: /workspace
+    volumes:
+      - .:/workspace/demo
+    environment:
+      AGENTGUARD_AGENT_HOST: openclaw
