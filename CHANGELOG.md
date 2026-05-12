@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.2] - 2026-05-12
+
+### Added
+- Added local-first AgentGuard CLI flow for init, connect, status, doctor, scan, and protect.
+- Added optional AgentGuard Cloud policy, audit sync, and approval integration.
+
+### Security
+- Hardened Cloud API key validation, HTTPS-only Cloud URLs, config file permissions, and audit redaction.
+
 ## [1.1.1] - 2026-04-17
 
 ### Added
