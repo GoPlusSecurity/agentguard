@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Command } from 'commander';
 import { AgentGuardCloudClient } from './cloud/client.js';
 import {
@@ -24,7 +25,7 @@ async function main() {
   program
     .name('agentguard')
     .description('Local-first security guard for AI agents, with optional AgentGuard Cloud control plane')
-    .version('1.1.1');
+    .version(readPackageVersion());
 
   program
     .command('init')
@@ -172,6 +173,11 @@ function readStdinIfAvailable(): string {
   } catch {
     return '';
   }
+}
+
+function readPackageVersion(): string {
+  const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version?: string };
+  return packageJson.version || '0.0.0';
 }
 
 main().catch((error) => {

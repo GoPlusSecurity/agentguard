@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.3] - 2026-05-12
+
+### Fixed
+- Read the CLI `--version` value from `package.json` so published package and binary versions stay in sync.
+
 ## [1.1.2] - 2026-05-12
 
 ### Added
