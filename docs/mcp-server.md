@@ -1,36 +1,39 @@
-# MCP Server Setup
+# MCP Server
 
-GoPlus AgentGuard can run as an MCP (Model Context Protocol) server, providing security tools to any MCP-compatible AI agent.
+AgentGuard still ships an MCP server for hosts that prefer MCP tools over hooks.
 
-## Configuration
+## Run
 
-Add to your MCP configuration:
+```bash
+npx -y --package @goplus/agentguard agentguard-mcp
+```
+
+If installed globally:
+
+```bash
+agentguard-mcp
+```
+
+## Configure
 
 ```json
 {
   "mcpServers": {
     "agentguard": {
-      "command": "npx",
-      "args": ["-y", "@goplus/agentguard"],
-      "env": {
-        "GOPLUS_API_KEY": "your_key",
-        "GOPLUS_API_SECRET": "your_secret"
-      }
+      "command": "agentguard-mcp"
     }
   }
 }
 ```
 
-GoPlus API keys are optional — the scanner and registry work without them. They enable enhanced Web3 security features.
+## Tools
 
-## Available Tools
+- `skill_scanner_scan`
+- `registry_lookup`
+- `registry_attest`
+- `registry_revoke`
+- `registry_list`
+- `action_scanner_decide`
+- `action_scanner_simulate_web3`
 
-| Tool | Description |
-|------|-------------|
-| `skill_scanner_scan` | Scan a directory for security risks |
-| `registry_lookup` | Look up a skill's trust level |
-| `registry_attest` | Register a skill with a trust level |
-| `registry_revoke` | Revoke a skill's trust |
-| `registry_list` | List all registered skills |
-| `action_scanner_decide` | Evaluate an action's safety |
-| `action_scanner_simulate_web3` | Simulate a Web3 transaction |
+For live action blocking, prefer `agentguard protect` hooks. MCP is best for agent-invoked scans, trust registry operations, and Web3 simulation.

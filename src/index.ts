@@ -57,6 +57,41 @@ export {
   type EngineOptions,
 } from './adapters/index.js';
 
+// Export local-first runtime and Cloud connect helpers
+export {
+  ensureConfig,
+  loadConfig as loadAgentGuardConfig,
+  saveConfig as saveAgentGuardConfig,
+  connectCloud,
+  getAgentGuardPaths,
+  type AgentGuardConfig,
+} from './config.js';
+export { AgentGuardCloudClient } from './cloud/client.js';
+export { evaluateLocalAction } from './runtime/evaluator.js';
+export {
+  protectAction,
+  formatProtectResult,
+  exitCodeForDecision,
+  type ProtectOptions,
+  type ProtectResult,
+} from './runtime/protect.js';
+export { redactText, redactPreview, redactReasons } from './runtime/redaction.js';
+export {
+  getDefaultEffectiveRuntimePolicy,
+  loadCachedPolicy,
+  saveCachedPolicy,
+  resolveRuntimePolicy,
+} from './runtime/policy.js';
+export type {
+  EffectiveRuntimePolicy,
+  RuntimeAction,
+  RuntimeDecision,
+  RuntimeAuditEvent,
+  RuntimeActionType,
+  RuntimeAgentHost,
+  CloudPolicyDecision,
+} from './runtime/types.js';
+
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';

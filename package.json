@@ -1,6 +1,6 @@
 {
   "name": "@goplus/agentguard",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "GoPlus AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,13 +10,16 @@
     ]
   },
   "bin": {
-    "agentguard": "./dist/mcp-server.js"
+    "agentguard": "./dist/cli.js",
+    "agentguard-mcp": "./dist/mcp-server.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w",
     "test": "node --test dist/tests/*.test.js",
+    "test:cloud-live": "node --test dist/tests/cloud-live.test.js",
+    "postinstall": "node dist/postinstall.js || true",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -59,6 +62,8 @@
   },
   "files": [
     "dist",
+    "docs",
+    "examples/openclaw-docker",
     "README.md",
     "LICENSE",
     "openclaw.plugin.json",
