@@ -14,12 +14,13 @@ This creates `~/.agentguard/config.json`, `~/.agentguard/audit.jsonl`, and local
 ## Connect Cloud
 
 ```bash
-agentguard connect \
-  --key ag_live_xxxxx \
-  --url https://agentguard.gopluslabs.io
+AGENTGUARD_API_KEY=ag_live_xxxxx \
+  agentguard connect --url https://agentguard.gopluslabs.io
 ```
 
 `connect` stores the API key locally, fetches `/api/v1/policies/effective`, and caches the policy. If Cloud is unavailable, AgentGuard keeps enforcing with cached policy or the bundled default policy.
+
+Prefer `AGENTGUARD_API_KEY` or an ignored `.env.local` file over passing secrets as CLI flags, because shell history can persist command-line arguments.
 
 ## Runtime flow
 

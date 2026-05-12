@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -22,6 +22,7 @@ export interface AgentGuardPaths {
 }
 
 const DEFAULT_CLOUD_URL = 'https://agentguard.gopluslabs.io';
+const API_KEY_PATTERN = /^ag_live_[A-Za-z0-9_-]{8,}$/;
 
 export function getAgentGuardPaths(): AgentGuardPaths {
   const home = process.env.AGENTGUARD_HOME || join(homedir(), '.agentguard');
@@ -48,7 +49,8 @@ export function defaultConfig(): AgentGuardConfig {
 
 export function ensureAgentGuardHome(): AgentGuardPaths {
   const paths = getAgentGuardPaths();
-  mkdirSync(paths.home, { recursive: true });
+  mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+  chmodBestEffort(paths.home, 0o700);
   return paths;
 }
 
@@ -85,11 +87,13 @@ export function loadConfig(): AgentGuardConfig {
 export function saveConfig(config: AgentGuardConfig): void {
   const paths = ensureAgentGuardHome();
   mkdirSync(dirname(paths.configPath), { recursive: true });
-  writeFileSync(paths.configPath, `${JSON.stringify(config, null, 2)}\n`);
+  writeFileSync(paths.configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodBestEffort(paths.configPath, 0o600);
 }
 
 export function connectCloud(options: { apiKey: string; cloudUrl?: string }): AgentGuardConfig {
   const current = ensureConfig();
+  validateApiKey(options.apiKey);
   const next: AgentGuardConfig = {
     ...current,
     cloudUrl: normalizeCloudUrl(options.cloudUrl || current.cloudUrl || DEFAULT_CLOUD_URL),
@@ -106,12 +110,36 @@ export function maskApiKey(apiKey?: string): string {
   return `${apiKey.slice(0, 8)}…${apiKey.slice(-4)}`;
 }
 
-function normalizeCloudUrl(value: string): string {
-  return value.replace(/\/+$/, '');
+export function validateApiKey(apiKey: string): void {
+  if (!API_KEY_PATTERN.test(apiKey)) {
+    throw new Error('Invalid AgentGuard API key format. Expected an ag_live_ key.');
+  }
+}
+
+export function normalizeCloudUrl(value: string): string {
+  const normalized = value.replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error('Invalid Cloud URL.');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Invalid Cloud URL. AgentGuard Cloud URLs must use https://.');
+  }
+  return normalized;
 }
 
 function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
   return value === 'strict' || value === 'balanced' || value === 'permissive'
     ? value
     : null;
+}
+
+function chmodBestEffort(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Best-effort hardening for platforms/filesystems that support chmod.
+  }
 }

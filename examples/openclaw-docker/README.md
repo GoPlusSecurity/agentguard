@@ -12,5 +12,5 @@ In a real OpenClaw workspace, register `plugin.ts` as a plugin. It uses `registe
 For Cloud policy and audit sync:
 
 ```bash
-agentguard connect --key ag_live_xxxxx --url https://agentguard.gopluslabs.io
+AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gopluslabs.io
 ```

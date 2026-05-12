@@ -1,3 +1,4 @@
+import { normalizeCloudUrl } from '../config.js';
 import type { AgentGuardConfig } from '../config.js';
 import type {
   EffectiveRuntimePolicy,
@@ -5,7 +6,8 @@ import type {
   RuntimeAuditEvent,
   RuntimeDecision,
 } from '../runtime/types.js';
-import { redactPreview, redactReasons } from '../runtime/redaction.js';
+import { redactMetadata, redactPreview } from '../runtime/redaction.js';
+import { buildAuditEvent } from '../runtime/audit.js';
 
 interface ApiSuccess<T> {
   success: true;
@@ -17,7 +19,7 @@ export class AgentGuardCloudClient {
   private readonly apiKey?: string;
 
   constructor(config: Pick<AgentGuardConfig, 'cloudUrl' | 'apiKey'>) {
-    this.cloudUrl = (config.cloudUrl || 'https://agentguard.gopluslabs.io').replace(/\/+$/, '');
+    this.cloudUrl = normalizeCloudUrl(config.cloudUrl || 'https://agentguard.gopluslabs.io');
     this.apiKey = config.apiKey;
   }
 
@@ -40,10 +42,7 @@ export class AgentGuardCloudClient {
     this.requireApiKey();
     const body = await this.request<RuntimeDecision>('/api/v1/actions/evaluate', {
       method: 'POST',
-      body: JSON.stringify({
-        ...action,
-        input: redactPreview(action.input, 64_000),
-      }),
+      body: JSON.stringify(sanitizeActionRequest(action)),
     });
     return body.data;
   }
@@ -53,11 +52,7 @@ export class AgentGuardCloudClient {
     await this.request('/api/v1/events/ingest', {
       method: 'POST',
       body: JSON.stringify({
-        events: events.map((event) => ({
-          ...event,
-          input: redactPreview(event.input),
-          reasons: redactReasons(event.reasons),
-        })),
+        events: events.map((event) => buildAuditEvent(event)),
       }),
     });
   }
@@ -66,11 +61,7 @@ export class AgentGuardCloudClient {
     this.requireApiKey();
     const body = await this.request<{ approvalId: string }>('/api/v1/approvals', {
       method: 'POST',
-      body: JSON.stringify({
-        ...event,
-        input: redactPreview(event.input),
-        reasons: redactReasons(event.reasons),
-      }),
+      body: JSON.stringify(buildAuditEvent(event)),
     });
     return body.data.approvalId || null;
   }
@@ -97,4 +88,17 @@ export class AgentGuardCloudClient {
       throw new Error('AgentGuard Cloud API key is not configured.');
     }
   }
+}
+
+function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
+  return {
+    sessionId: redactPreview(action.sessionId, 160),
+    agentHost: action.agentHost,
+    actionType: action.actionType,
+    toolName: redactPreview(action.toolName, 160),
+    input: redactPreview(action.input, 64_000),
+    cwd: action.cwd ? redactPreview(action.cwd, 500) : undefined,
+    sourceSkill: action.sourceSkill ? redactPreview(action.sourceSkill, 240) : undefined,
+    metadata: redactMetadata(action.metadata),
+  };
 }

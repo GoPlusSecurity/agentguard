@@ -9,6 +9,7 @@ import {
   getAgentGuardPaths,
   loadConfig,
   maskApiKey,
+  normalizeCloudUrl,
   saveConfig,
 } from './config.js';
 import { SkillScanner } from './scanner/index.js';
@@ -42,7 +43,7 @@ async function main() {
         saveConfig(config);
       }
       if (options.cloud) {
-        config.cloudUrl = options.cloud;
+        config.cloudUrl = normalizeCloudUrl(options.cloud);
         saveConfig(config);
       }
       const paths = getAgentGuardPaths();
@@ -61,8 +62,8 @@ async function main() {
   program
     .command('connect')
     .description('Connect local AgentGuard to AgentGuard Cloud')
-    .option('--key <key>', 'AgentGuard Cloud API key')
-    .option('--api-key <key>', 'AgentGuard Cloud API key')
+    .option('--key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
+    .option('--api-key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
     .option('--url <url>', 'AgentGuard Cloud URL', 'https://agentguard.gopluslabs.io')
     .option('--cloud <url>', 'AgentGuard Cloud URL')
     .action(async (options) => {

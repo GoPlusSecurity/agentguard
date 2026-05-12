@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
@@ -8,6 +8,8 @@ import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
 import { protectAction } from '../runtime/protect.js';
+import { connectCloud, getAgentGuardPaths } from '../config.js';
+import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
 
@@ -22,6 +24,34 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!redacted.includes('sk-test-secret-value'));
     assert.ok(!redacted.includes('secret-value'));
     assert.ok(!redacted.includes('abc123'));
+  });
+
+  it('rejects malformed keys and non-HTTPS Cloud URLs', () => {
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-config-'));
+    try {
+      assert.throws(
+        () => connectCloud({ apiKey: 'not-a-key', cloudUrl: 'https://agentguard.example' }),
+        /Invalid AgentGuard API key format/
+      );
+      assert.throws(
+        () => connectCloud({ apiKey: 'ag_live_test_key_123456', cloudUrl: 'http://127.0.0.1:9' }),
+        /must use https/
+      );
+      const config = connectCloud({
+        apiKey: 'ag_live_test_key_123456',
+        cloudUrl: 'https://agentguard.example',
+      });
+      assert.equal(config.cloudUrl, 'https://agentguard.example');
+      assert.equal(statSync(getAgentGuardPaths().configPath).mode & 0o777, 0o600);
+      assert.throws(
+        () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' }),
+        /must use https/
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
   });
 
   it('evaluates local action with cached Cloud policy shape', async () => {
@@ -53,7 +83,10 @@ describe('Runtime Cloud bridge', () => {
     });
 
     assert.deepEqual(result, { flushed: 0, remaining: 1 });
-    assert.ok(readFileSync(spool, 'utf8').includes('act_test'));
+    const spoolContent = readFileSync(spool, 'utf8');
+    assert.ok(spoolContent.includes('act_test'));
+    assert.ok(!spoolContent.includes('metadata-secret'));
+    assert.ok(!spoolContent.includes('cwd-secret'));
   });
 
   it('flushes spooled audit events when Cloud ingest succeeds', async () => {
@@ -79,8 +112,8 @@ describe('Runtime Cloud bridge', () => {
     const config: AgentGuardConfig = {
       version: 1,
       level: 'balanced',
-      cloudUrl: 'http://127.0.0.1:9',
-      apiKey: 'ag_live_test_key',
+      cloudUrl: 'https://127.0.0.1:9',
+      apiKey: 'ag_live_test_key_123456',
       policyCachePath: join(dir, 'policy.json'),
       auditPath: join(dir, 'audit.jsonl'),
       eventSpoolPath: join(dir, 'spool.jsonl'),
@@ -139,7 +172,7 @@ describe('Runtime Cloud bridge', () => {
         version: 1,
         level: 'balanced',
         cloudUrl: 'https://agentguard.example',
-        apiKey: 'ag_live_test_key',
+        apiKey: 'ag_live_test_key_123456',
         policyCachePath: join(dir, 'policy.json'),
         auditPath: join(dir, 'audit.jsonl'),
         eventSpoolPath: join(dir, 'spool.jsonl'),
@@ -151,6 +184,8 @@ describe('Runtime Cloud bridge', () => {
           tool_name: 'Read',
           tool_input: { file_path: '/workspace/.env?token=secret-value' },
           session_id: 'sess_test',
+          sourceSkill: 'skill?api_key=secret-value',
+          metadata: { nested: { token: 'secret-value' } },
         }),
       });
 
@@ -159,6 +194,7 @@ describe('Runtime Cloud bridge', () => {
       assert.ok(requests.some((request) => request.url.endsWith('/api/v1/events/ingest')));
       assert.ok(requests.some((request) => request.url.endsWith('/api/v1/approvals')));
       assert.ok(!requests.map((request) => request.body || '').join('\n').includes('secret-value'));
+      assert.ok(requests.map((request) => request.body || '').join('\n').includes('[REDACTED]'));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -178,6 +214,9 @@ function sampleEvent(): RuntimeAuditEvent {
     riskLevel: 'safe',
     reasons: [],
     policyVersion: 'runtime-test',
+    cwd: '/tmp/project?token=cwd-secret',
+    sourceSkill: 'skill?api_key=source-secret',
+    metadata: { token: 'metadata-secret', nested: { authorization: 'Bearer metadata-secret' } },
   };
 }
 
