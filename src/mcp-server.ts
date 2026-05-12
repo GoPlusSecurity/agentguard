@@ -15,6 +15,7 @@ import { ActionScanner } from './action/index.js';
 import type { SkillIdentity, CapabilityModel } from './types/skill.js';
 import type { ActionEnvelope, Web3Intent } from './types/action.js';
 import type { TrustLevel } from './types/registry.js';
+import { packageVersion } from './version.js';
 
 // Module instances (initialized in createServer)
 let scanner: SkillScanner;
@@ -92,7 +93,7 @@ function createServer(options?: { registryPath?: string }): Server {
   const server = new Server(
     {
       name: 'agentguard',
-      version: '1.0.0',
+      version: packageVersion,
     },
     {
       capabilities: {
@@ -476,7 +477,7 @@ async function main() {
   program
     .name('agentguard')
     .description('Security skill MCP server for AI agents')
-    .version('1.0.0')
+    .version(packageVersion)
     .option('--registry-path <path>', 'Path to registry file')
     .action(async (options) => {
       // Create server

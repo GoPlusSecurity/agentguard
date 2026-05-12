@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.2] - 2026-05-12
+## [1.1.3] - 2026-05-12
 
 ### Added
 - Added local-first AgentGuard CLI flow for init, connect, status, doctor, scan, and protect.

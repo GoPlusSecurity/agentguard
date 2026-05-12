@@ -17,6 +17,7 @@ import { formatProtectResult, protectAction, exitCodeForDecision } from './runti
 import { saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller } from './installers.js';
+import { packageVersion } from './version.js';
 
 async function main() {
   const program = new Command();
@@ -24,7 +25,7 @@ async function main() {
   program
     .name('agentguard')
     .description('Local-first security guard for AI agents, with optional AgentGuard Cloud control plane')
-    .version('1.1.1');
+    .version(packageVersion);
 
   program
     .command('init')
