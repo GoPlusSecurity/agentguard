@@ -337,13 +337,13 @@ Audit all cron jobs for download-and-execute patterns.
 Detect suspicious file modifications in the last 24 hours.
 
 **Steps**:
-1. Find recently modified files: `find $OC/ ~/.ssh/ ~/.gnupg/ /etc/cron.d/ -type f -mtime -1`
+1. Find recently modified files: use Glob with patterns `$OC/**/*`, `~/.ssh/**/*`, `~/.gnupg/**/*` and filter results by mtime within 24h using `stat -f '%m %N' <file>` (macOS) or `stat -c '%Y %n' <file>` (Linux) — do NOT use the `find` binary as it may be unavailable in hardened environments
 2. For modified files with scannable extensions (.js/.ts/.py/.sh/.md/.json), run the full scan rule set
 3. Check permissions on critical files:
    - `$OC/openclaw.json` → should be 600
    - `$OC/devices/paired.json` → should be 600
    - `~/.ssh/authorized_keys` → should be 600
-4. Detect new executable files in workspace: `find $OC/workspace/ -type f -perm +111 -mtime -1`
+4. Detect new executable files in workspace: use Glob `$OC/workspace/**/*` and check each file's executable bit with `stat` — do NOT use `find` with `-perm`
 
 #### [6] Audit Log Analysis (24h)
 
