@@ -1,0 +1,67 @@
+# .agentguard-suppress.yaml
+#
+# Place this file in the root of your project (or skill directory) to suppress
+# known false-positive findings from /agentguard scan.
+#
+# Rename this file to .agentguard-suppress.yaml to activate it.
+#
+# Fields per entry:
+#   rule     (required) — AgentGuard rule ID to suppress (e.g. PRIVATE_KEY_PATTERN)
+#   paths    (optional) — Glob patterns matched against the finding's file path.
+#                         If omitted, the rule is suppressed across all files.
+#   domains  (optional) — Substring/wildcard patterns matched against the finding's
+#                         evidence text. Useful for WEBHOOK_EXFIL to allowlist known hosts.
+#   reason   (required) — Human-readable explanation; appears in the suppression summary.
+#
+# Matching logic:
+#   - A finding is suppressed when its rule_id matches AND
+#     (paths match the file path  OR  domains match the evidence text).
+#   - If neither paths nor domains are specified, all findings for that rule are suppressed.
+#   - Glob path patterns: * matches within a directory, ** matches across directories.
+#   - Domain patterns: * is a wildcard prefix/suffix (e.g. *.internal.example.com).
+#
+# Suppressed findings are excluded from the report but counted in a summary line
+# at the bottom: "N finding(s) suppressed via .agentguard-suppress.yaml"
+#
+
+suppress:
+  # Example 1: Suppress hardcoded-key findings in test fixture directories.
+  # These are dummy keys used only in unit tests and are never deployed.
+  - rule: PRIVATE_KEY_PATTERN
+    paths:
+      - "tests/fixtures/**"
+      - "test/data/**"
+      - "**/__mocks__/**"
+    reason: "Test fixture dummy keys — not real credentials"
+
+  # Example 2: Suppress mnemonic findings in test directories.
+  - rule: MNEMONIC_PATTERN
+    paths:
+      - "tests/**"
+      - "test/**"
+      - "spec/**"
+    reason: "Test mnemonic phrases — BIP-39 test vectors, not production seeds"
+
+  # Example 3: Allowlist an internal monitoring webhook domain.
+  # The webhook posts to an internal Grafana Oncall instance, not an attacker server.
+  - rule: WEBHOOK_EXFIL
+    domains:
+      - "hooks.monitoring.internal"
+      - "*.ops.example.com"
+    reason: "Internal monitoring webhook — not an exfiltration endpoint"
+
+  # Example 4: Suppress shell execution findings in dev-only tooling scripts.
+  # These scripts are not bundled in the published package.
+  - rule: SHELL_EXEC
+    paths:
+      - "scripts/dev/**"
+      - "tools/**"
+    reason: "Development tooling scripts — excluded from published package"
+
+  # Example 5: Suppress environment variable access in a configuration module
+  # that is specifically designed to read and validate env vars.
+  - rule: READ_ENV_SECRETS
+    paths:
+      - "src/config.ts"
+      - "src/config/**"
+    reason: "Intentional env var access — this module owns config loading"
