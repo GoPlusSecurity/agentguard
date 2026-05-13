@@ -8,6 +8,7 @@ import type {
 } from '../runtime/types.js';
 import { redactMetadata, redactPreview } from '../runtime/redaction.js';
 import { buildAuditEvent } from '../runtime/audit.js';
+import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
 interface ApiSuccess<T> {
   success: true;
@@ -66,6 +67,57 @@ export class AgentGuardCloudClient {
     return body.data.approvalId || null;
   }
 
+  /**
+   * Pull threat-feed advisories newer than `since`. Returns null when the
+   * cloud doesn't expose the endpoint yet (404) — callers should treat null
+   * as "no new advisories" rather than an error, so the subscribe command
+   * works against older AgentGuard Cloud versions too.
+   */
+  async pullAdvisories(since?: string): Promise<Advisory[] | null> {
+    const params = new URLSearchParams();
+    if (since) params.set('since', since);
+    const qs = params.toString();
+    const path = `/api/v1/feed/advisories${qs ? `?${qs}` : ''}`;
+    try {
+      const body = await this.request<{ advisories: Advisory[] }>(path);
+      return body.data.advisories ?? [];
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Report the outcome of a single advisory self-check. Matches paths are
+   * redacted by the caller before they get here. Tolerates 404 so subscribe
+   * still completes locally even if the report sink is absent server-side.
+   */
+  async reportSelfCheck(
+    advisoryId: string,
+    matches: SelfCheckMatch[],
+    options: { elapsedMs?: number; warnings?: string[] } = {}
+  ): Promise<void> {
+    this.requireApiKey();
+    try {
+      await this.request('/api/v1/feed/self-check-report', {
+        method: 'POST',
+        body: JSON.stringify({
+          advisoryId,
+          matches,
+          elapsedMs: options.elapsedMs,
+          warnings: options.warnings,
+        }),
+      });
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return;
+      }
+      throw err;
+    }
+  }
+
   private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T>> {
     const response = await fetch(`${this.cloudUrl}${path}`, {
       ...init,
@@ -78,7 +130,7 @@ export class AgentGuardCloudClient {
     });
     const body = (await response.json().catch(() => null)) as ApiSuccess<T> | null;
     if (!response.ok || !body?.success) {
-      throw new Error(`AgentGuard Cloud request failed: ${response.status}`);
+      throw new CloudRequestError(response.status, path);
     }
     return body;
   }
@@ -87,6 +139,16 @@ export class AgentGuardCloudClient {
     if (!this.apiKey) {
       throw new Error('AgentGuard Cloud API key is not configured.');
     }
+  }
+}
+
+export class CloudRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string
+  ) {
+    super(`AgentGuard Cloud request failed: ${status} (${path})`);
+    this.name = 'CloudRequestError';
   }
 }
 

@@ -116,6 +116,8 @@ export function validateApiKey(apiKey: string): void {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+
 export function normalizeCloudUrl(value: string): string {
   const normalized = value.replace(/\/+$/, '');
   let parsed: URL;
@@ -124,8 +126,11 @@ export function normalizeCloudUrl(value: string): string {
   } catch {
     throw new Error('Invalid Cloud URL.');
   }
-  if (parsed.protocol !== 'https:') {
-    throw new Error('Invalid Cloud URL. AgentGuard Cloud URLs must use https://.');
+  const isLoopback = LOOPBACK_HOSTS.has(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+    throw new Error(
+      'Invalid Cloud URL. AgentGuard Cloud URLs must use https:// (http:// allowed only for loopback hosts).'
+    );
   }
   return normalized;
 }

@@ -34,8 +34,10 @@ describe('Runtime Cloud bridge', () => {
         () => connectCloud({ apiKey: 'not-a-key', cloudUrl: 'https://agentguard.example' }),
         /Invalid AgentGuard API key format/
       );
+      // Loopback http:// is now allowed (needed for local dev + tests). Test
+      // the rejection on a non-loopback http URL instead.
       assert.throws(
-        () => connectCloud({ apiKey: 'ag_live_test_key_123456', cloudUrl: 'http://127.0.0.1:9' }),
+        () => connectCloud({ apiKey: 'ag_live_test_key_123456', cloudUrl: 'http://agentguard.example' }),
         /must use https/
       );
       const config = connectCloud({
@@ -45,8 +47,12 @@ describe('Runtime Cloud bridge', () => {
       assert.equal(config.cloudUrl, 'https://agentguard.example');
       assert.equal(statSync(getAgentGuardPaths().configPath).mode & 0o777, 0o600);
       assert.throws(
-        () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' }),
+        () => new AgentGuardCloudClient({ cloudUrl: 'http://agentguard.example', apiKey: 'ag_live_test_key_123456' }),
         /must use https/
+      );
+      // Loopback http:// should construct fine — confirms the new exception.
+      assert.doesNotThrow(
+        () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' })
       );
     } finally {
       if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
