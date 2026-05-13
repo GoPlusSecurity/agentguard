@@ -655,7 +655,7 @@ Skip `agentguard` itself. Collect the parent directory of each found `SKILL.md` 
 
 For each discovered skill, run:
 ```
-node scripts/trust-cli.ts lookup --source <skill_path>
+node scripts/trust-cli.js lookup --source <skill_path>
 ```
 If the lookup returns a record with `status: active`, the skill is already registered — skip it and note "already registered" in the summary. Only proceed with skills that have no active trust record.
 
@@ -700,10 +700,10 @@ For each skill approved for attestation, compute its hash and run attest:
 
 ```bash
 # Compute hash
-node scripts/trust-cli.ts hash --path <skill_path>
+node scripts/trust-cli.js hash --path <skill_path>
 
 # Attest
-node scripts/trust-cli.ts attest \
+node scripts/trust-cli.js attest \
   --id <skill_dir_name> \
   --source <skill_path> \
   --version <version_from_package.json_or_unknown> \
