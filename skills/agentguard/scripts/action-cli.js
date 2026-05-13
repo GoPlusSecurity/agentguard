@@ -4,8 +4,8 @@
  * GoPlus AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
  *
  * Usage:
- *   node action-cli.ts decide --type <action_type> [action-specific args]
- *   node action-cli.ts simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <hex>] [--origin <url>]
+ *   node action-cli.js decide --type <action_type> [action-specific args]
+ *   node action-cli.js simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <hex>] [--origin <url>]
  *
  * Action-specific args for `decide`:
  *
@@ -29,27 +29,22 @@
  */
 
 import { createAgentGuard } from '@goplus/agentguard';
-import type {
-  ActionEnvelope,
-  Web3Intent,
-  ActionType,
-} from '@goplus/agentguard';
 
 const args = process.argv.slice(2);
 const command = args[0];
 
-function getArg(name: string): string | undefined {
+function getArg(name) {
   const idx = args.indexOf(`--${name}`);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   return args[idx + 1];
 }
 
-function hasFlag(name: string): boolean {
+function hasFlag(name) {
   return args.includes(`--${name}`);
 }
 
-function printUsage(): void {
-  console.error(`Usage: action-cli.ts <decide|simulate> [options]
+function printUsage() {
+  console.error(`Usage: action-cli.js <decide|simulate> [options]
 
 Commands:
   decide    Evaluate an action and return a policy decision
@@ -104,8 +99,8 @@ simulate options:
   process.exit(1);
 }
 
-function buildEnvelope(): ActionEnvelope {
-  const type = getArg('type') as ActionType;
+function buildEnvelope() {
+  const type = getArg('type');
   if (!type) {
     console.error('Error: --type is required for decide');
     printUsage();
@@ -113,7 +108,7 @@ function buildEnvelope(): ActionEnvelope {
   }
 
   const userPresent = hasFlag('user-present');
-  let data: Record<string, unknown>;
+  let data;
 
   switch (type) {
     case 'web3_tx':
@@ -133,7 +128,7 @@ function buildEnvelope(): ActionEnvelope {
         signer: getArg('signer') || '',
         message: getArg('message'),
         typed_data: getArg('typed-data')
-          ? JSON.parse(getArg('typed-data')!)
+          ? JSON.parse(getArg('typed-data'))
           : undefined,
         origin: getArg('origin'),
       };
@@ -142,7 +137,7 @@ function buildEnvelope(): ActionEnvelope {
     case 'exec_command':
       data = {
         command: getArg('command') || '',
-        args: getArg('args') ? JSON.parse(getArg('args')!) : undefined,
+        args: getArg('args') ? JSON.parse(getArg('args')) : undefined,
         cwd: getArg('cwd'),
       };
       break;
@@ -186,7 +181,7 @@ function buildEnvelope(): ActionEnvelope {
     },
     action: {
       type,
-      data: data as any,
+      data,
     },
     context: {
       session_id: `cli-${Date.now()}`,
@@ -214,7 +209,7 @@ async function main() {
     }
 
     case 'simulate': {
-      const intent: Web3Intent = {
+      const intent = {
         chain_id: Number(getArg('chain-id') || '1'),
         from: getArg('from') || '',
         to: getArg('to') || '',
