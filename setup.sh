@@ -4,11 +4,51 @@ set -euo pipefail
 # GoPlus AgentGuard — One-click setup
 # Supports: Claude Code, OpenClaw, ClawHub
 # Detects the platform and installs to the correct location.
+#
+# Usage:
+#   ./setup.sh                              Auto-detect platform
+#   ./setup.sh --target <path>              Install to explicit directory
+#   ./setup.sh --scope user                 Install to ~/.openclaw/skills
+#   ./setup.sh --scope project <name>       Install to ~/.openclaw-<name>/skills
+#   ./setup.sh --scope agent <name>         Install to ~/.openclaw-<name>/skills
+#   ./setup.sh --uninstall                  Remove installed skill
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/skills/agentguard"
 AGENTGUARD_DIR="$HOME/.agentguard"
 MIN_NODE_VERSION=18
+
+# ---- Parse arguments ----
+TARGET_DIR=""
+SCOPE_TYPE=""
+SCOPE_NAME=""
+UNINSTALL=false
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target)
+      TARGET_DIR="${2:-}"
+      [ -z "$TARGET_DIR" ] && { echo "  ERROR: --target requires a path argument."; exit 1; }
+      shift 2
+      ;;
+    --scope)
+      SCOPE_TYPE="${2:-}"
+      case "$SCOPE_TYPE" in
+        user) shift 2 ;;
+        project|agent)
+          SCOPE_NAME="${3:-}"
+          [ -z "$SCOPE_NAME" ] && { echo "  ERROR: --scope $SCOPE_TYPE requires a name argument."; exit 1; }
+          shift 3
+          ;;
+        *) echo "  ERROR: --scope must be one of: user, project, agent"; exit 1 ;;
+      esac
+      ;;
+    --uninstall|uninstall) UNINSTALL=true; shift ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 echo ""
 echo "  GoPlus AgentGuard — AI Agent Security Guard"
@@ -38,17 +78,76 @@ fi
 
 # ---- Detect platform ----
 detect_platform() {
-  # Check OpenClaw first (workspace skills or managed skills)
-  if [ -d "$HOME/.openclaw" ]; then
-    # Prefer workspace skills if workspace exists
-    if [ -d "$HOME/.openclaw/workspace" ]; then
-      SKILLS_DIR="$HOME/.openclaw/workspace/skills/agentguard"
+  # --target overrides all detection
+  if [ -n "$TARGET_DIR" ]; then
+    SKILLS_DIR="$TARGET_DIR"
+    PLATFORM="custom"
+    return
+  fi
+
+  # --scope selects a specific agent/project directory
+  if [ -n "$SCOPE_TYPE" ]; then
+    case "$SCOPE_TYPE" in
+      user)
+        SKILLS_DIR="$HOME/.openclaw/skills/agentguard"
+        PLATFORM="openclaw-user"
+        ;;
+      project)
+        SKILLS_DIR="$HOME/.openclaw-${SCOPE_NAME}/skills/agentguard"
+        PLATFORM="openclaw-project:$SCOPE_NAME"
+        ;;
+      agent)
+        SKILLS_DIR="$HOME/.openclaw-${SCOPE_NAME}/skills/agentguard"
+        PLATFORM="openclaw-agent:$SCOPE_NAME"
+        ;;
+    esac
+    return
+  fi
+
+  # Auto-detect: collect all writable ~/.openclaw* directories
+  local candidates=()
+  for dir in "$HOME"/.openclaw*/; do
+    [ -d "$dir" ] || continue
+    [ -w "$dir" ] || continue
+    candidates+=("$dir")
+  done
+
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    local oc_dir="${candidates[0]%/}"
+    if [ -d "$oc_dir/workspace" ] && [ -w "$oc_dir/workspace" ]; then
+      SKILLS_DIR="$oc_dir/workspace/skills/agentguard"
       PLATFORM="openclaw-workspace"
     else
-      SKILLS_DIR="$HOME/.openclaw/skills/agentguard"
+      SKILLS_DIR="$oc_dir/skills/agentguard"
       PLATFORM="openclaw-managed"
     fi
     return
+  fi
+
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "  Multiple writable OpenClaw directories found:"
+    local i=1
+    for dir in "${candidates[@]}"; do
+      echo "    [$i] ${dir%/}"
+      i=$((i + 1))
+    done
+    echo ""
+    printf "  Select target [1-%d]: " "${#candidates[@]}"
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#candidates[@]}" ]; then
+      local selected="${candidates[$((choice - 1))]%/}"
+      if [ -d "$selected/workspace" ] && [ -w "$selected/workspace" ]; then
+        SKILLS_DIR="$selected/workspace/skills/agentguard"
+        PLATFORM="openclaw-workspace"
+      else
+        SKILLS_DIR="$selected/skills/agentguard"
+        PLATFORM="openclaw-managed"
+      fi
+      return
+    else
+      echo "  ERROR: Invalid selection. Use --target <path> or --scope agent <name> to specify explicitly."
+      exit 1
+    fi
   fi
 
   # Check Claude Code
@@ -69,7 +168,7 @@ echo "  Install target:    $SKILLS_DIR"
 echo ""
 
 # ---- Uninstall mode ----
-if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+if [ "$UNINSTALL" = true ]; then
   echo "  Uninstalling GoPlus AgentGuard..."
   rm -rf "$SKILLS_DIR" 2>/dev/null && echo "  Removed skill from $SKILLS_DIR" || true
   # Also clean up other possible locations
