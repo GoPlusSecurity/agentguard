@@ -91,8 +91,8 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 | 4 | READ_ENV_SECRETS | MEDIUM | js,ts,mjs,py | Environment variable access |
 | 5 | READ_SSH_KEYS | CRITICAL | all | SSH key file access |
 | 6 | READ_KEYCHAIN | CRITICAL | all | System keychain / browser profiles |
-| 7 | PRIVATE_KEY_PATTERN | CRITICAL | all | Hardcoded private keys |
-| 8 | MNEMONIC_PATTERN | CRITICAL | all | Hardcoded mnemonic phrases |
+| 7 | PRIVATE_KEY_PATTERN | CRITICAL* | all | Hardcoded private keys |
+| 8 | MNEMONIC_PATTERN | CRITICAL* | all | Hardcoded mnemonic phrases |
 | 9 | WALLET_DRAINING | CRITICAL | js,ts,sol | Approve + transferFrom patterns |
 | 10 | UNLIMITED_APPROVAL | HIGH | js,ts,sol | Unlimited token approvals |
 | 11 | DANGEROUS_SELFDESTRUCT | HIGH | sol | selfdestruct in contracts |
@@ -109,6 +109,19 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 | 22 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
 | 23 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
 | 24 | SOCIAL_ENGINEERING | HIGH | md | Pressure language + execution instructions |
+
+### Git Context Check (Rules 7 & 8 only)
+
+Rules marked **CRITICAL\*** start at CRITICAL but must be downgraded based on git context **before** being added to the findings list. For every file that matched Rule 7 (PRIVATE_KEY_PATTERN) or Rule 8 (MNEMONIC_PATTERN), run the following checks in order and assign the final severity:
+
+1. **Not in a git repo** — if `git -C <file_dir> rev-parse --git-dir 2>/dev/null` returns nothing → keep **CRITICAL**. Stop.
+2. **Ever committed** — run `git -C <file_dir> log --all --oneline -- <file_path>`. If output is non-empty → keep **CRITICAL**. Stop.
+3. **Not gitignored** — run `git -C <file_dir> check-ignore -q <file_path>`. If exit code is non-zero (file is NOT ignored) → downgrade to **HIGH**. Stop.
+4. **Gitignored** — exit code 0 → downgrade to **MEDIUM**.
+
+Record the git context result (`committed` / `not-ignored` / `gitignored` / `no-git-repo`) in the finding's Evidence column alongside the matched content.
+
+**Important**: these checks require `git` to be available. If `git` is not in PATH, skip the check and keep **CRITICAL**.
 
 ### Risk Level Calculation
 
