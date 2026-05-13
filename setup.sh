@@ -221,7 +221,7 @@ echo "[3/5] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
 
 # Copy script files
-for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.js action-cli.js; do
+for f in checkup-report.js checkup-score.js guard-hook.js auto-scan.js trust-cli.js action-cli.js; do
   [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
 done
 
