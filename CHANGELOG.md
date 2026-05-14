@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `agentguard subscribe --install-cron` — installs an OpenClaw isolated cron job through the local OpenClaw Gateway (`127.0.0.1:18789`) that reruns `agentguard subscribe --json --cron-run` every 15 minutes by default. The cron delivery stays silent (`delivery.mode = "none"`); the isolated agent only sends a notification when the JSON summary reports `shouldNotify: true`.
+
 ## [1.1.4] - 2026-05-14
 
 ### Added
