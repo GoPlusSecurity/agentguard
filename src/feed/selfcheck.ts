@@ -7,10 +7,10 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { hashDirectory, hashFile } from '../utils/hash.js';
+import { hashFile } from '../utils/hash.js';
 import type {
   Advisory,
   AdvisoryAffected,
@@ -120,12 +120,17 @@ async function matchSkillDir(
   const name = basename(skillDir);
   const manifestPath = join(skillDir, 'SKILL.md');
 
-  // Hashing is expensive — only compute if some matcher asks for it.
+  // Canonical hash input: the SKILL.md content. The cloud publishes
+  // SKILL.md hashes (not directory rollups), so this is the field that
+  // must match server-side for `sha256` matchers to be meaningful.
   let localHash: string | null = null;
   const wantsHash = affected.some((m) => m.sha256);
-  if (wantsHash) {
-    const st = await stat(skillDir);
-    localHash = st.isDirectory() ? await hashDirectory(skillDir) : await hashFile(skillDir);
+  if (wantsHash && existsSync(manifestPath)) {
+    try {
+      localHash = await hashFile(manifestPath);
+    } catch {
+      localHash = null;
+    }
   }
 
   // Regex matching needs the manifest body — only read if some matcher asks.
@@ -134,6 +139,8 @@ async function matchSkillDir(
   if (wantsBody) {
     try {
       body = await readFile(manifestPath, 'utf8');
+      // Cap body length to keep regex evaluation bounded.
+      if (body.length > MAX_BODY_BYTES) body = body.slice(0, MAX_BODY_BYTES);
     } catch {
       body = '';
     }
@@ -144,13 +151,8 @@ async function matchSkillDir(
       return { path: skillDir, matchedBy: 'sha256', hash: localHash };
     }
     if (matcher.bodyRegex && body !== null) {
-      try {
-        const re = new RegExp(matcher.bodyRegex);
-        if (re.test(body)) {
-          return { path: skillDir, matchedBy: 'bodyRegex' };
-        }
-      } catch {
-        // bad regex from upstream — skip silently; warnings handled by caller scope.
+      if (safeRegexTest(matcher.bodyRegex, body)) {
+        return { path: skillDir, matchedBy: 'bodyRegex' };
       }
     }
     if (matcher.namePattern && globMatch(matcher.namePattern, name)) {
@@ -158,6 +160,44 @@ async function matchSkillDir(
     }
   }
   return null;
+}
+
+/**
+ * Defense against catastrophic backtracking and malformed regex coming
+ * from upstream advisory data:
+ *   - cap the pattern length
+ *   - reject patterns with obvious nested-quantifier shapes that explode
+ *     under ReDoS (e.g. `(.+)+`, `(a*)*`, `(a|a)*`)
+ *   - swallow compile errors silently (treated as "no match")
+ *
+ * Node's RegExp has no built-in timeout; the cheap-but-effective fix is
+ * to bound both the pattern and the body. We accept a slight false-negative
+ * rate over freezing on a hostile feed.
+ */
+const MAX_REGEX_LEN = 256;
+const MAX_BODY_BYTES = 256 * 1024;
+const CATASTROPHIC = [
+  /\([^)]*[+*]\)[+*]/, // nested quantifier: (x+)+
+  /\(([^|()]+\|)+\1\)[+*]/, // alternation duplicate: (a|a)*
+];
+
+export function safeRegexTest(pattern: string, body: string): boolean {
+  if (typeof pattern !== 'string' || pattern.length === 0) return false;
+  if (pattern.length > MAX_REGEX_LEN) return false;
+  for (const danger of CATASTROPHIC) {
+    if (danger.test(pattern)) return false;
+  }
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern);
+  } catch {
+    return false;
+  }
+  try {
+    return re.test(body);
+  } catch {
+    return false;
+  }
 }
 
 /**

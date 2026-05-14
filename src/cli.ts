@@ -197,27 +197,56 @@ async function main() {
       }
 
       const seen = new Set(state.seenAdvisoryIds ?? []);
-      const fresh = advisories.filter((a) => !seen.has(a.id));
+      // Process oldest-first so the cursor can advance monotonically and we
+      // never skip over an advisory that failed mid-batch.
+      const fresh = advisories
+        .filter((a) => !seen.has(a.id))
+        .sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : 1));
       const results: SelfCheckResult[] = [];
+      let cursorOk = true; // stops advancing on the first hard failure
       let latestPublishedAt = state.lastPulledAt;
+      let hardFailures = 0;
 
       for (const advisory of fresh) {
-        const result = await runSelfCheckForAdvisory(advisory);
+        let processed = true;
+        let result: SelfCheckResult;
+        try {
+          result = await runSelfCheckForAdvisory(advisory);
+        } catch (err) {
+          // runSelfCheck shouldn't throw, but if it does the advisory has
+          // not been evaluated — don't mark it seen and don't advance.
+          console.error(`! Self-check threw for ${advisory.id}: ${(err as Error).message}`);
+          hardFailures += 1;
+          cursorOk = false;
+          continue;
+        }
         results.push(result);
+
         if (options.report !== false && client.connected && result.matchedArtifacts.length > 0) {
-          // Caller asked us to report AND we actually matched something.
-          await client
-            .reportSelfCheck(advisory.id, result.matchedArtifacts, {
+          // Report is on the critical path — if Cloud doesn't see the
+          // match, we must NOT mark the advisory seen, otherwise a
+          // transient network blip silently buries a real hit.
+          try {
+            await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
               elapsedMs: result.elapsedMs,
               warnings: result.warnings,
-            })
-            .catch((err) => {
-              console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
             });
+          } catch (err) {
+            console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
+            processed = false;
+            hardFailures += 1;
+          }
         }
-        Object.assign(state, markAdvisorySeen(state, advisory.id));
-        if (!latestPublishedAt || advisory.publishedAt > latestPublishedAt) {
-          latestPublishedAt = advisory.publishedAt;
+
+        if (processed) {
+          Object.assign(state, markAdvisorySeen(state, advisory.id));
+          if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
+            latestPublishedAt = advisory.publishedAt;
+          }
+        } else {
+          // From this point we no longer advance the pull cursor — the
+          // failed advisory must be re-pulled on the next run.
+          cursorOk = false;
         }
       }
 
@@ -240,7 +269,16 @@ async function main() {
           console.log(`      · ${m.path}  [${m.matchedBy}]`);
         }
       }
-      process.exitCode = totalMatches > 0 ? 2 : 0;
+      // Exit codes: 2 = matches found, 1 = at least one advisory failed
+      // to evaluate or report (cursor was held back), 0 = clean.
+      if (hardFailures > 0) {
+        console.error(`! ${hardFailures} advisory record(s) failed to process and will be re-pulled next run.`);
+        process.exitCode = 1;
+      } else if (totalMatches > 0) {
+        process.exitCode = 2;
+      } else {
+        process.exitCode = 0;
+      }
     });
 
   program

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { globMatch, runSelfCheckForAdvisory } from '../feed/selfcheck.js';
+import { createHash } from 'node:crypto';
+import { globMatch, runSelfCheckForAdvisory, safeRegexTest } from '../feed/selfcheck.js';
 import type { Advisory } from '../feed/types.js';
 
 function makeSkillDir(parent: string, name: string, body: string): string {
@@ -103,5 +104,47 @@ describe('feed/selfcheck', () => {
     );
     assert.equal(result.matchedArtifacts.length, 0);
     assert.deepEqual(result.warnings, []);
+  });
+
+  it('matches sha256 against the SKILL.md content (canonical hash input)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ag-selfcheck-'));
+    const body = '---\nname: rugpull\n---\nmalicious payload';
+    makeSkillDir(root, 'rugged', body);
+    const expected = createHash('sha256').update(body).digest('hex');
+    const result = await runSelfCheckForAdvisory(
+      makeAdvisory({ affected: [{ sha256: expected }] }),
+      { skillRoots: [root] }
+    );
+    assert.equal(result.matchedArtifacts.length, 1);
+    assert.equal(result.matchedArtifacts[0].matchedBy, 'sha256');
+    assert.equal(result.matchedArtifacts[0].hash, expected);
+  });
+});
+
+describe('safeRegexTest', () => {
+  it('matches a normal pattern', () => {
+    assert.equal(safeRegexTest('ngrok\\.app', 'fetch https://x.ngrok.app/x'), true);
+    assert.equal(safeRegexTest('ngrok\\.app', 'no match here'), false);
+  });
+
+  it('rejects empty / non-string patterns', () => {
+    assert.equal(safeRegexTest('', 'anything'), false);
+    // @ts-expect-error — intentionally passing wrong type
+    assert.equal(safeRegexTest(null, 'anything'), false);
+  });
+
+  it('rejects oversized patterns', () => {
+    const huge = '(' + 'a'.repeat(300) + ')';
+    assert.equal(safeRegexTest(huge, 'aaaa'), false);
+  });
+
+  it('rejects nested-quantifier catastrophic patterns (ReDoS)', () => {
+    assert.equal(safeRegexTest('(a+)+', 'aaaa'), false);
+    assert.equal(safeRegexTest('(.+)+', 'xxxx'), false);
+    assert.equal(safeRegexTest('(a*)*', 'aaaa'), false);
+  });
+
+  it('swallows compile errors silently', () => {
+    assert.equal(safeRegexTest('(unclosed', 'aaaa'), false);
   });
 });
