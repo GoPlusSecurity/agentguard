@@ -67,6 +67,14 @@ printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/in
 # Optional: connect paid AgentGuard Cloud policy, audit, and approvals
 AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gopluslabs.io
 
+# Optional: subscribe to AgentGuard's threat-intelligence feed. Pulls newly
+# published advisories from Cloud, runs a self-check against your installed
+# skills, and reports matches back. Run in cron / on boot.
+agentguard subscribe
+
+# Or run a one-off self-check against a single advisory id
+agentguard checkup --against-advisory AGS-2026-0042
+
 # Optional: write host-specific hook templates
 agentguard init --agent claude-code
 agentguard init --agent codex

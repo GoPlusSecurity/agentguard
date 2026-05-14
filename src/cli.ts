@@ -18,6 +18,9 @@ import { saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller } from './installers.js';
 import { packageVersion } from './version.js';
+import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
+import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
+import type { Advisory, SelfCheckResult } from './feed/types.js';
 
 async function main() {
   const program = new Command();
@@ -161,6 +164,168 @@ async function main() {
       if (!result) return;
       console.log(formatProtectResult(result, Boolean(options.json)));
       process.exitCode = exitCodeForDecision(result.decision);
+    });
+
+  program
+    .command('subscribe')
+    .description('Pull new threat-feed advisories from AgentGuard Cloud and run a self-check against locally installed skills')
+    .option('--since <iso>', 'Override the persisted last-pulled timestamp')
+    .option('--json', 'Emit machine-readable summary instead of human text')
+    .option('--no-report', 'Skip uploading self-check results back to Cloud')
+    .action(async (options) => {
+      const config = ensureConfig();
+      const client = new AgentGuardCloudClient(config);
+      const state = loadFeedState();
+      const since = (options.since as string | undefined) ?? state.lastPulledAt;
+
+      let advisories: Advisory[] | null;
+      try {
+        advisories = await client.pullAdvisories(since);
+      } catch (err) {
+        console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (advisories === null) {
+        // 404 — older Cloud build without the feed endpoint. Not an error.
+        if (options.json) {
+          console.log(JSON.stringify({ supported: false, results: [] }));
+        } else {
+          console.log('AgentGuard Cloud does not expose /api/v1/feed/advisories yet — nothing to do.');
+        }
+        return;
+      }
+
+      const seen = new Set(state.seenAdvisoryIds ?? []);
+      // Process oldest-first so the cursor can advance monotonically and we
+      // never skip over an advisory that failed mid-batch.
+      const fresh = advisories
+        .filter((a) => !seen.has(a.id))
+        .sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : 1));
+      const results: SelfCheckResult[] = [];
+      let cursorOk = true; // stops advancing on the first hard failure
+      let latestPublishedAt = state.lastPulledAt;
+      let hardFailures = 0;
+
+      for (const advisory of fresh) {
+        let processed = true;
+        let result: SelfCheckResult;
+        try {
+          result = await runSelfCheckForAdvisory(advisory);
+        } catch (err) {
+          // runSelfCheck shouldn't throw, but if it does the advisory has
+          // not been evaluated — don't mark it seen and don't advance.
+          console.error(`! Self-check threw for ${advisory.id}: ${(err as Error).message}`);
+          hardFailures += 1;
+          cursorOk = false;
+          continue;
+        }
+        results.push(result);
+
+        if (options.report !== false && client.connected && result.matchedArtifacts.length > 0) {
+          // Report is on the critical path — if Cloud doesn't see the
+          // match, we must NOT mark the advisory seen, otherwise a
+          // transient network blip silently buries a real hit.
+          try {
+            await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+              elapsedMs: result.elapsedMs,
+              warnings: result.warnings,
+            });
+          } catch (err) {
+            console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
+            processed = false;
+            hardFailures += 1;
+          }
+        }
+
+        if (processed) {
+          Object.assign(state, markAdvisorySeen(state, advisory.id));
+          if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
+            latestPublishedAt = advisory.publishedAt;
+          }
+        } else {
+          // From this point we no longer advance the pull cursor — the
+          // failed advisory must be re-pulled on the next run.
+          cursorOk = false;
+        }
+      }
+
+      state.lastPulledAt = latestPublishedAt;
+      saveFeedState(state);
+
+      if (options.json) {
+        console.log(JSON.stringify({ supported: true, pulled: advisories.length, fresh: fresh.length, results }, null, 2));
+        return;
+      }
+
+      const totalMatches = results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
+      console.log(`Pulled ${advisories.length} advisory record(s); ${fresh.length} new.`);
+      if (fresh.length === 0) return;
+      console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
+      for (const r of results) {
+        if (r.matchedArtifacts.length === 0) continue;
+        console.log(`  - ${r.advisoryId}: ${r.matchedArtifacts.length} match(es)`);
+        for (const m of r.matchedArtifacts) {
+          console.log(`      · ${m.path}  [${m.matchedBy}]`);
+        }
+      }
+      // Exit codes: 2 = matches found, 1 = at least one advisory failed
+      // to evaluate or report (cursor was held back), 0 = clean.
+      if (hardFailures > 0) {
+        console.error(`! ${hardFailures} advisory record(s) failed to process and will be re-pulled next run.`);
+        process.exitCode = 1;
+      } else if (totalMatches > 0) {
+        process.exitCode = 2;
+      } else {
+        process.exitCode = 0;
+      }
+    });
+
+  program
+    .command('checkup')
+    .description('Run a self-check immediately. Without --against-advisory, scans for everything in the feed cache.')
+    .option('--against-advisory <id>', 'Restrict the check to a single advisory id (fetches it from Cloud if needed)')
+    .option('--json', 'Emit machine-readable result')
+    .action(async (options) => {
+      const config = ensureConfig();
+      const client = new AgentGuardCloudClient(config);
+      const advisoryId = options.againstAdvisory as string | undefined;
+
+      if (!advisoryId) {
+        console.log('Tip: pass --against-advisory <id> for now. A broader, full-fleet checkup is coming.');
+        console.log('Meanwhile, run `agentguard subscribe` to pull the feed and self-check new entries.');
+        return;
+      }
+
+      let advisory: Advisory | null = null;
+      try {
+        const all = await client.pullAdvisories();
+        advisory = all?.find((a) => a.id === advisoryId) ?? null;
+      } catch (err) {
+        console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (!advisory) {
+        console.error(`No advisory with id "${advisoryId}" found in the current feed window.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = await runSelfCheckForAdvisory(advisory);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`Advisory ${result.advisoryId}: ${result.matchedArtifacts.length} match(es)`);
+        for (const m of result.matchedArtifacts) {
+          console.log(`  · ${m.path}  [${m.matchedBy}]`);
+        }
+        if (result.warnings.length) {
+          console.log('Warnings:');
+          for (const w of result.warnings) console.log(`  ! ${w}`);
+        }
+      }
+      process.exitCode = result.matchedArtifacts.length > 0 ? 2 : 0;
     });
 
   await program.parseAsync(process.argv);
