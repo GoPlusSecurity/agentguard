@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.4] - 2026-05-14
 
 ### Added
 - `agentguard subscribe` — pulls new threat-feed advisories from AgentGuard Cloud (`GET /api/v1/feed/advisories`), runs a self-check against locally installed skills, and reports matches back via `POST /api/v1/feed/self-check-report`. State persisted at `~/.agentguard/feed-state.json` so successive runs only process new entries.
