@@ -199,7 +199,7 @@ async function main() {
       if (advisories === null) {
         // 404 — older Cloud build without the feed endpoint. Not an error.
         if (options.json) {
-          console.log(JSON.stringify({ supported: false, shouldNotify: false, results: [] }));
+          console.log(JSON.stringify({ supported: false, shouldNotify: false, results: [], cron: { requested: false, installed: false } }));
         } else {
           console.log('AgentGuard Cloud does not expose /api/v1/feed/advisories yet — nothing to do.');
         }
@@ -273,11 +273,18 @@ async function main() {
       });
 
       if (options.installCron && !options.cronRun) {
-        summary.cron = await installOpenClawThreatFeedCron({
-          name: options.cronName as string,
-          intervalMinutes: parseIntervalMinutes(options.intervalMinutes),
-          force: Boolean(options.force),
-        });
+        summary.cron.requested = true;
+        try {
+          summary.cron.result = await installOpenClawThreatFeedCron({
+            name: options.cronName as string,
+            intervalMinutes: parseIntervalMinutes(options.intervalMinutes),
+            force: Boolean(options.force),
+          });
+          summary.cron.installed = true;
+        } catch (err) {
+          summary.cron.error = (err as Error).message;
+          throw err;
+        }
       }
 
       if (options.json) {
@@ -296,9 +303,9 @@ async function main() {
           }
         }
       }
-      if (summary.cron) {
-        const action = summary.cron.created ? 'Installed' : 'OpenClaw cron job already exists';
-        console.log(`${action} "${summary.cron.name}" (${summary.cron.schedule}).`);
+      if (summary.cron.result) {
+        const action = summary.cron.result.created ? 'Installed' : 'OpenClaw cron job already exists';
+        console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}).`);
         console.log('Notification rule: only send a message from the isolated cron session when threat-feed matches are found.');
       }
 
@@ -385,7 +392,12 @@ interface SubscribeSummary {
     title: string;
     body: string;
   };
-  cron?: OpenClawCronInstallResult;
+  cron: {
+    requested: boolean;
+    installed: boolean;
+    result?: OpenClawCronInstallResult;
+    error?: string;
+  };
 }
 
 function buildSubscribeSummary(options: {
@@ -405,6 +417,10 @@ function buildSubscribeSummary(options: {
     shouldNotify,
     hardFailures: options.hardFailures,
     results: options.results,
+    cron: {
+      requested: false,
+      installed: false,
+    },
   };
   if (shouldNotify) {
     summary.notification = {

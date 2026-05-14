@@ -79,6 +79,8 @@ agentguard subscribe --install-cron --force
 
 When `--install-cron` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789`. It runs every 15 minutes by default. Pass `--interval-minutes <n>` to override the cadence. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` and only sends the configured notification when `shouldNotify` is `true`.
 
+`agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
+
 ---
 
 # Security Operations

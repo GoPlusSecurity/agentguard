@@ -109,7 +109,7 @@ async function removeOpenClawCronJobs(
 ): Promise<void> {
   for (const job of jobs) {
     if (!job.id) continue;
-    await openClawGatewayRequest('cron.remove', { jobId: job.id }, gateway).catch(() => null);
+    await openClawGatewayRequest('cron.remove', { jobId: job.id }, gateway);
   }
 }
 
@@ -149,6 +149,17 @@ export function openClawGatewayRequest(
   const timeoutMs = options.timeoutMs ?? 5000;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    const succeed = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const req = http.request(
       {
         hostname: host,
@@ -163,6 +174,9 @@ export function openClawGatewayRequest(
       (res) => {
         let data = '';
         res.setEncoding('utf8');
+        res.on('error', (err) => {
+          fail(new Error(`OpenClaw Gateway ${method} response failed: ${err.message}`));
+        });
         res.on('data', (chunk) => {
           data += chunk;
         });
@@ -171,26 +185,28 @@ export function openClawGatewayRequest(
           try {
             parsed = data ? JSON.parse(data) : null;
           } catch {
-            reject(new Error(`OpenClaw Gateway returned non-JSON response: ${data}`));
+            fail(new Error(`OpenClaw Gateway returned non-JSON response: ${data}`));
             return;
           }
           if (parsed?.error) {
-            reject(new Error(`OpenClaw Gateway ${method} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`));
+            fail(new Error(`OpenClaw Gateway ${method} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`));
             return;
           }
           if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`OpenClaw Gateway ${method} failed with HTTP ${res.statusCode}`));
+            fail(new Error(`OpenClaw Gateway ${method} failed with HTTP ${res.statusCode}`));
             return;
           }
-          resolve(parsed?.result ?? parsed);
+          succeed(parsed?.result ?? parsed);
         });
       }
     );
     req.on('error', (err) => {
-      reject(new Error(`Could not reach OpenClaw Gateway at ${host}:${port}: ${err.message}`));
+      fail(new Error(`Could not reach OpenClaw Gateway at ${host}:${port}: ${err.message}`));
     });
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`OpenClaw Gateway ${method} request timed out after ${timeoutMs}ms`));
+      const err = new Error(`OpenClaw Gateway ${method} request timed out after ${timeoutMs}ms`);
+      fail(err);
+      req.destroy(err);
     });
     req.write(payload);
     req.end();

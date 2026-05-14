@@ -83,6 +83,10 @@ agentguard subscribe --install-cron --interval-minutes 5
 # Replace an existing OpenClaw cron job with the same name
 agentguard subscribe --install-cron --force
 
+# Machine-readable output always includes a cron status object:
+# cron.requested, cron.installed, and optional cron.result when installation succeeds.
+agentguard subscribe --json
+
 # Or run a one-off self-check against a single advisory id
 agentguard checkup --against-advisory AGS-2026-0042
 

@@ -77,6 +77,26 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'every', everyMs: 300000 });
   });
 
+  it('does not add a replacement if force removal fails', async () => {
+    const calls: RpcCall[] = [];
+    await assert.rejects(
+      () =>
+        installOpenClawThreatFeedCron(
+          { name: 'agentguard-threat-feed', intervalMinutes: 5, force: true },
+          {
+            async request(method, params) {
+              calls.push({ method, params });
+              if (method === 'cron.list') return { jobs: [{ id: 'job-1', name: 'agentguard-threat-feed' }] };
+              if (method === 'cron.remove') throw new Error('remove failed');
+              return { ok: true };
+            },
+          }
+        ),
+      /remove failed/
+    );
+    assert.deepEqual(calls.map((call) => call.method), ['cron.list', 'cron.remove']);
+  });
+
   it('uses the injected request path for OpenClaw Gateway calls', async () => {
     await assert.rejects(
       () =>
