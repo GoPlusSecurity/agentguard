@@ -56,7 +56,9 @@ export class ActionScanner {
 
     // Look up skill capabilities
     const lookupResult = await this.registry.lookup(actor.skill);
-    const capabilities = lookupResult.effective_capabilities;
+    const capabilities = lookupResult.record === null
+      ? this.defaultCapabilities
+      : lookupResult.effective_capabilities;
     const trustLevel = lookupResult.effective_trust_level;
 
     // Route to appropriate handler based on action type
