@@ -72,6 +72,7 @@ interface OpenClawPluginApi {
   id: string;
   name: string;
   source: string;
+  pluginConfig?: Record<string, unknown>;
   on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
   on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
 }
@@ -218,10 +219,16 @@ const pluginScanCache = new Map<string, { riskLevel: string; riskTags: string[] 
  */
 function getOpenClawRegistry(): OpenClawPluginRegistry | null {
   const globalState = globalThis as typeof globalThis & {
-    [key: symbol]: { registry: OpenClawPluginRegistry | null } | undefined;
+    [key: symbol]:
+      | {
+          registry?: OpenClawPluginRegistry | null;
+          activeRegistry?: OpenClawPluginRegistry | null;
+          channel?: { registry?: OpenClawPluginRegistry | null };
+        }
+      | undefined;
   };
   const state = globalState[OPENCLAW_REGISTRY_STATE];
-  return state?.registry ?? null;
+  return state?.channel?.registry ?? state?.activeRegistry ?? state?.registry ?? null;
 }
 
 /**
@@ -346,7 +353,8 @@ export function registerOpenClawPlugin(
 ): void {
   const adapter = new OpenClawAdapter();
   const runtimeConfig = loadAgentGuardConfig();
-  const config = options.level ? { ...runtimeConfig, level: options.level } : runtimeConfig;
+  const configuredLevel = options.level ?? readOpenClawConfigLevel(api.pluginConfig);
+  const config = configuredLevel ? { ...runtimeConfig, level: configuredLevel } : runtimeConfig;
   const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false });
   const trustRegistry = options.registry ?? new SkillRegistry();
   const runProtectAction = options.protectAction ?? protectAction;
@@ -516,6 +524,15 @@ function readOpenClawSessionId(event: unknown, ctx: unknown): string | undefined
   const ctxRecord = isRecord(ctx) ? ctx : undefined;
   const sessionId = ctxRecord?.sessionId ?? eventRecord?.sessionId;
   return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined;
+}
+
+function readOpenClawConfigLevel(
+  pluginConfig: Record<string, unknown> | undefined
+): AgentGuardConfig['level'] | undefined {
+  const level = pluginConfig?.level;
+  return level === 'strict' || level === 'balanced' || level === 'permissive'
+    ? level
+    : undefined;
 }
 
 function runtimeResultToBeforeToolCallResult(

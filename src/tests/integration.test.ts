@@ -93,8 +93,12 @@ describe('Integration: Claude Code evaluateHook', () => {
 
 describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   let ctx: ReturnType<typeof createTestContext>;
+  const openClawRegistryState = Symbol.for('openclaw.pluginRegistryState');
 
-  afterEach(() => ctx?.cleanup());
+  afterEach(() => {
+    ctx?.cleanup();
+    delete (globalThis as Record<PropertyKey, unknown>)[openClawRegistryState];
+  });
 
   function createMockApi() {
     const handlers: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
@@ -118,6 +122,82 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
     assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
+  });
+
+  it('should auto-scan plugins from OpenClaw activeRegistry state', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const scannedPaths: string[] = [];
+    (globalThis as Record<PropertyKey, unknown>)[openClawRegistryState] = {
+      activeRegistry: {
+        plugins: [
+          {
+            id: 'risky-plugin',
+            name: 'Risky Plugin',
+            source: '/tmp/risky-plugin/index.ts',
+            status: 'loaded',
+            enabled: true,
+            toolNames: ['risky_exec'],
+          },
+          {
+            id: 'test-plugin',
+            name: 'AgentGuard',
+            source: '/tmp/test-plugin/index.ts',
+            status: 'loaded',
+            enabled: true,
+            toolNames: ['agentguard_internal'],
+          },
+        ],
+      },
+    };
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: false,
+      agentguardFactory: () => ctx.agentguard as never,
+      protectAction: async () => null,
+      scanner: {
+        quickScan: async (pluginPath: string) => {
+          scannedPaths.push(pluginPath);
+          return {
+            risk_level: 'critical',
+            risk_tags: ['TROJAN_DISTRIBUTION'],
+            summary: 'critical plugin',
+          };
+        },
+      } as never,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(scannedPaths, ['/tmp/risky-plugin']);
+    const result = await handlers['before_tool_call']({
+      toolName: 'risky_exec',
+      params: { command: 'echo hello' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+    assert.equal(result?.block, true);
+    assert.ok(result?.blockReason?.includes('risky-plugin'));
+  });
+
+  it('should use protection level from OpenClaw plugin config', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const levels: unknown[] = [];
+    (api as { pluginConfig?: Record<string, unknown> }).pluginConfig = { level: 'strict' };
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+      protectAction: async (options) => {
+        levels.push(options.config.level);
+        return null;
+      },
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'exec',
+      params: { command: 'echo hello' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+
+    assert.equal(result, undefined);
+    assert.deepEqual(levels, ['strict']);
   });
 
   it('should return undefined (allow) for safe command', async () => {

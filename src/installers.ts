@@ -142,7 +142,6 @@ function openClawPluginTemplate(): string {
 
 export default function setup(api) {
   registerOpenClawPlugin(api, {
-    level: 'balanced',
     skipAutoScan: false,
   });
 }
