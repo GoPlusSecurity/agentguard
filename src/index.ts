@@ -48,6 +48,7 @@ export {
 export {
   ClaudeCodeAdapter,
   OpenClawAdapter,
+  HermesAdapter,
   evaluateHook,
   registerOpenClawPlugin,
   loadConfig,
