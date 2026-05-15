@@ -181,6 +181,8 @@ export interface OpenClawPluginOptions {
   level?: AgentGuardConfig['level'];
   /** Enable runtime policy protection via AgentGuard Cloud/cache/default policy (default: true) */
   runtimeProtection?: boolean;
+  /** Runtime protection failure behavior (default: block security-sensitive actions) */
+  runtimeFailureMode?: 'block' | 'fallback';
   /** Runtime policy decision mode: local-first fetches Cloud policy then evaluates locally; cloud delegates the decision to Cloud */
   decisionMode?: 'local-first' | 'cloud';
   /** Enable auto-scanning of plugins (default: false — opt-in) */
@@ -435,12 +437,13 @@ export function registerOpenClawPlugin(
       }
 
       if (runtimeProtectionEnabled) {
+        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolEvent.toolName, event);
         try {
           const runtimeResult = await runProtectAction({
             config,
             rawInput: event,
             agentHost: 'openclaw',
-            actionType: mapOpenClawToolToRuntimeAction(toolEvent.toolName),
+            actionType: runtimeActionType,
             toolName: toolEvent.toolName,
             sessionId: readOpenClawSessionId(event, ctx),
             decisionMode: options.decisionMode ?? 'local-first',
@@ -450,6 +453,17 @@ export function registerOpenClawPlugin(
             return hookDecision;
           }
         } catch (err) {
+          if (
+            options.runtimeFailureMode !== 'fallback' &&
+            isSecuritySensitiveRuntimeAction(runtimeActionType)
+          ) {
+            return {
+              block: true,
+              blockReason:
+                `GoPlus AgentGuard: runtime protection failed for this OpenClaw tool call` +
+                ` (${String(err)}). Blocking by default.`,
+            };
+          }
           logger(`[AgentGuard] Runtime protection failed; falling back to local hook policy: ${String(err)}`);
         }
       }
@@ -496,27 +510,97 @@ export function registerOpenClawPlugin(
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
 }
 
-function mapOpenClawToolToRuntimeAction(toolName: string | undefined): RuntimeActionType | undefined {
+function mapOpenClawToolToRuntimeAction(
+  toolName: string | undefined,
+  event?: unknown
+): RuntimeActionType {
   const normalized = (toolName || '').toLowerCase();
-  if (!normalized) return undefined;
-  if (normalized === 'exec' || normalized === 'bash' || normalized.includes('shell')) {
+  if (
+    normalized === 'exec' ||
+    normalized === 'bash' ||
+    normalized === 'cmd' ||
+    normalized === 'command' ||
+    normalized === 'terminal' ||
+    normalized === 'run' ||
+    normalized.includes('shell') ||
+    normalized.includes('terminal') ||
+    normalized.includes('command') ||
+    normalized.includes('process') ||
+    normalized.includes('spawn')
+  ) {
     return 'shell';
   }
-  if (normalized === 'read' || normalized.includes('read')) {
+  if (normalized === 'read' || normalized.includes('read') || normalized.includes('fetch_file')) {
     return 'file_read';
   }
   if (
     normalized === 'write' ||
     normalized === 'edit' ||
     normalized === 'apply_patch' ||
-    normalized.includes('write')
+    normalized === 'patch' ||
+    normalized === 'create' ||
+    normalized === 'save' ||
+    normalized === 'delete' ||
+    normalized === 'remove' ||
+    normalized === 'rename' ||
+    normalized === 'scaffold' ||
+    normalized.includes('write') ||
+    normalized.includes('edit') ||
+    normalized.includes('patch') ||
+    normalized.includes('delete') ||
+    normalized.includes('remove') ||
+    normalized.includes('rename') ||
+    normalized.includes('scaffold')
   ) {
     return 'file_write';
   }
-  if (normalized.includes('web') || normalized.includes('browser')) {
+  if (
+    normalized.includes('web') ||
+    normalized.includes('browser') ||
+    normalized.includes('http') ||
+    normalized.includes('fetch') ||
+    normalized.includes('request')
+  ) {
     return 'network';
   }
-  return undefined;
+
+  const params = readOpenClawParams(event);
+  if (typeof params?.command === 'string' || typeof params?.cmd === 'string') {
+    return 'shell';
+  }
+  if (
+    typeof params?.url === 'string' ||
+    typeof params?.uri === 'string' ||
+    typeof params?.query === 'string'
+  ) {
+    return 'network';
+  }
+  if (
+    typeof params?.content === 'string' ||
+    typeof params?.newContent === 'string' ||
+    typeof params?.patch === 'string'
+  ) {
+    return 'file_write';
+  }
+  if (
+    typeof params?.path === 'string' ||
+    typeof params?.file_path === 'string' ||
+    typeof params?.filePath === 'string'
+  ) {
+    return 'file_read';
+  }
+
+  return 'other';
+}
+
+function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
+  const record = isRecord(event) ? event : undefined;
+  const params = record?.params ?? record?.toolInput ?? record?.tool_input;
+  return isRecord(params) ? params : undefined;
+}
+
+function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
+  return actionType !== 'other';
 }
 
 function readOpenClawSessionId(event: unknown, ctx: unknown): string | undefined {

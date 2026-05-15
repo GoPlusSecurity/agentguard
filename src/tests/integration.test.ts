@@ -266,6 +266,79 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(call.sessionId, 'openclaw-session-1');
   });
 
+  it('should classify renamed OpenClaw shell and file tools before runtime protection', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const calls: unknown[] = [];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async (options) => {
+        calls.push({ toolName: options.toolName, actionType: options.actionType });
+        return null;
+      },
+    });
+
+    await handlers['before_tool_call']({
+      toolName: 'terminal',
+      params: { command: 'whoami' },
+    });
+    await handlers['before_tool_call']({
+      toolName: 'scaffold',
+      params: { path: 'src/generated.ts', content: 'export {};' },
+    });
+    await handlers['before_tool_call']({
+      toolName: 'vendorTool',
+      params: { command: 'echo hello' },
+    });
+
+    assert.deepEqual(calls, [
+      { toolName: 'terminal', actionType: 'shell' },
+      { toolName: 'scaffold', actionType: 'file_write' },
+      { toolName: 'vendorTool', actionType: 'shell' },
+    ]);
+  });
+
+  it('should fail closed for security-sensitive OpenClaw actions when runtime protection fails', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async () => {
+        throw new Error('runtime unavailable');
+      },
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'terminal',
+      params: { command: 'echo hello' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+
+    assert.equal(result?.block, true);
+    assert.ok(result?.blockReason?.includes('runtime protection failed'));
+  });
+
+  it('should allow explicit fallback when runtime protection fails', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      runtimeFailureMode: 'fallback',
+      protectAction: async () => {
+        throw new Error('runtime unavailable');
+      },
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'terminal',
+      params: { command: 'echo hello' },
+    });
+
+    assert.equal(result, undefined);
+  });
+
   it('should block when runtime policy blocks an OpenClaw tool call', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
