@@ -12,6 +12,70 @@
 
 import { join } from 'node:path';
 
+function isPostHook(input) {
+  const event = typeof input?.hook_event_name === 'string' ? input.hook_event_name : '';
+  return event.startsWith('post');
+}
+
+function isPreHook(input) {
+  return !isPostHook(input);
+}
+
+function toolNameFrom(input) {
+  return typeof input?.tool_name === 'string' ? input.tool_name : '';
+}
+
+function toolInputFrom(input) {
+  const toolInput = input?.tool_input ?? input?.args;
+  return toolInput && typeof toolInput === 'object' && !Array.isArray(toolInput)
+    ? toolInput
+    : {};
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return '';
+}
+
+function validatePreToolPayload(input) {
+  const toolName = toolNameFrom(input);
+  const toolInput = toolInputFrom(input);
+
+  switch (toolName) {
+    case 'terminal':
+      if (!firstString(toolInput.command)) return 'Hermes terminal hook payload is missing command';
+      return null;
+    case 'execute_code':
+      if (!firstString(toolInput.code, toolInput.command)) return 'Hermes execute_code hook payload is missing code';
+      return null;
+    case 'write_file':
+    case 'patch':
+    case 'read_file':
+      if (!firstString(toolInput.path, toolInput.file_path)) return `Hermes ${toolName} hook payload is missing path`;
+      return null;
+    case 'skill_manage':
+      if (!firstString(toolInput.path, toolInput.file_path, toolInput.target, toolInput.skill_path)) {
+        return 'Hermes skill_manage hook payload is missing target path';
+      }
+      return null;
+    case 'web_extract':
+    case 'browser_navigate':
+      if (!firstString(toolInput.url, toolInput.href, toolInput.target)) return `Hermes ${toolName} hook payload is missing URL`;
+      return null;
+    case 'web_search':
+      if (!firstString(toolInput.query, toolInput.url)) return 'Hermes web_search hook payload is missing query';
+      return null;
+    default:
+      return `Hermes tool "${toolName || '(missing)'}" is not recognized by AgentGuard`;
+  }
+}
+
+function shouldFailClosed(input) {
+  return !input || isPreHook(input);
+}
+
 // ---------------------------------------------------------------------------
 // Load AgentGuard engine + Hermes adapter
 // ---------------------------------------------------------------------------
@@ -19,23 +83,32 @@ import { join } from 'node:path';
 const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
 
 let createAgentGuard, HermesAdapter, evaluateHook, loadConfig;
-try {
-  const gs = await import(agentguardPath);
-  createAgentGuard = gs.createAgentGuard || gs.default;
-  HermesAdapter = gs.HermesAdapter;
-  evaluateHook = gs.evaluateHook;
-  loadConfig = gs.loadConfig;
-} catch {
+
+async function loadEngine() {
+  if (process.env.AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE === '1') {
+    return null;
+  }
+
   try {
-    const gs = await import('@goplus/agentguard');
-    createAgentGuard = gs.createAgentGuard || gs.default;
-    HermesAdapter = gs.HermesAdapter;
-    evaluateHook = gs.evaluateHook;
-    loadConfig = gs.loadConfig;
+    const gs = await import(agentguardPath);
+    return {
+      createAgentGuard: gs.createAgentGuard || gs.default,
+      HermesAdapter: gs.HermesAdapter,
+      evaluateHook: gs.evaluateHook,
+      loadConfig: gs.loadConfig,
+    };
   } catch {
-    process.stderr.write('GoPlus AgentGuard: unable to load Hermes hook engine, allowing action\n');
-    console.log('{}');
-    process.exit(0);
+    try {
+      const gs = await import('@goplus/agentguard');
+      return {
+        createAgentGuard: gs.createAgentGuard || gs.default,
+        HermesAdapter: gs.HermesAdapter,
+        evaluateHook: gs.evaluateHook,
+        loadConfig: gs.loadConfig,
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -46,16 +119,25 @@ try {
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), 5000);
+
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', (chunk) => (data += chunk));
     process.stdin.on('end', () => {
       try {
-        resolve(JSON.parse(data));
+        finish(JSON.parse(data));
       } catch {
-        resolve(null);
+        finish(null);
       }
     });
-    setTimeout(() => resolve(null), 5000);
+    process.stdin.on('error', () => finish(null));
   });
 }
 
@@ -83,8 +165,23 @@ function outputAllow() {
 async function main() {
   const input = await readStdin();
   if (!input) {
+    outputBlock('GoPlus AgentGuard: invalid or missing Hermes hook payload');
+  }
+
+  const validationError = isPreHook(input) ? validatePreToolPayload(input) : null;
+  if (validationError) {
+    outputBlock(`GoPlus AgentGuard: ${validationError}`);
+  }
+
+  const engine = await loadEngine();
+  if (!engine) {
+    if (shouldFailClosed(input)) {
+      outputBlock('GoPlus AgentGuard: unable to load Hermes hook engine; blocking fail-closed');
+    }
     outputAllow();
   }
+
+  ({ createAgentGuard, HermesAdapter, evaluateHook, loadConfig } = engine);
 
   const adapter = new HermesAdapter();
   const config = loadConfig();

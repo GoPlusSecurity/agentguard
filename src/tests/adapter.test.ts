@@ -381,14 +381,15 @@ describe('HermesAdapter', () => {
       assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
     });
 
-    it('should map web and browser tools to network_request', () => {
+    it('should map URL-bearing web and browser tools to network_request', () => {
       assert.equal(adapter.mapToolToActionType('web_search'), 'network_request');
       assert.equal(adapter.mapToolToActionType('web_extract'), 'network_request');
       assert.equal(adapter.mapToolToActionType('browser_navigate'), 'network_request');
-      assert.equal(adapter.mapToolToActionType('browser_console'), 'network_request');
     });
 
     it('should return null for unknown tools', () => {
+      assert.equal(adapter.mapToolToActionType('browser_click'), null);
+      assert.equal(adapter.mapToolToActionType('browser_console'), null);
       assert.equal(adapter.mapToolToActionType('todo'), null);
       assert.equal(adapter.mapToolToActionType('unknown'), null);
     });

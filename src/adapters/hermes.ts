@@ -18,10 +18,6 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   web_search: 'network_request',
   web_extract: 'network_request',
   browser_navigate: 'network_request',
-  browser_type: 'network_request',
-  browser_click: 'network_request',
-  browser_get_images: 'network_request',
-  browser_vision: 'network_request',
 };
 
 function firstString(...values: unknown[]): string {
@@ -75,11 +71,6 @@ export class HermesAdapter implements HookAdapter {
     if (TOOL_ACTION_MAP[toolName]) {
       return TOOL_ACTION_MAP[toolName];
     }
-
-    if (toolName.startsWith('browser_')) {
-      return 'network_request';
-    }
-
     return null;
   }
 

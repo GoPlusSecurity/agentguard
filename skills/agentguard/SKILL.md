@@ -82,7 +82,7 @@ must be present in `~/.hermes/config.yaml`. This skill ships the hook runner at
 | `pre_tool_call` | `terminal`, `execute_code` | `exec_command` |
 | `pre_tool_call` | `write_file`, `patch`, `skill_manage` | `write_file` |
 | `pre_tool_call` | `read_file` | `read_file` |
-| `pre_tool_call` | `web_search`, `web_extract`, `browser_*` | `network_request` |
+| `pre_tool_call` | `web_search`, `web_extract`, `browser_navigate` | `network_request` |
 | `post_tool_call` | Same tools | Audit-only |
 
 Hermes `pre_tool_call` supports allow/block only. If AgentGuard returns `ask`,
