@@ -21,6 +21,11 @@ import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
+import {
+  installOpenClawThreatFeedCron,
+  parseIntervalMinutes,
+  type OpenClawCronInstallResult,
+} from './feed/cron.js';
 
 async function main() {
   const program = new Command();
@@ -172,6 +177,11 @@ async function main() {
     .option('--since <iso>', 'Override the persisted last-pulled timestamp')
     .option('--json', 'Emit machine-readable summary instead of human text')
     .option('--no-report', 'Skip uploading self-check results back to Cloud')
+    .option('--install-cron', 'After this run, install an OpenClaw cron job that reruns subscribe on the configured interval')
+    .option('--cron-name <name>', 'OpenClaw cron job name', 'agentguard-threat-feed')
+    .option('--interval-minutes <minutes>', 'OpenClaw cron interval in minutes', '15')
+    .option('--force', 'Replace an existing OpenClaw cron job with the same name')
+    .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
     .action(async (options) => {
       const config = ensureConfig();
       const client = new AgentGuardCloudClient(config);
@@ -189,7 +199,7 @@ async function main() {
       if (advisories === null) {
         // 404 — older Cloud build without the feed endpoint. Not an error.
         if (options.json) {
-          console.log(JSON.stringify({ supported: false, results: [] }));
+          console.log(JSON.stringify({ supported: false, shouldNotify: false, results: [], cron: { requested: false, installed: false } }));
         } else {
           console.log('AgentGuard Cloud does not expose /api/v1/feed/advisories yet — nothing to do.');
         }
@@ -253,22 +263,52 @@ async function main() {
       state.lastPulledAt = latestPublishedAt;
       saveFeedState(state);
 
+      const totalMatches = results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
+      const summary = buildSubscribeSummary({
+        supported: true,
+        pulled: advisories.length,
+        fresh: fresh.length,
+        results,
+        hardFailures,
+      });
+
+      if (options.installCron && !options.cronRun) {
+        summary.cron.requested = true;
+        try {
+          summary.cron.result = await installOpenClawThreatFeedCron({
+            name: options.cronName as string,
+            intervalMinutes: parseIntervalMinutes(options.intervalMinutes),
+            force: Boolean(options.force),
+          });
+          summary.cron.installed = true;
+        } catch (err) {
+          summary.cron.error = (err as Error).message;
+          throw err;
+        }
+      }
+
       if (options.json) {
-        console.log(JSON.stringify({ supported: true, pulled: advisories.length, fresh: fresh.length, results }, null, 2));
+        console.log(JSON.stringify(summary, null, 2));
         return;
       }
 
-      const totalMatches = results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
       console.log(`Pulled ${advisories.length} advisory record(s); ${fresh.length} new.`);
-      if (fresh.length === 0) return;
-      console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
-      for (const r of results) {
-        if (r.matchedArtifacts.length === 0) continue;
-        console.log(`  - ${r.advisoryId}: ${r.matchedArtifacts.length} match(es)`);
-        for (const m of r.matchedArtifacts) {
-          console.log(`      · ${m.path}  [${m.matchedBy}]`);
+      if (fresh.length > 0) {
+        console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
+        for (const r of results) {
+          if (r.matchedArtifacts.length === 0) continue;
+          console.log(`  - ${r.advisoryId}: ${r.matchedArtifacts.length} match(es)`);
+          for (const m of r.matchedArtifacts) {
+            console.log(`      · ${m.path}  [${m.matchedBy}]`);
+          }
         }
       }
+      if (summary.cron.result) {
+        const action = summary.cron.result.created ? 'Installed' : 'OpenClaw cron job already exists';
+        console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}).`);
+        console.log('Notification rule: only send a message from the isolated cron session when threat-feed matches are found.');
+      }
+
       // Exit codes: 2 = matches found, 1 = at least one advisory failed
       // to evaluate or report (cursor was held back), 0 = clean.
       if (hardFailures > 0) {
@@ -338,6 +378,73 @@ function readStdinIfAvailable(): string {
   } catch {
     return '';
   }
+}
+
+interface SubscribeSummary {
+  supported: boolean;
+  pulled: number;
+  fresh: number;
+  matched: number;
+  shouldNotify: boolean;
+  hardFailures: number;
+  results: SelfCheckResult[];
+  notification?: {
+    title: string;
+    body: string;
+  };
+  cron: {
+    requested: boolean;
+    installed: boolean;
+    result?: OpenClawCronInstallResult;
+    error?: string;
+  };
+}
+
+function buildSubscribeSummary(options: {
+  supported: boolean;
+  pulled: number;
+  fresh: number;
+  results: SelfCheckResult[];
+  hardFailures: number;
+}): SubscribeSummary {
+  const matched = options.results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
+  const shouldNotify = options.supported && matched > 0 && options.hardFailures === 0;
+  const summary: SubscribeSummary = {
+    supported: options.supported,
+    pulled: options.pulled,
+    fresh: options.fresh,
+    matched,
+    shouldNotify,
+    hardFailures: options.hardFailures,
+    results: options.results,
+    cron: {
+      requested: false,
+      installed: false,
+    },
+  };
+  if (shouldNotify) {
+    summary.notification = {
+      title: `AgentGuard detected ${matched} threat-feed match${matched === 1 ? '' : 'es'}`,
+      body: formatThreatFeedNotification(options.results),
+    };
+  }
+  return summary;
+}
+
+function formatThreatFeedNotification(results: SelfCheckResult[]): string {
+  const lines = ['AgentGuard threat-feed self-check found local matches:'];
+  for (const result of results) {
+    if (result.matchedArtifacts.length === 0) continue;
+    lines.push(`- ${result.advisoryId}: ${result.matchedArtifacts.length} match(es)`);
+    for (const match of result.matchedArtifacts.slice(0, 5)) {
+      lines.push(`  - ${match.path} [${match.matchedBy}]`);
+    }
+    if (result.matchedArtifacts.length > 5) {
+      lines.push(`  - ... ${result.matchedArtifacts.length - 5} more`);
+    }
+  }
+  lines.push('Review the local machine and remove or quarantine the matched artifact(s).');
+  return lines.join('\n');
 }
 
 main().catch((error) => {

@@ -72,6 +72,21 @@ AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gop
 # skills, and reports matches back. Run in cron / on boot.
 agentguard subscribe
 
+# Optional: after one subscribe run, install an OpenClaw isolated cron job that
+# repeats the feed self-check every 15 minutes and only notifies on matches.
+# Requires the local OpenClaw Gateway at 127.0.0.1:18789.
+agentguard subscribe --install-cron
+
+# Override the interval if needed
+agentguard subscribe --install-cron --interval-minutes 5
+
+# Replace an existing OpenClaw cron job with the same name
+agentguard subscribe --install-cron --force
+
+# Machine-readable output always includes a cron status object:
+# cron.requested, cron.installed, and optional cron.result when installation succeeds.
+agentguard subscribe --json
+
 # Or run a one-off self-check against a single advisory id
 agentguard checkup --against-advisory AGS-2026-0042
 

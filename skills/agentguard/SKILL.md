@@ -27,8 +27,8 @@ filesystem-access:
     access: read-write
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
+allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(agentguard *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+argument-hint: "[scan|action|patrol|subscribe|trust|report|config|checkup] [args...]"
 ---
 
 # GoPlus AgentGuard — AI Agent Security Framework
@@ -55,12 +55,31 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
+- **`subscribe [args...]`** — Pull AgentGuard Cloud threat-feed advisories, self-check local skills, and optionally install the OpenClaw 15-minute conditional notification cron
 - **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
+
+## Subcommand: subscribe
+
+Run the AgentGuard Cloud threat-feed subscription workflow through the installed CLI.
+
+Examples:
+
+```bash
+agentguard subscribe
+agentguard subscribe --json
+agentguard subscribe --install-cron
+agentguard subscribe --install-cron --interval-minutes 5
+agentguard subscribe --install-cron --force
+```
+
+When `--install-cron` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789`. It runs every 15 minutes by default. Pass `--interval-minutes <n>` to override the cadence. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` and only sends the configured notification when `shouldNotify` is `true`.
+
+`agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
 
 ---
 
