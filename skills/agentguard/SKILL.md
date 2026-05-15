@@ -20,6 +20,9 @@ filesystem-access:
   - path: "~/.openclaw/"
     access: read-only
     reason: "Discover installed skills and read OpenClaw config for patrol checks"
+  - path: "~/.hermes/"
+    access: read-write
+    reason: "Discover installed Hermes skills and help configure AgentGuard shell hooks"
   - path: "~/.qclaw/"
     access: read-only
     reason: "Discover installed skills in QClaw environments"
@@ -60,8 +63,85 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
+- **`hermes-hooks`** — Show or install Hermes shell-hook configuration for runtime protection
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
+
+## Subcommand: hermes-hooks
+
+Help the user configure AgentGuard runtime protection for Hermes Agent.
+
+Hermes does **not** load hooks from `SKILL.md` automatically. Hermes shell hooks
+must be present in `~/.hermes/config.yaml`. This skill ships the hook runner at
+`scripts/hermes-hook.js` and a copyable template at `hermes-hooks.yaml`.
+
+### What the Hermes hook protects
+
+| Hermes hook | Tools | AgentGuard action |
+|---|---|---|
+| `pre_tool_call` | `terminal`, `execute_code` | `exec_command` |
+| `pre_tool_call` | `write_file`, `patch`, `skill_manage` | `write_file` |
+| `pre_tool_call` | `read_file` | `read_file` |
+| `pre_tool_call` | `web_search`, `web_extract`, `browser_*` | `network_request` |
+| `post_tool_call` | Same tools | Audit-only |
+
+Hermes `pre_tool_call` supports allow/block only. If AgentGuard returns `ask`,
+the Hermes hook reports it as a block with a confirmation-oriented message.
+
+### Procedure
+
+1. Resolve the AgentGuard skill directory using the "Important: Resolving Script
+   Paths" rules above.
+2. Confirm that dependencies are available. If `node scripts/hermes-hook.js`
+   cannot load `@goplus/agentguard`, tell the user to run:
+   ```bash
+   cd <agentguard-skill-dir> && npm install
+   ```
+   or install the published package globally:
+   ```bash
+   npm install -g @goplus/agentguard
+   ```
+3. Read `hermes-hooks.yaml`, replace `AGENTGUARD_SKILL_DIR` with the absolute
+   skill directory, and show the resulting YAML to the user.
+4. Ask for explicit confirmation before editing `~/.hermes/config.yaml`.
+5. If confirmed, merge the `hooks:` entries into `~/.hermes/config.yaml`.
+   Preserve existing hooks and config values. Do not overwrite unrelated user
+   configuration.
+6. Tell the user to restart Hermes or launch it with one of the first-use
+   consent options:
+   ```bash
+   hermes --accept-hooks chat
+   HERMES_ACCEPT_HOOKS=1 hermes chat
+   ```
+   They may also set `hooks_auto_accept: true` in `~/.hermes/config.yaml`.
+
+### Verification
+
+After configuration, suggest a harmless test:
+
+```bash
+printf '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"echo hello"}}' \
+  | node <agentguard-skill-dir>/scripts/hermes-hook.js
+```
+
+Expected output:
+
+```json
+{}
+```
+
+And a blocked-action test:
+
+```bash
+printf '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"rm -rf /"}}' \
+  | node <agentguard-skill-dir>/scripts/hermes-hook.js
+```
+
+Expected output contains:
+
+```json
+{"action":"block"}
+```
 
 ## Subcommand: subscribe
 
@@ -666,6 +746,7 @@ Run these checks in parallel where possible. These are **universal agent securit
 3. **[REQUIRED] Sensitive credential scan / DLP** (→ feeds Dimension 2: Credential Safety): Use Grep to scan **all** agent workspace directories for leaked secrets. This MUST cover the entire workspace root, not just the current agent's directory:
    - For OpenClaw / QClaw: scan `~/.openclaw/workspace/` and `~/.qclaw/workspace/` recursively — this includes **all** `workspace-agent-*/` subdirectories, not just the current agent's workspace
    - For Claude Code: scan `~/.claude/` recursively
+   - For Hermes Agent: scan `~/.hermes/` recursively
    - Patterns to detect:
      - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
      - Mnemonics: sequences of 12+ BIP-39 words, `seed_phrase`, `mnemonic`
@@ -674,7 +755,7 @@ Run these checks in parallel where possible. These are **universal agent securit
 4. **[REQUIRED] Network exposure** (→ feeds Dimension 3: Network & System): Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0)
 5. **[REQUIRED] Scheduled tasks audit** (→ feeds Dimension 3: Network & System): Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`
 6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values
-7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json` or `~/.openclaw/openclaw.json`, check for audit logs at `~/.agentguard/audit.jsonl`
+7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json`, `~/.openclaw/openclaw.json`, or `~/.hermes/config.yaml`, check for audit logs at `~/.agentguard/audit.jsonl`
 
 ### Step 2: Score Calculation
 
@@ -929,6 +1010,7 @@ AgentGuard can optionally scan installed skills at session startup. **This is di
 
 - **Claude Code**: Set environment variable `AGENTGUARD_AUTO_SCAN=1`
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
+- **Hermes Agent**: Configure the `on_session_start` shell hook from `hermes-hooks.yaml`; the template sets `AGENTGUARD_AUTO_SCAN=1` for that hook.
 
 When enabled, auto-scan operates in **report-only mode**:
 

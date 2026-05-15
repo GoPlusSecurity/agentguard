@@ -4,7 +4,7 @@
  * GoPlus AgentGuard — SessionStart Auto-Scan Hook
  *
  * Runs on session startup to discover and scan newly installed skills.
- * For each skill in ~/.claude/skills/:
+ * For each skill in supported agent skill directories:
  *   1. Calculate artifact hash
  *   2. Check trust registry — skip if already registered with same hash
  *   3. Run quickScan for new/updated skills
@@ -59,6 +59,7 @@ try {
 
 const SKILLS_DIRS = [
   join(homedir(), '.claude', 'skills'),
+  join(homedir(), '.hermes', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
 const AGENTGUARD_DIR = join(homedir(), '.agentguard');
@@ -84,7 +85,7 @@ function writeAuditLog(entry) {
 // ---------------------------------------------------------------------------
 
 /**
- * Find all skill directories under ~/.claude/skills/ and ~/.openclaw/skills/
+ * Find all skill directories under supported agent skill roots.
  * A skill directory is one that contains a SKILL.md file.
  */
 function discoverSkills() {

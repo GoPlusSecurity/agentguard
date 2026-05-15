@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
+import { HermesAdapter } from '../adapters/hermes.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -311,6 +312,168 @@ describe('OpenClawAdapter', () => {
   describe('inferInitiatingSkill', () => {
     it('should return null (not yet supported)', async () => {
       const input = adapter.parseInput({ toolName: 'exec', params: {} });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HermesAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('HermesAdapter', () => {
+  const adapter = new HermesAdapter();
+
+  it('should have name "hermes"', () => {
+    assert.equal(adapter.name, 'hermes');
+  });
+
+  describe('parseInput', () => {
+    it('should parse pre_tool_call payload', () => {
+      const raw = {
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'echo hello' },
+        session_id: 'sess-1',
+        cwd: '/workspace',
+      };
+      const input = adapter.parseInput(raw);
+      assert.equal(input.toolName, 'terminal');
+      assert.equal(input.eventType, 'pre');
+      assert.deepEqual(input.toolInput, { command: 'echo hello' });
+      assert.equal(input.sessionId, 'sess-1');
+      assert.equal(input.cwd, '/workspace');
+    });
+
+    it('should parse post_tool_call payload', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'post_tool_call',
+        tool_name: 'write_file',
+        tool_input: { path: '/tmp/test.txt' },
+      });
+      assert.equal(input.eventType, 'post');
+      assert.equal(input.toolName, 'write_file');
+    });
+
+    it('should fall back to args for direct plugin-style payloads', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        args: { command: 'pwd' },
+      });
+      assert.deepEqual(input.toolInput, { command: 'pwd' });
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('should map terminal to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('terminal'), 'exec_command');
+    });
+
+    it('should map write tools to write_file', () => {
+      assert.equal(adapter.mapToolToActionType('write_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('patch'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('skill_manage'), 'write_file');
+    });
+
+    it('should map read_file to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
+    });
+
+    it('should map web and browser tools to network_request', () => {
+      assert.equal(adapter.mapToolToActionType('web_search'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('web_extract'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('browser_navigate'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('browser_console'), 'network_request');
+    });
+
+    it('should return null for unknown tools', () => {
+      assert.equal(adapter.mapToolToActionType('todo'), null);
+      assert.equal(adapter.mapToolToActionType('unknown'), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('should build exec_command envelope', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'ls -la', workdir: '/repo' },
+        session_id: 'sess-1',
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'exec_command');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).command, 'ls -la');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).cwd, '/repo');
+      assert.equal(envelope!.context.session_id, 'sess-1');
+    });
+
+    it('should build write_file envelope from patch path', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'patch',
+        tool_input: { path: '/project/.env' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'write_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/project/.env');
+    });
+
+    it('should build read_file envelope', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'read_file',
+        tool_input: { path: '/tmp/readme.md' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'read_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/readme.md');
+    });
+
+    it('should build network_request envelope from web_extract URL', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'web_extract',
+        tool_input: { url: 'https://example.com/page' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'network_request');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'https://example.com/page');
+    });
+
+    it('should return null for unmapped tools', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'todo',
+        tool_input: {},
+      });
+      assert.equal(adapter.buildEnvelope(input), null);
+    });
+  });
+
+  describe('inferInitiatingSkill', () => {
+    it('should infer skill from extra metadata when present', async () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'echo hi' },
+        extra: { initiating_skill: 'my-hermes-skill' },
+      });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, 'my-hermes-skill');
+    });
+
+    it('should return null when Hermes provides no skill metadata', async () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'echo hi' },
+      });
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
     });

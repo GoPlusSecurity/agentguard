@@ -21,7 +21,19 @@ AI Agent Security Guard — protect your AI agents from dangerous commands, data
 /agentguard report               — View security event audit log
 /agentguard config <level>       — Set protection level (strict/balanced/permissive)
 /agentguard checkup              — Run agent health checkup with visual HTML report
+/agentguard hermes-hooks         — Configure Hermes Agent shell hooks
 ```
+
+## Hermes Agent hooks
+
+When installed from SkillHub, Hermes sees the contents of this
+`skills/agentguard` directory first. Runtime hooks are not loaded from
+`SKILL.md` automatically; copy `hermes-hooks.yaml` into `~/.hermes/config.yaml`
+and replace `AGENTGUARD_SKILL_DIR` with this skill's absolute path.
+
+The hook runner is `scripts/hermes-hook.js`. It uses the published
+`@goplus/agentguard` package, so run `npm install` inside this skill directory
+or install `@goplus/agentguard` globally if the package is not already present.
 
 ## Agent Health Checkup 🦞
 

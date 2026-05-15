@@ -115,6 +115,7 @@ See also:
 - [Privacy and data boundary](docs/privacy-boundary.md)
 - [Claude Code setup](docs/claude-code.md)
 - [OpenClaw setup](docs/openclaw.md)
+- [Hermes Agent setup](docs/hermes.md)
 - [Codex setup](docs/codex.md)
 
 <details>
@@ -300,12 +301,13 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard, transcript-based skill tracking |
 | **OpenClaw** | Full | Plugin hooks + **auto-scan on load** + tool→plugin mapping + **daily patrol** |
+| **Hermes Agent** | Hooks | Shell hooks for `pre_tool_call` / `post_tool_call` runtime protection |
 | **OpenAI Codex CLI** | Skill | Scan/action/trust commands |
 | **Gemini CLI** | Skill | Scan/action/trust commands |
 | **Cursor** | Skill | Scan/action/trust commands |
 | **GitHub Copilot** | Skill | Scan/action/trust commands |
 
-> **Hooks-based auto-guard (Layer 1)** works on Claude Code (PreToolUse/PostToolUse) and OpenClaw (before_tool_call/after_tool_call). Both platforms share the same decision engine via a unified adapter abstraction layer.
+> **Hooks-based auto-guard (Layer 1)** works on Claude Code (PreToolUse/PostToolUse), OpenClaw (before_tool_call/after_tool_call), and Hermes Agent (pre_tool_call/post_tool_call shell hooks). These platforms share the same decision engine via a unified adapter abstraction layer.
 >
 > **OpenClaw exclusive**: Auto-scans all loaded plugins at registration time, automatically registers them to the trust registry, and supports automated daily security patrols via cron.
 
@@ -313,11 +315,12 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 
 The auto-guard hooks (Layer 1) have the following constraints:
 
-- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events or OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks. Both share the same decision engine via the adapter abstraction layer.
+- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events, OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks, or Hermes Agent's `pre_tool_call` / `post_tool_call` shell hooks. All share the same decision engine via the adapter abstraction layer.
 - **Default-deny policy**: First-time use may trigger confirmation prompts for certain commands. A built-in safe-command allowlist (`ls`, `echo`, `pwd`, `git status`, etc.) reduces false positives.
 - **Skill source tracking**:
   - *Claude Code*: Infers which skill initiated an action by analyzing the conversation transcript (heuristic, not 100% precise)
   - *OpenClaw*: Uses tool→plugin mapping built at registration time (more reliable)
+  - *Hermes Agent*: Uses session/tool metadata when available; most shell-hook payloads do not identify an initiating skill.
 - **Cannot intercept skill installation itself**: Hooks can only intercept tool calls (Bash, Write, WebFetch, etc.) that a skill makes *after* loading — they cannot block the Skill tool invocation itself.
 - **OpenClaw auto-scan timing**: Plugins are scanned asynchronously after AgentGuard registration completes. Very fast tool calls immediately after startup may execute before scan completes.
 

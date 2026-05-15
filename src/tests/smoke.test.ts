@@ -13,8 +13,25 @@ import { SkillScanner } from '../scanner/index.js';
 // __dirname points to dist/tests/ after compilation, project root is 2 levels up
 const projectRoot = resolve(__dirname, '..', '..');
 const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'guard-hook.js');
+const HERMES_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'hermes-hook.js');
 
 function runGuardHook(input: Record<string, unknown>): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return runNodeHook(GUARD_HOOK_PATH, input);
+}
+
+function runHermesHook(input: Record<string, unknown>): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return runNodeHook(HERMES_HOOK_PATH, input);
+}
+
+function runNodeHook(scriptPath: string, input: Record<string, unknown>): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -22,7 +39,7 @@ function runGuardHook(input: Record<string, unknown>): Promise<{
   return new Promise((resolvePromise) => {
     // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.agentguard/
     const tempHome = mkdtempSync(join(tmpdir(), 'agentguard-smoke-'));
-    const child = spawn('node', [GUARD_HOOK_PATH], {
+    const child = spawn('node', [scriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: tempHome },
     });
@@ -87,7 +104,56 @@ describe('Smoke: guard-hook.js E2E', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// E: Scanner integration
+// E: hermes-hook.js subprocess E2E
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Smoke: hermes-hook.js E2E', () => {
+  it('should allow echo hello with empty JSON output', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: 'echo hello' },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block rm -rf / using Hermes stdout protocol', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: 'rm -rf /' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { action?: string; message?: string };
+    assert.equal(payload.action, 'block');
+    assert.ok(payload.message?.includes('AgentGuard'), 'message should mention AgentGuard');
+  });
+
+  it('should block write to .env using Hermes stdout protocol', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'write_file',
+      tool_input: { path: '/project/.env' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { action?: string };
+    assert.equal(payload.action, 'block');
+  });
+
+  it('should allow post_tool_call event for audit-only handling', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'post_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: 'rm -rf /' },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F: Scanner integration
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Smoke: SkillScanner on vulnerable-skill', () => {
