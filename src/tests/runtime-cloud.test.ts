@@ -142,6 +142,34 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!audit.includes('secret-value'));
   });
 
+  it('protectAction still returns policy decision when local audit write fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-audit-fail-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.blockedCommandPatterns = ['cached-danger'];
+
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://127.0.0.1:9',
+      apiKey: 'ag_live_test_key_123456',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: dir,
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(policy));
+
+    const result = await protectAction({
+      config,
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'cached-danger' },
+        session_id: 'sess_test',
+      }),
+    });
+
+    assert.equal(result?.decision.decision, 'block');
+  });
+
   it('syncs redacted audit events and creates Cloud approval on require_approval', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-cloud-ok-'));

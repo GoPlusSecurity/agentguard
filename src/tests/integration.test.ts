@@ -150,6 +150,80 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(result, undefined, 'Ordinary OpenClaw exec command should be allowed');
   });
 
+  it('should run runtime protection for OpenClaw tool calls', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const calls: unknown[] = [];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async (options) => {
+        calls.push(options);
+        return null;
+      },
+    });
+
+    const result = await handlers['before_tool_call'](
+      {
+        toolName: 'exec',
+        params: { command: 'whoami' },
+      },
+      { sessionId: 'openclaw-session-1' },
+    );
+
+    assert.equal(result, undefined, 'Allowed runtime protection result should continue');
+    assert.equal(calls.length, 1);
+    const call = calls[0] as {
+      agentHost?: string;
+      actionType?: string;
+      toolName?: string;
+      sessionId?: string;
+      rawInput?: unknown;
+    };
+    assert.equal(call.agentHost, 'openclaw');
+    assert.equal(call.actionType, 'shell');
+    assert.equal(call.toolName, 'exec');
+    assert.equal(call.sessionId, 'openclaw-session-1');
+  });
+
+  it('should block when runtime policy blocks an OpenClaw tool call', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async () => ({
+        policySource: 'cloud-decision',
+        approvalId: null,
+        event: {} as never,
+        decision: {
+          actionId: 'act_test',
+          decision: 'block',
+          riskScore: 95,
+          riskLevel: 'critical',
+          policyVersion: 'cloud-test',
+          reasons: [
+            {
+              code: 'CUSTOM_BLOCKED_COMMAND',
+              severity: 'critical',
+              title: 'Custom blocked command',
+              description: 'Blocked by cloud policy.',
+            },
+          ],
+        },
+      }),
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'exec',
+      params: { command: 'echo hello' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+
+    assert.equal(result?.block, true);
+    assert.ok(result?.blockReason?.includes('runtime policy blocked'));
+    assert.ok(result?.blockReason?.includes('cloud-test'));
+  });
+
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
