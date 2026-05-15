@@ -135,6 +135,21 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(result, undefined, 'Safe command should be allowed');
   });
 
+  it('should allow non-whitelisted ordinary exec commands by default', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'exec',
+      params: { command: 'agentguard status' },
+    });
+    assert.equal(result, undefined, 'Ordinary OpenClaw exec command should be allowed');
+  });
+
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();

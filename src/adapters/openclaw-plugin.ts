@@ -341,11 +341,13 @@ export function registerOpenClawPlugin(
   // Lazy-initialize agentguard instance
   let agentguard: AgentGuardInstance | null = null;
 
-  // Build default capabilities from workspacePaths so the core session
-  // can access its own workspace files without a manual registry entry.
-  const defaultCapabilities = options.workspacePaths
-    ? { ...DEFAULT_CAPABILITY, filesystem_allowlist: options.workspacePaths }
-    : undefined;
+  // Build default capabilities so the core OpenClaw session can run normal
+  // commands and access its workspace without a manual registry entry.
+  const defaultCapabilities = {
+    ...DEFAULT_CAPABILITY,
+    exec: 'allow' as const,
+    ...(options.workspacePaths ? { filesystem_allowlist: options.workspacePaths } : {}),
+  };
 
   function getAgentGuard(): AgentGuardInstance {
     if (!agentguard) {
@@ -355,7 +357,7 @@ export function registerOpenClawPlugin(
         // Build inline — avoids require() and passes workspace defaults
         const actionScanner = new ActionScanner({
           registry: trustRegistry,
-          ...(defaultCapabilities ? { defaultCapabilities } : {}),
+          defaultCapabilities,
         });
         agentguard = {
           registry: trustRegistry as unknown as AgentGuardInstance['registry'],
