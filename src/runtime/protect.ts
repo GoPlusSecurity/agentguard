@@ -62,7 +62,11 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     },
   };
 
-  writeAuditLog(options.config.auditPath, event);
+  try {
+    writeAuditLog(options.config.auditPath, event);
+  } catch {
+    // Audit I/O must not mask the policy decision, especially for agent hooks.
+  }
 
   let approvalId: string | null | undefined;
   if (client.connected && policySource !== 'cloud-decision') {

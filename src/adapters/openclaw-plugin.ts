@@ -26,12 +26,20 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { OpenClawAdapter } from './openclaw.js';
 import { evaluateHook } from './engine.js';
-import { loadConfig, writeAuditLog } from './common.js';
+import { writeAuditLog } from './common.js';
 import type { AgentGuardInstance } from './types.js';
+import { loadConfig as loadAgentGuardConfig } from '../config.js';
 import { SkillScanner } from '../scanner/index.js';
 import { SkillRegistry } from '../registry/index.js';
 import { ActionScanner } from '../action/index.js';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
+import {
+  protectAction,
+  type ProtectOptions,
+  type ProtectResult,
+} from '../runtime/protect.js';
+import type { RuntimeActionType } from '../runtime/types.js';
+import type { AgentGuardConfig } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -64,6 +72,7 @@ interface OpenClawPluginApi {
   id: string;
   name: string;
   source: string;
+  pluginConfig?: Record<string, unknown>;
   on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
   on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
 }
@@ -169,11 +178,19 @@ async function autoScanSkillDirs(
  */
 export interface OpenClawPluginOptions {
   /** Protection level (strict/balanced/permissive) */
-  level?: string;
+  level?: AgentGuardConfig['level'];
+  /** Enable runtime policy protection via AgentGuard Cloud/cache/default policy (default: true) */
+  runtimeProtection?: boolean;
+  /** Runtime protection failure behavior (default: block security-sensitive actions) */
+  runtimeFailureMode?: 'block' | 'fallback';
+  /** Runtime policy decision mode: local-first fetches Cloud policy then evaluates locally; cloud delegates the decision to Cloud */
+  decisionMode?: 'local-first' | 'cloud';
   /** Enable auto-scanning of plugins (default: false — opt-in) */
   skipAutoScan?: boolean;
   /** Custom AgentGuard instance factory */
   agentguardFactory?: () => AgentGuardInstance;
+  /** Custom runtime protection function, primarily for tests */
+  protectAction?: (options: ProtectOptions) => Promise<ProtectResult | null>;
   /** Custom scanner instance */
   scanner?: SkillScanner;
   /** Custom registry instance */
@@ -204,10 +221,16 @@ const pluginScanCache = new Map<string, { riskLevel: string; riskTags: string[] 
  */
 function getOpenClawRegistry(): OpenClawPluginRegistry | null {
   const globalState = globalThis as typeof globalThis & {
-    [key: symbol]: { registry: OpenClawPluginRegistry | null } | undefined;
+    [key: symbol]:
+      | {
+          registry?: OpenClawPluginRegistry | null;
+          activeRegistry?: OpenClawPluginRegistry | null;
+          channel?: { registry?: OpenClawPluginRegistry | null };
+        }
+      | undefined;
   };
   const state = globalState[OPENCLAW_REGISTRY_STATE];
-  return state?.registry ?? null;
+  return state?.channel?.registry ?? state?.activeRegistry ?? state?.registry ?? null;
 }
 
 /**
@@ -331,9 +354,13 @@ export function registerOpenClawPlugin(
   options: OpenClawPluginOptions = {}
 ): void {
   const adapter = new OpenClawAdapter();
-  const config = options.level ? { level: options.level } : loadConfig();
+  const runtimeConfig = loadAgentGuardConfig();
+  const configuredLevel = options.level ?? readOpenClawConfigLevel(api.pluginConfig);
+  const config = configuredLevel ? { ...runtimeConfig, level: configuredLevel } : runtimeConfig;
   const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false });
   const trustRegistry = options.registry ?? new SkillRegistry();
+  const runProtectAction = options.protectAction ?? protectAction;
+  const runtimeProtectionEnabled = options.runtimeProtection !== false;
 
   // Simple logger
   const logger = (msg: string) => console.log(msg);
@@ -392,7 +419,7 @@ export function registerOpenClawPlugin(
   }
 
   // before_tool_call → evaluate and optionally block
-  api.on('before_tool_call', async (event: unknown) => {
+  api.on('before_tool_call', async (event: unknown, ctx?: unknown) => {
     try {
       // Try to infer plugin from tool name
       const toolEvent = event as { toolName?: string };
@@ -406,6 +433,38 @@ export function registerOpenClawPlugin(
             block: true,
             blockReason: `GoPlus AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /agentguard trust attest to manually approve.`,
           };
+        }
+      }
+
+      if (runtimeProtectionEnabled) {
+        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolEvent.toolName, event);
+        try {
+          const runtimeResult = await runProtectAction({
+            config,
+            rawInput: event,
+            agentHost: 'openclaw',
+            actionType: runtimeActionType,
+            toolName: toolEvent.toolName,
+            sessionId: readOpenClawSessionId(event, ctx),
+            decisionMode: options.decisionMode ?? 'local-first',
+          });
+          const hookDecision = runtimeResultToBeforeToolCallResult(runtimeResult);
+          if (hookDecision) {
+            return hookDecision;
+          }
+        } catch (err) {
+          if (
+            options.runtimeFailureMode !== 'fallback' &&
+            isSecuritySensitiveRuntimeAction(runtimeActionType)
+          ) {
+            return {
+              block: true,
+              blockReason:
+                `GoPlus AgentGuard: runtime protection failed for this OpenClaw tool call` +
+                ` (${String(err)}). Blocking by default.`,
+            };
+          }
+          logger(`[AgentGuard] Runtime protection failed; falling back to local hook policy: ${String(err)}`);
         }
       }
 
@@ -449,6 +508,159 @@ export function registerOpenClawPlugin(
   });
 
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
+}
+
+function mapOpenClawToolToRuntimeAction(
+  toolName: string | undefined,
+  event?: unknown
+): RuntimeActionType {
+  const normalized = (toolName || '').toLowerCase();
+  if (
+    normalized === 'exec' ||
+    normalized === 'bash' ||
+    normalized === 'cmd' ||
+    normalized === 'command' ||
+    normalized === 'terminal' ||
+    normalized === 'run' ||
+    normalized.includes('shell') ||
+    normalized.includes('terminal') ||
+    normalized.includes('command') ||
+    normalized.includes('process') ||
+    normalized.includes('spawn')
+  ) {
+    return 'shell';
+  }
+  if (normalized === 'read' || normalized.includes('read') || normalized.includes('fetch_file')) {
+    return 'file_read';
+  }
+  if (
+    normalized === 'write' ||
+    normalized === 'edit' ||
+    normalized === 'apply_patch' ||
+    normalized === 'patch' ||
+    normalized === 'create' ||
+    normalized === 'save' ||
+    normalized === 'delete' ||
+    normalized === 'remove' ||
+    normalized === 'rename' ||
+    normalized === 'scaffold' ||
+    normalized.includes('write') ||
+    normalized.includes('edit') ||
+    normalized.includes('patch') ||
+    normalized.includes('delete') ||
+    normalized.includes('remove') ||
+    normalized.includes('rename') ||
+    normalized.includes('scaffold')
+  ) {
+    return 'file_write';
+  }
+  if (
+    normalized.includes('web') ||
+    normalized.includes('browser') ||
+    normalized.includes('http') ||
+    normalized.includes('fetch') ||
+    normalized.includes('request')
+  ) {
+    return 'network';
+  }
+
+  const params = readOpenClawParams(event);
+  if (typeof params?.command === 'string' || typeof params?.cmd === 'string') {
+    return 'shell';
+  }
+  if (
+    typeof params?.url === 'string' ||
+    typeof params?.uri === 'string' ||
+    typeof params?.query === 'string'
+  ) {
+    return 'network';
+  }
+  if (
+    typeof params?.content === 'string' ||
+    typeof params?.newContent === 'string' ||
+    typeof params?.patch === 'string'
+  ) {
+    return 'file_write';
+  }
+  if (
+    typeof params?.path === 'string' ||
+    typeof params?.file_path === 'string' ||
+    typeof params?.filePath === 'string'
+  ) {
+    return 'file_read';
+  }
+
+  return 'other';
+}
+
+function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
+  const record = isRecord(event) ? event : undefined;
+  const params = record?.params ?? record?.toolInput ?? record?.tool_input;
+  return isRecord(params) ? params : undefined;
+}
+
+function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
+  return actionType !== 'other';
+}
+
+function readOpenClawSessionId(event: unknown, ctx: unknown): string | undefined {
+  const eventRecord = isRecord(event) ? event : undefined;
+  const ctxRecord = isRecord(ctx) ? ctx : undefined;
+  const sessionId = ctxRecord?.sessionId ?? eventRecord?.sessionId;
+  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined;
+}
+
+function readOpenClawConfigLevel(
+  pluginConfig: Record<string, unknown> | undefined
+): AgentGuardConfig['level'] | undefined {
+  const level = pluginConfig?.level;
+  return level === 'strict' || level === 'balanced' || level === 'permissive'
+    ? level
+    : undefined;
+}
+
+function runtimeResultToBeforeToolCallResult(
+  result: ProtectResult | null
+): { block: true; blockReason: string } | undefined {
+  if (!result) return undefined;
+
+  const decision = result.decision.decision;
+  if (decision !== 'block' && decision !== 'require_approval') {
+    return undefined;
+  }
+  if (decision === 'require_approval' && !shouldSurfaceRuntimeApproval(result)) {
+    return undefined;
+  }
+
+  const reasonSummary = result.decision.reasons
+    .map((reason) => reason.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(', ');
+  const approval = result.approvalId ? ` Approval: ${result.approvalId}.` : '';
+  const action = decision === 'require_approval' ? 'requires approval' : 'blocked';
+
+  return {
+    block: true,
+    blockReason:
+      `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
+      ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
+      (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
+      approval,
+  };
+}
+
+function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
+  return (
+    result.policySource === 'cloud-decision' ||
+    Boolean(result.approvalId) ||
+    result.decision.riskScore > 0 ||
+    result.decision.reasons.length > 0
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**

@@ -27,6 +27,8 @@ describe('Agent template installers', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-'));
     installAgentTemplates('openclaw', { cwd: dir });
 
-    assert.ok(readFileSync(join(dir, 'openclaw.agentguard.plugin.ts'), 'utf8').includes('registerOpenClawPlugin'));
+    const template = readFileSync(join(dir, 'openclaw.agentguard.plugin.ts'), 'utf8');
+    assert.ok(template.includes('registerOpenClawPlugin'));
+    assert.ok(!template.includes("level: 'balanced'"));
   });
 });
