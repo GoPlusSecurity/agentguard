@@ -107,6 +107,53 @@ async function main() {
       console.log(`Audit log: ${config.auditPath}`);
     });
 
+  const policy = program
+    .command('policy')
+    .description('Manage local runtime policy cache');
+
+  policy
+    .command('pull')
+    .description('Pull the latest effective runtime policy from AgentGuard Cloud into the local cache')
+    .option('--json', 'Print JSON output')
+    .action(async (options) => {
+      const config = ensureConfig();
+      const client = new AgentGuardCloudClient(config);
+      if (!client.connected) {
+        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first.';
+        if (options.json) {
+          console.log(JSON.stringify({ success: false, error: message }, null, 2));
+        } else {
+          console.error(message);
+        }
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const pulledPolicy = await client.fetchEffectivePolicy();
+        saveCachedPolicy(config.policyCachePath, pulledPolicy);
+        if (options.json) {
+          console.log(JSON.stringify({
+            success: true,
+            policyVersion: pulledPolicy.policyVersion,
+            updatedAt: pulledPolicy.updatedAt,
+            cachePath: config.policyCachePath,
+          }, null, 2));
+        } else {
+          console.log(`Pulled policy ${pulledPolicy.policyVersion}.`);
+          console.log(`Policy cache: ${config.policyCachePath}`);
+        }
+      } catch (err) {
+        const message = `Policy pull failed: ${(err as Error).message}`;
+        if (options.json) {
+          console.log(JSON.stringify({ success: false, error: message }, null, 2));
+        } else {
+          console.error(message);
+        }
+        process.exitCode = 1;
+      }
+    });
+
   program
     .command('doctor')
     .description('Check local AgentGuard setup')

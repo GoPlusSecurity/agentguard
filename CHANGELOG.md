@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Added the missing `agentguard policy pull` command used by AgentGuard Cloud policy refresh instructions.
+
 ## [1.1.5] - 2026-05-18
 
 ### Added
