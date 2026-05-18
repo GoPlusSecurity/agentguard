@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, mkdtempSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installAgentTemplates } from '../installers.js';
@@ -23,12 +23,33 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.example.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
   });
 
-  it('writes OpenClaw plugin template', () => {
+  it('writes and enables OpenClaw plugin template', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-'));
+    const result = installAgentTemplates('openclaw', { cwd: dir });
+
+    const pluginDir = join(dir, '.openclaw', 'plugins', 'agentguard');
+    const template = readFileSync(join(pluginDir, 'index.ts'), 'utf8');
+    const manifest = readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8');
+    const config = JSON.parse(readFileSync(join(dir, '.openclaw', 'openclaw.json'), 'utf8'));
+
+    assert.equal(result.files.length, 3);
+    assert.ok(template.includes('registerOpenClawPlugin'));
+    assert.ok(manifest.includes('"id": "agentguard"'));
+    assert.equal(config.plugins.entries.agentguard.enabled, true);
+    assert.deepEqual(config.plugins.load.paths, [pluginDir]);
+    assert.ok(!template.includes("level: 'balanced'"));
+  });
+
+  it('adds AgentGuard to an existing OpenClaw plugin allowlist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-existing-'));
+    const configPath = join(dir, '.openclaw', 'openclaw.json');
+    mkdirSync(join(dir, '.openclaw'), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ plugins: { allow: ['existing'] } }, null, 2));
+
     installAgentTemplates('openclaw', { cwd: dir });
 
-    const template = readFileSync(join(dir, 'openclaw.agentguard.plugin.ts'), 'utf8');
-    assert.ok(template.includes('registerOpenClawPlugin'));
-    assert.ok(!template.includes("level: 'balanced'"));
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.deepEqual(config.plugins.allow, ['existing', 'agentguard']);
+    assert.equal(config.plugins.entries.agentguard.enabled, true);
   });
 });

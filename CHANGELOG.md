@@ -1,9 +1,11 @@
 # Changelog
 
-## [1.1.6] - 2026-05-18
+## [1.1.7] - 2026-05-18
 
 ### Fixed
 - Added the missing `agentguard policy pull` command used by AgentGuard Cloud policy refresh instructions.
+- OpenClaw installs now enable the AgentGuard plugin when installing the skill through `setup.sh` or running `agentguard init --agent openclaw`.
+- Added a dedicated OpenClaw package entry so OpenClaw loads the runtime plugin instead of the generic SDK entrypoint.
 
 ## [1.1.5] - 2026-05-18
 

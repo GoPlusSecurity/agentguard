@@ -90,7 +90,8 @@ agentguard subscribe --json
 # Or run a one-off self-check against a single advisory id
 agentguard checkup --against-advisory AGS-2026-0042
 
-# Optional: write host-specific hook templates
+# Optional: write host-specific hook templates.
+# OpenClaw also installs and enables the AgentGuard plugin.
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw
@@ -135,7 +136,13 @@ cp -r agentguard/skills/agentguard ~/.claude/skills/agentguard
 npm install @goplus/agentguard
 ```
 
-Register in your OpenClaw plugin config:
+Then enable it:
+
+```bash
+agentguard init --agent openclaw
+```
+
+Or register manually in your OpenClaw plugin config:
 
 ```typescript
 import register from '@goplus/agentguard/openclaw';
