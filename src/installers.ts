@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw';
@@ -12,7 +13,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   const root = options.cwd || process.cwd();
   if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force));
   if (agent === 'codex') return installCodex(root, Boolean(options.force));
-  if (agent === 'openclaw') return installOpenClaw(root, Boolean(options.force));
+  if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -36,10 +37,22 @@ function installCodex(root: string, force: boolean): InstallResult {
   return { agent: 'codex', files: [skillPath, hookPath] };
 }
 
-function installOpenClaw(root: string, force: boolean): InstallResult {
-  const pluginPath = join(root, 'openclaw.agentguard.plugin.ts');
+function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult {
+  const openClawRoot = cwd
+    ? join(cwd, '.openclaw')
+    : process.env.OPENCLAW_STATE_DIR || join(homedir(), '.openclaw');
+  const pluginDir = join(openClawRoot, 'plugins', 'agentguard');
+  const pluginPath = join(pluginDir, 'index.ts');
+  const manifestPath = join(pluginDir, 'openclaw.plugin.json');
+  const configPath = cwd
+    ? join(openClawRoot, 'openclaw.json')
+    : process.env.OPENCLAW_CONFIG_PATH || join(openClawRoot, 'openclaw.json');
+
   writeIfAllowed(pluginPath, openClawPluginTemplate(), force);
-  return { agent: 'openclaw', files: [pluginPath] };
+  writeIfAllowed(manifestPath, JSON.stringify(openClawPluginManifest(), null, 2) + '\n', force);
+  enableOpenClawPlugin(configPath, pluginDir);
+
+  return { agent: 'openclaw', files: [pluginPath, manifestPath, configPath] };
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
@@ -146,4 +159,64 @@ export default function setup(api) {
   });
 }
 `;
+}
+
+function openClawPluginManifest(): unknown {
+  return {
+    id: 'agentguard',
+    name: 'GoPlus AgentGuard',
+    description: 'AI agent security framework - blocks dangerous commands, prevents data leaks, and protects secrets',
+    configSchema: {
+      type: 'object',
+      properties: {
+        level: {
+          type: 'string',
+          enum: ['strict', 'balanced', 'permissive'],
+          default: 'balanced',
+          description: 'Protection level: strict (block all risky), balanced (block dangerous, confirm risky), permissive (only block critical)',
+        },
+      },
+    },
+  };
+}
+
+function enableOpenClawPlugin(configPath: string, pluginDir: string): void {
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    const raw = readFileSync(configPath, 'utf8').trim();
+    config = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+  }
+
+  const plugins = ensureRecord(config, 'plugins');
+  const load = ensureRecord(plugins, 'load');
+  const entries = ensureRecord(plugins, 'entries');
+  const agentguard = ensureRecord(entries, 'agentguard');
+  agentguard.enabled = true;
+
+  const paths = Array.isArray(load.paths) ? load.paths.filter((p): p is string => typeof p === 'string') : [];
+  if (!paths.includes(pluginDir)) {
+    paths.push(pluginDir);
+  }
+  load.paths = paths;
+
+  if (Array.isArray(plugins.allow)) {
+    const allow = plugins.allow.filter((id): id is string => typeof id === 'string');
+    if (!allow.includes('agentguard')) {
+      allow.push('agentguard');
+    }
+    plugins.allow = allow;
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+}
+
+function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = parent[key];
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    return existing as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = {};
+  parent[key] = next;
+  return next;
 }

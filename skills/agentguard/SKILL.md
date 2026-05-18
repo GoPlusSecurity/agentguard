@@ -31,7 +31,7 @@ filesystem-access:
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
 allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(agentguard *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|subscribe|trust|report|config|checkup] [args...]"
+argument-hint: "[scan|action|patrol|subscribe|trust|report|config|checkup|cli] [args...]"
 ---
 
 # GoPlus AgentGuard — AI Agent Security Framework
@@ -64,8 +64,31 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
 - **`hermes-hooks`** — Show or install Hermes shell-hook configuration for runtime protection
+- **`cli <args...>`** — Run the installed `agentguard` CLI directly for supported commands not otherwise routed by this skill
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
+
+### CLI Passthrough
+
+This skill is allowed to run `agentguard *`, so CLI commands and flags are available even when the skill has a higher-level workflow for the same area.
+
+Use CLI passthrough when the user explicitly asks for a concrete `agentguard ...` command, when the command is one of the CLI-only commands below, or when a CLI flag changes semantics that this skill's high-level workflow does not implement.
+
+Supported CLI commands and options:
+
+| CLI command | Options | Notes |
+|---|---|---|
+| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config and optionally installs agent templates |
+| `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
+| `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
+| `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
+| `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
+| `agentguard scan <path>` | `--json` | Runs the packaged scanner against a local path |
+| `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--no-report`, `--install-cron`, `--cron-name <name>`, `--interval-minutes <minutes>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and self-checks local skills |
+| `agentguard checkup` | `--against-advisory <id>`, `--json` | CLI threat-feed self-check; without `--against-advisory`, it only prints a tip in the current CLI build |
+
+If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly. If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI command `agentguard checkup --against-advisory <id>` instead of the comprehensive HTML health-report workflow.
 
 ## Subcommand: hermes-hooks
 
@@ -152,14 +175,19 @@ Examples:
 ```bash
 agentguard subscribe
 agentguard subscribe --json
+agentguard subscribe --since 2026-05-01T00:00:00.000Z
+agentguard subscribe --no-report
 agentguard subscribe --install-cron
+agentguard subscribe --install-cron --cron-name agentguard-threat-feed
 agentguard subscribe --install-cron --interval-minutes 5
 agentguard subscribe --install-cron --force
 ```
 
-When `--install-cron` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789`. It runs every 15 minutes by default. Pass `--interval-minutes <n>` to override the cadence. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` and only sends the configured notification when `shouldNotify` is `true`.
+When `--install-cron` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789`. It runs every 15 minutes by default. Pass `--interval-minutes <n>` to override the cadence and `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` and only sends the configured notification when `shouldNotify` is `true`.
 
 `agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
+
+`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud. `--cron-run` is internal and should only be used by the OpenClaw cron prompt unless the user explicitly asks to reproduce cron behavior.
 
 ---
 
@@ -725,6 +753,15 @@ If the log file doesn't exist, inform the user that no security events have been
 ## Subcommand: checkup
 
 Run a comprehensive agent health checkup across 6 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
+
+If the arguments include `--against-advisory <id>`, do not run this comprehensive HTML workflow. Instead execute the CLI threat-feed self-check:
+
+```bash
+agentguard checkup --against-advisory <id>
+agentguard checkup --against-advisory <id> --json
+```
+
+That CLI path fetches the current Cloud advisory feed and checks local skills against the single advisory. It is separate from the full health report below.
 
 ### Step 1: Data Collection
 

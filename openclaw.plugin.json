@@ -2,6 +2,7 @@
   "id": "agentguard",
   "name": "GoPlus AgentGuard",
   "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "properties": {
