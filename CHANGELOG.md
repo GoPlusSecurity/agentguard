@@ -1,9 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.5] - 2026-05-18
 
 ### Added
-- `agentguard subscribe --install-cron` — installs an OpenClaw isolated cron job through the local OpenClaw Gateway (`127.0.0.1:18789`) that reruns `agentguard subscribe --json --cron-run` every 15 minutes by default. The cron delivery stays silent (`delivery.mode = "none"`); the isolated agent only sends a notification when the JSON summary reports `shouldNotify: true`.
+- Added Hermes hook support, including installable hook metadata and docs.
+- Added `agentguard subscribe --install-cron` for silent OpenClaw Gateway cron subscription checks.
+
+### Changed
+- Routed OpenClaw tool calls through runtime protection and AgentGuard Cloud policy decisions.
+- Improved OpenClaw plugin config handling, registry discovery, and action classification.
+
+### Fixed
+- Hardened OpenClaw fallback behavior so security-sensitive actions fail closed when runtime protection is unavailable.
+- Prevented audit log write failures from masking runtime policy decisions.
 
 ## [1.1.4] - 2026-05-14
 
