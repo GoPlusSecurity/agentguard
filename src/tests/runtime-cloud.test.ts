@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
@@ -8,7 +8,7 @@ import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
 import { protectAction } from '../runtime/protect.js';
-import { connectCloud, getAgentGuardPaths } from '../config.js';
+import { connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
@@ -54,6 +54,36 @@ describe('Runtime Cloud bridge', () => {
       assert.doesNotThrow(
         () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' })
       );
+    } finally {
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
+  });
+
+  it('disconnects Cloud without deleting the local audit log', () => {
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-disconnect-'));
+    try {
+      const config = connectCloud({
+        apiKey: 'ag_live_test_key_123456',
+        cloudUrl: 'https://agentguard.example',
+      });
+      writeFileSync(config.eventSpoolPath, `${JSON.stringify(sampleEvent())}\n`);
+      writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+      writeFileSync(config.auditPath, `${JSON.stringify(sampleEvent())}\n`);
+
+      const disconnected = disconnectCloud();
+      const saved = JSON.parse(readFileSync(getAgentGuardPaths().configPath, 'utf8')) as AgentGuardConfig;
+
+      assert.equal(disconnected.apiKey, undefined);
+      assert.equal(disconnected.connectedAt, undefined);
+      assert.equal(disconnected.cloudUrl, 'https://agentguard.example');
+      assert.equal(saved.apiKey, undefined);
+      assert.equal(saved.connectedAt, undefined);
+      assert.equal(saved.cloudUrl, 'https://agentguard.example');
+      assert.equal(existsSync(config.eventSpoolPath), false);
+      assert.equal(existsSync(config.policyCachePath), false);
+      assert.equal(existsSync(config.auditPath), true);
     } finally {
       if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
       else process.env.AGENTGUARD_HOME = previousHome;

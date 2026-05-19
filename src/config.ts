@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -100,6 +100,17 @@ export function connectCloud(options: { apiKey: string; cloudUrl?: string }): Ag
     apiKey: options.apiKey,
     connectedAt: new Date().toISOString(),
   };
+  saveConfig(next);
+  return next;
+}
+
+export function disconnectCloud(): AgentGuardConfig {
+  const current = ensureConfig();
+  const next: AgentGuardConfig = { ...current };
+  delete next.apiKey;
+  delete next.connectedAt;
+  rmSync(current.eventSpoolPath, { force: true });
+  rmSync(current.policyCachePath, { force: true });
   saveConfig(next);
   return next;
 }
