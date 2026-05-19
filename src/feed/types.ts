@@ -12,7 +12,13 @@
  */
 
 /** Supply-chain ecosystem an advisory targets. */
-export type AdvisoryEcosystem = 'skill' | 'plugin' | 'mcp_server';
+export type AdvisoryEcosystem =
+  | 'skill'
+  | 'plugin'
+  | 'mcp_server'
+  | 'supply_chain'
+  | 'url'
+  | 'prompt_injection';
 
 export type AdvisorySeverity = 'low' | 'medium' | 'high' | 'critical';
 
@@ -46,6 +52,10 @@ export interface AdvisoryAffected {
    * a code/text pattern rather than a known hash.
    */
   bodyRegex?: string;
+  /** Optional URL glob/regex-style pattern for URL-focused advisories. */
+  urlPattern?: string;
+  /** Optional exact domain match for URL/domain-focused advisories. */
+  domainExact?: string;
 }
 
 export interface Advisory {
@@ -71,6 +81,12 @@ export interface Advisory {
   signature?: string;
   /** External references — Snyk, NVD, GHSA, blog posts. */
   references?: string[];
+  selfCheck?: {
+    inspectPaths?: string[];
+    matchers: unknown[];
+    remediationAction?: 'quarantine' | 'uninstall' | 'block_url' | 'revoke_token' | 'notify_only';
+    remediationMd?: string;
+  };
 }
 
 /**
