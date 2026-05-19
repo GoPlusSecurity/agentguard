@@ -64,6 +64,7 @@ export {
   loadConfig as loadAgentGuardConfig,
   saveConfig as saveAgentGuardConfig,
   connectCloud,
+  disconnectCloud,
   getAgentGuardPaths,
   type AgentGuardConfig,
 } from './config.js';

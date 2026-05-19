@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { AgentGuardCloudClient } from './cloud/client.js';
 import {
   connectCloud,
+  disconnectCloud,
   ensureConfig,
   getAgentGuardPaths,
   loadConfig,
@@ -91,6 +92,16 @@ async function main() {
         console.log(`Saved Cloud configuration for ${config.cloudUrl}.`);
         console.log(`Policy fetch failed; local protection still works offline. ${error instanceof Error ? error.message : ''}`.trim());
       }
+    });
+
+  program
+    .command('disconnect')
+    .description('Disconnect local AgentGuard from AgentGuard Cloud')
+    .action(() => {
+      const config = disconnectCloud();
+      console.log('Disconnected from AgentGuard Cloud.');
+      console.log('Removed local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy.');
+      console.log(`Local protection remains active using the built-in policy. Audit log: ${config.auditPath}`);
     });
 
   program

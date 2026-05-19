@@ -80,6 +80,7 @@ Supported CLI commands and options:
 |---|---|---|
 | `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config and optionally installs agent templates |
 | `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
+| `agentguard disconnect` | none | Removes local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy; keeps Cloud URL, audit log, and installed hooks/templates |
 | `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
