@@ -2,6 +2,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateHook } from '../adapters/engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
+import openClawEntry from '../openclaw.js';
 import { createTestContext } from './helpers/test-utils.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +123,29 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
     assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
+  });
+
+  it('exports an OpenClaw entry that supports register(api) and direct legacy calls', () => {
+    const viaRegister = createMockApi();
+    openClawEntry.register(viaRegister.api as never);
+
+    const viaDirectCall = createMockApi();
+    openClawEntry(viaDirectCall.api as never);
+
+    assert.equal(openClawEntry.id, 'agentguard');
+    assert.ok(viaRegister.handlers['before_tool_call']);
+    assert.ok(viaRegister.handlers['after_tool_call']);
+    assert.ok(viaDirectCall.handlers['before_tool_call']);
+    assert.ok(viaDirectCall.handlers['after_tool_call']);
+  });
+
+  it('does not register runtime hooks during non-full OpenClaw loads', () => {
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin({ ...api, registrationMode: 'discovery' } as never, {
+      skipAutoScan: false,
+    });
+
+    assert.deepEqual(handlers, {});
   });
 
   it('should auto-scan plugins from OpenClaw activeRegistry state', async () => {

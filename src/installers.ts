@@ -42,17 +42,19 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
     ? join(cwd, '.openclaw')
     : process.env.OPENCLAW_STATE_DIR || join(homedir(), '.openclaw');
   const pluginDir = join(openClawRoot, 'plugins', 'agentguard');
-  const pluginPath = join(pluginDir, 'index.ts');
+  const packagePath = join(pluginDir, 'package.json');
+  const pluginPath = join(pluginDir, 'index.js');
   const manifestPath = join(pluginDir, 'openclaw.plugin.json');
   const configPath = cwd
     ? join(openClawRoot, 'openclaw.json')
     : process.env.OPENCLAW_CONFIG_PATH || join(openClawRoot, 'openclaw.json');
 
+  writeIfAllowed(packagePath, JSON.stringify(openClawPackageManifest(), null, 2) + '\n', force);
   writeIfAllowed(pluginPath, openClawPluginTemplate(), force);
   writeIfAllowed(manifestPath, JSON.stringify(openClawPluginManifest(), null, 2) + '\n', force);
   enableOpenClawPlugin(configPath, pluginDir);
 
-  return { agent: 'openclaw', files: [pluginPath, manifestPath, configPath] };
+  return { agent: 'openclaw', files: [packagePath, pluginPath, manifestPath, configPath] };
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
@@ -151,14 +153,36 @@ function codexHookTemplate(): unknown {
 }
 
 function openClawPluginTemplate(): string {
-  return `import { registerOpenClawPlugin } from '@goplus/agentguard';
+  return `const { registerOpenClawPlugin } = require('@goplus/agentguard');
 
-export default function setup(api) {
+function register(api) {
   registerOpenClawPlugin(api, {
     skipAutoScan: false,
   });
 }
+
+module.exports = Object.defineProperties(register, {
+  id: { enumerable: true, value: 'agentguard' },
+  name: { enumerable: true, value: 'GoPlus AgentGuard' },
+  description: {
+    enumerable: true,
+    value: 'AI agent security framework - blocks dangerous commands, prevents data leaks, and protects secrets',
+  },
+  register: { enumerable: true, value: register },
+});
 `;
+}
+
+function openClawPackageManifest(): unknown {
+  return {
+    name: 'agentguard-openclaw-local',
+    private: true,
+    type: 'commonjs',
+    openclaw: {
+      extensions: ['./index.js'],
+      runtimeExtensions: ['./index.js'],
+    },
+  };
 }
 
 function openClawPluginManifest(): unknown {
