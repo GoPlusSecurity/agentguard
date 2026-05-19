@@ -72,7 +72,9 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 
 This skill is allowed to run `agentguard *`, so CLI commands and flags are available even when the skill has a higher-level workflow for the same area.
 
-Use CLI passthrough when the user explicitly asks for a concrete `agentguard ...` command, when the command is one of the CLI-only commands below, or when a CLI flag changes semantics that this skill's high-level workflow does not implement.
+The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`.
+
+Use CLI passthrough for the CLI-only commands below, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
 
 Supported CLI commands and options:
 
@@ -84,12 +86,15 @@ Supported CLI commands and options:
 | `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
-| `agentguard scan <path>` | `--json` | Runs the packaged scanner against a local path |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
 | `agentguard subscribe` | `--since <iso>`, `--json`, `--no-report`, `--install-cron`, `--cron-name <name>`, `--interval-minutes <minutes>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and self-checks local skills |
-| `agentguard checkup` | `--against-advisory <id>`, `--json` | CLI threat-feed self-check; without `--against-advisory`, it only prints a tip in the current CLI build |
+| `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
-If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly. If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI command `agentguard checkup --against-advisory <id>` instead of the comprehensive HTML health-report workflow.
+If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
+
+Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. Only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.
+
+If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI command `agentguard checkup --against-advisory <id>` instead of the comprehensive HTML health-report workflow.
 
 ## Subcommand: hermes-hooks
 
@@ -640,16 +645,16 @@ web3.tx_policy: 'allow' | 'confirm_high_risk' | 'deny'
 
 ### Operations
 
-**lookup** — `agentguard trust lookup --source <source> --version <version>`
+**lookup** — `node scripts/trust-cli.ts lookup --source <source> --version <version>`
 Query the registry for a skill's trust record.
 
-**attest** — `agentguard trust attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
+**attest** — `node scripts/trust-cli.ts attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
 Create or update a trust record. Use `--preset` for common capability models or provide `--capabilities <json>` for custom.
 
-**revoke** — `agentguard trust revoke --source <source> --reason <reason>`
+**revoke** — `node scripts/trust-cli.ts revoke --source <source> --reason <reason>`
 Revoke trust for a skill. Supports `--source-pattern` for wildcards.
 
-**list** — `agentguard trust list [--trust-level <level>] [--status <status>]`
+**list** — `node scripts/trust-cli.ts list [--trust-level <level>] [--status <status>]`
 List all trust records with optional filters.
 
 ### Script Execution
@@ -754,6 +759,8 @@ If the log file doesn't exist, inform the user that no security events have been
 ## Subcommand: checkup
 
 Run a comprehensive agent health checkup across 6 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
+
+Plain `checkup` must always run this comprehensive workflow, even if the user phrases it as `agentguard checkup`. Do not answer that an advisory ID is required. Advisory IDs are optional and only switch to the targeted threat-feed self-check mode described below.
 
 If the arguments include `--against-advisory <id>`, do not run this comprehensive HTML workflow. Instead execute the CLI threat-feed self-check:
 
