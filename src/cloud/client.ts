@@ -72,15 +72,6 @@ export class AgentGuardCloudClient {
     });
   }
 
-  async createApproval(event: RuntimeAuditEvent): Promise<string | null> {
-    this.requireApiKey();
-    const body = await this.request<{ approvalId: string }>('/api/v1/approvals', {
-      method: 'POST',
-      body: JSON.stringify(buildAuditEvent(event)),
-    });
-    return body.data.approvalId || null;
-  }
-
   /**
    * Pull threat-feed advisories newer than `since`. Returns null when the
    * cloud doesn't expose the endpoint yet (404) — callers should treat null

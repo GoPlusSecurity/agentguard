@@ -133,7 +133,7 @@ Expected decisions:
 
 - \`allow\`: continue
 - \`warn\`: show warning and continue
-- \`confirm\`: ask for approval before continuing
+- \`confirm\`: ask for approval in the agent channel before continuing
 - \`block\`: stop the action
 `;
 }

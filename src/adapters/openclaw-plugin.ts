@@ -636,9 +636,13 @@ function readOpenClawConfigLevel(
     : undefined;
 }
 
+type OpenClawBeforeToolCallResult =
+  | { block: true; blockReason: string }
+  | { ask: true; askReason: string };
+
 function runtimeResultToBeforeToolCallResult(
   result: ProtectResult | null
-): { block: true; blockReason: string } | undefined {
+): OpenClawBeforeToolCallResult | undefined {
   if (!result) return undefined;
 
   const decision = result.decision.decision;
@@ -654,23 +658,27 @@ function runtimeResultToBeforeToolCallResult(
     .filter(Boolean)
     .slice(0, 3)
     .join(', ');
-  const approval = result.approvalId ? ` Approval: ${result.approvalId}.` : '';
   const action = decision === 'require_approval' ? 'requires approval' : 'blocked';
+  const reason =
+    `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
+    ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
+  if (decision === 'require_approval' && result.approvalChannel === 'agent') {
+    return {
+      ask: true,
+      askReason: reason,
+    };
+  }
   return {
     block: true,
-    blockReason:
-      `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
-      ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
-      (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
-      approval,
+    blockReason: reason,
   };
 }
 
 function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
   return (
     result.policySource === 'cloud-decision' ||
-    Boolean(result.approvalId) ||
     result.decision.riskScore > 0 ||
     result.decision.reasons.length > 0
   );

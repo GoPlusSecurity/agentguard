@@ -227,7 +227,7 @@ async function main() {
       });
       if (!result) return;
       console.log(formatProtectResult(result, Boolean(options.json)));
-      process.exitCode = exitCodeForDecision(result.decision);
+      process.exitCode = exitCodeForDecision(result.decision, result);
     });
 
   program

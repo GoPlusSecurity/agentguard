@@ -371,7 +371,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       registry: ctx.agentguard.registry as never,
       protectAction: async () => ({
         policySource: 'cloud-decision',
-        approvalId: null,
         event: {} as never,
         decision: {
           actionId: 'act_test',
@@ -401,6 +400,44 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result?.blockReason?.includes('cloud-test'));
   });
 
+  it('should ask in the OpenClaw agent channel when runtime policy requires approval', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async () => ({
+        policySource: 'cloud',
+        approvalChannel: 'agent',
+        event: {} as never,
+        decision: {
+          actionId: 'act_approval',
+          decision: 'require_approval',
+          riskScore: 80,
+          riskLevel: 'high',
+          policyVersion: 'cloud-test',
+          reasons: [
+            {
+              code: 'SECRET_ACCESS',
+              severity: 'high',
+              title: 'Protected path',
+              description: 'Protected path access requires approval.',
+            },
+          ],
+        },
+      }),
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'Read',
+      params: { path: '/workspace/.env' },
+    }) as { ask?: boolean; askReason?: string } | undefined;
+
+    assert.equal(result?.ask, true);
+    assert.ok(result?.askReason?.includes('requires approval'));
+    assert.ok(result?.askReason?.includes('Protected path'));
+  });
+
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
@@ -419,7 +456,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result!.blockReason?.includes('AgentGuard'), 'Reason should mention AgentGuard');
   });
 
-  it('should block write to .env via OpenClaw', async () => {
+  it('should ask before writing .env via OpenClaw', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
@@ -430,9 +467,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const result = await handlers['before_tool_call']({
       toolName: 'write',
       params: { path: '/project/.env' },
-    }) as { block?: boolean } | undefined;
+    }) as { ask?: boolean; askReason?: string } | undefined;
 
-    assert.ok(result?.block, 'Should block write to .env');
+    assert.ok(result?.ask, 'Should ask before writing .env');
+    assert.ok(result?.askReason?.includes('requires approval'));
   });
 
   it('should handle after_tool_call without error', async () => {
