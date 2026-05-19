@@ -33,24 +33,6 @@ describe('Cloud live integration', { skip: !runLive }, () => {
     await client.ingestEvents([event]);
   });
 
-  it('creates a Cloud approval request', async () => {
-    const event = sampleEvent('require_approval');
-    event.input = '/tmp/.env?token=live-secret-that-must-be-redacted';
-    event.riskScore = 55;
-    event.riskLevel = 'high';
-    event.reasons = [
-      {
-        code: 'SECRET_ACCESS',
-        severity: 'high',
-        title: 'Live test protected path access',
-        description: 'Live integration test verifies approval creation.',
-        evidence: '/tmp/.env?token=live-secret-that-must-be-redacted',
-      },
-    ];
-
-    const approvalId = await client.createApproval(event);
-    assert.ok(approvalId);
-  });
 });
 
 function sampleEvent(decision: RuntimeAuditEvent['decision']): RuntimeAuditEvent {

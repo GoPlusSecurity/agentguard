@@ -7,6 +7,9 @@
   "openclaw": {
     "extensions": [
       "./dist/openclaw.js"
+    ],
+    "runtimeExtensions": [
+      "./dist/openclaw.js"
     ]
   },
   "bin": {

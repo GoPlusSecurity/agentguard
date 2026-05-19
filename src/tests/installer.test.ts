@@ -28,12 +28,17 @@ describe('Agent template installers', () => {
     const result = installAgentTemplates('openclaw', { cwd: dir });
 
     const pluginDir = join(dir, '.openclaw', 'plugins', 'agentguard');
-    const template = readFileSync(join(pluginDir, 'index.ts'), 'utf8');
+    const packageJson = JSON.parse(readFileSync(join(pluginDir, 'package.json'), 'utf8'));
+    const template = readFileSync(join(pluginDir, 'index.js'), 'utf8');
     const manifest = readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8');
     const config = JSON.parse(readFileSync(join(dir, '.openclaw', 'openclaw.json'), 'utf8'));
 
-    assert.equal(result.files.length, 3);
+    assert.equal(result.files.length, 4);
+    assert.deepEqual(packageJson.openclaw.extensions, ['./index.js']);
+    assert.deepEqual(packageJson.openclaw.runtimeExtensions, ['./index.js']);
     assert.ok(template.includes('registerOpenClawPlugin'));
+    assert.ok(template.includes('skipAutoScan: false'));
+    assert.ok(template.includes('register: { enumerable: true, value: register }'));
     assert.ok(manifest.includes('"id": "agentguard"'));
     assert.equal(config.plugins.entries.agentguard.enabled, true);
     assert.deepEqual(config.plugins.load.paths, [pluginDir]);

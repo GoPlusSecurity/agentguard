@@ -72,6 +72,7 @@ interface OpenClawPluginApi {
   id: string;
   name: string;
   source: string;
+  registrationMode?: string;
   pluginConfig?: Record<string, unknown>;
   on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
   on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
@@ -353,6 +354,10 @@ export function registerOpenClawPlugin(
   api: OpenClawPluginApi,
   options: OpenClawPluginOptions = {}
 ): void {
+  if (api.registrationMode && api.registrationMode !== 'full') {
+    return;
+  }
+
   const adapter = new OpenClawAdapter();
   const runtimeConfig = loadAgentGuardConfig();
   const configuredLevel = options.level ?? readOpenClawConfigLevel(api.pluginConfig);
@@ -510,6 +515,18 @@ export function registerOpenClawPlugin(
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
 }
 
+export interface OpenClawPluginEntry {
+  (api: OpenClawPluginApi): void;
+  id: string;
+  name: string;
+  description: string;
+  configSchema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+  };
+  register(api: OpenClawPluginApi): void;
+}
+
 function mapOpenClawToolToRuntimeAction(
   toolName: string | undefined,
   event?: unknown
@@ -619,9 +636,13 @@ function readOpenClawConfigLevel(
     : undefined;
 }
 
+type OpenClawBeforeToolCallResult =
+  | { block: true; blockReason: string }
+  | { ask: true; askReason: string };
+
 function runtimeResultToBeforeToolCallResult(
   result: ProtectResult | null
-): { block: true; blockReason: string } | undefined {
+): OpenClawBeforeToolCallResult | undefined {
   if (!result) return undefined;
 
   const decision = result.decision.decision;
@@ -637,23 +658,27 @@ function runtimeResultToBeforeToolCallResult(
     .filter(Boolean)
     .slice(0, 3)
     .join(', ');
-  const approval = result.approvalId ? ` Approval: ${result.approvalId}.` : '';
   const action = decision === 'require_approval' ? 'requires approval' : 'blocked';
+  const reason =
+    `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
+    ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
+  if (decision === 'require_approval' && result.approvalChannel === 'agent') {
+    return {
+      ask: true,
+      askReason: reason,
+    };
+  }
   return {
     block: true,
-    blockReason:
-      `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
-      ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
-      (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
-      approval,
+    blockReason: reason,
   };
 }
 
 function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
   return (
     result.policySource === 'cloud-decision' ||
-    Boolean(result.approvalId) ||
     result.decision.riskScore > 0 ||
     result.decision.reasons.length > 0
   );
@@ -664,10 +689,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Default export for OpenClaw plugin registration
+ * Default export for OpenClaw plugin registration.
+ *
+ * OpenClaw's native plugin contract loads an entry object with register(api),
+ * while older loaders may call the default export directly. Functions are
+ * objects in JavaScript, so this export supports both shapes without routing
+ * OpenClaw through the package root default createAgentGuard() factory.
  *
  * Usage: export default from '@goplus/agentguard/openclaw'
  */
-export default function register(api: OpenClawPluginApi): void {
+function register(api: OpenClawPluginApi): void {
   registerOpenClawPlugin(api);
 }
+
+const openClawEntry = Object.defineProperties(register, {
+  id: { enumerable: true, value: 'agentguard' },
+  name: { enumerable: true, value: 'GoPlus AgentGuard' },
+  description: {
+    enumerable: true,
+    value: 'AI agent security framework - blocks dangerous commands, prevents data leaks, and protects secrets',
+  },
+  configSchema: {
+    enumerable: true,
+    value: {
+      type: 'object',
+      properties: {
+        level: {
+          type: 'string',
+          enum: ['strict', 'balanced', 'permissive'],
+          default: 'balanced',
+          description: 'Protection level: strict (block all risky), balanced (block dangerous, confirm risky), permissive (only block critical)',
+        },
+      },
+    },
+  },
+  register: { enumerable: true, value: register },
+}) as OpenClawPluginEntry;
+
+export default openClawEntry;

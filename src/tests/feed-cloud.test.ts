@@ -40,6 +40,23 @@ describe('cloud client — feed methods', () => {
     server.close();
   });
 
+  it('status accepts the public bare status response', async () => {
+    nextResponse = {
+      status: 200,
+      body: {
+        ok: true,
+        service: 'AgentGuard API',
+        version: '1.0.0',
+        detectors: 8,
+      },
+    };
+    const client = new AgentGuardCloudClient({ cloudUrl: baseUrl });
+    const result = await client.status();
+    assert.equal(result.ok, true);
+    assert.equal(result.service, 'AgentGuard API');
+    assert.equal(result.version, '1.0.0');
+  });
+
   it('pullAdvisories returns advisories on 200', async () => {
     nextResponse = {
       status: 200,
@@ -75,9 +92,54 @@ describe('cloud client — feed methods', () => {
   });
 
   it('pullAdvisories throws on other errors', async () => {
-    nextResponse = { status: 500, body: { success: false, error: { message: 'boom' } } };
+    nextResponse = {
+      status: 500,
+      body: {
+        success: false,
+        error: { code: 'CLOUD_DOWN', message: 'boom', details: { retry: true } },
+        meta: { requestId: 'req_test' },
+      },
+    };
     const client = new AgentGuardCloudClient({ cloudUrl: baseUrl, apiKey: 'ag_live_x' });
-    await assert.rejects(() => client.pullAdvisories(), (err: unknown) => err instanceof CloudRequestError && err.status === 500);
+    await assert.rejects(
+      () => client.pullAdvisories(),
+      (err: unknown) =>
+        err instanceof CloudRequestError &&
+        err.status === 500 &&
+        err.code === 'CLOUD_DOWN' &&
+        err.message.includes('boom') &&
+        err.requestId === 'req_test'
+    );
+  });
+
+  it('getAdvisory fetches a single advisory by id', async () => {
+    nextResponse = {
+      status: 200,
+      body: {
+        success: true,
+        data: {
+          id: 'AGS-2026-0042',
+          ecosystem: 'url',
+          severity: 'critical',
+          summary: 'bad url',
+          detailsMd: '',
+          affected: [{ domainExact: 'evil.example' }],
+          publishedAt: '2026-05-13T00:00:00Z',
+        },
+      },
+    };
+    const client = new AgentGuardCloudClient({ cloudUrl: baseUrl, apiKey: 'ag_live_x' });
+    const result = await client.getAdvisory('AGS-2026-0042');
+    assert.equal(result?.id, 'AGS-2026-0042');
+    assert.equal(result?.ecosystem, 'url');
+    assert.match(lastRequest!.url, /\/api\/v1\/feed\/advisories\/AGS-2026-0042$/);
+  });
+
+  it('getAdvisory returns null on 404', async () => {
+    nextResponse = { status: 404, body: { success: false, error: { message: 'not found' } } };
+    const client = new AgentGuardCloudClient({ cloudUrl: baseUrl, apiKey: 'ag_live_x' });
+    const result = await client.getAdvisory('AGS-missing');
+    assert.equal(result, null);
   });
 
   it('reportSelfCheck POSTs the advisoryId + matches', async () => {

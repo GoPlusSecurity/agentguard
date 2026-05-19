@@ -178,7 +178,8 @@ async function main() {
         const client = new AgentGuardCloudClient(config);
         try {
           const status = await client.status();
-          console.log(`✓ Cloud: ${status.status}${status.version ? ` (${status.version})` : ''}`);
+          const label = status.status || (status.ok ? 'ok' : status.service || 'reachable');
+          console.log(`✓ Cloud: ${label}${status.version ? ` (${status.version})` : ''}`);
         } catch {
           console.log('! Cloud: unreachable; local protection remains active');
         }
@@ -226,7 +227,7 @@ async function main() {
       });
       if (!result) return;
       console.log(formatProtectResult(result, Boolean(options.json)));
-      process.exitCode = exitCodeForDecision(result.decision);
+      process.exitCode = exitCodeForDecision(result.decision, result);
     });
 
   program
@@ -397,15 +398,14 @@ async function main() {
 
       let advisory: Advisory | null = null;
       try {
-        const all = await client.pullAdvisories();
-        advisory = all?.find((a) => a.id === advisoryId) ?? null;
+        advisory = await client.getAdvisory(advisoryId);
       } catch (err) {
         console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
         process.exitCode = 1;
         return;
       }
       if (!advisory) {
-        console.error(`No advisory with id "${advisoryId}" found in the current feed window.`);
+        console.error(`No advisory with id "${advisoryId}" found in AgentGuard Cloud.`);
         process.exitCode = 1;
         return;
       }
