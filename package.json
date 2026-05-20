@@ -53,6 +53,7 @@
     "axios": "1.14.0",
     "commander": "12.1.0",
     "glob": "13.0.6",
+    "open": "10.2.0",
     "zod": "3.25.76"
   },
   "devDependencies": {

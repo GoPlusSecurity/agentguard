@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { join, resolve } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
 import { Command } from 'commander';
 import { AgentGuardCloudClient } from './cloud/client.js';
 import {
@@ -13,6 +16,7 @@ import {
   normalizeCloudUrl,
   saveConfig,
 } from './config.js';
+import type { AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
 import { saveCachedPolicy } from './runtime/policy.js';
@@ -382,17 +386,35 @@ async function main() {
 
   program
     .command('checkup')
-    .description('Run a self-check immediately. Without --against-advisory, scans for everything in the feed cache.')
+    .description('Run a local agent health checkup. Use --against-advisory only for targeted threat-feed self-checks.')
     .option('--against-advisory <id>', 'Restrict the check to a single advisory id (fetches it from Cloud if needed)')
     .option('--json', 'Emit machine-readable result')
     .action(async (options) => {
       const config = ensureConfig();
-      const client = new AgentGuardCloudClient(config);
       const advisoryId = options.againstAdvisory as string | undefined;
 
       if (!advisoryId) {
-        console.log('Tip: pass --against-advisory <id> for now. A broader, full-fleet checkup is coming.');
-        console.log('Meanwhile, run `agentguard subscribe` to pull the feed and self-check new entries.');
+        const report = await runLocalHealthCheckup(config);
+        if (options.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          const htmlPath = await generateCheckupHtml(report);
+          printHealthCheckupSummary(report, htmlPath);
+        }
+        appendCheckupAudit(config.auditPath, report);
+        process.exitCode = 0;
+        return;
+      }
+
+      const client = new AgentGuardCloudClient(config);
+      if (!client.connected) {
+        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first.';
+        if (options.json) {
+          console.log(JSON.stringify({ success: false, error: message }, null, 2));
+        } else {
+          console.error(message);
+        }
+        process.exitCode = 1;
         return;
       }
 
@@ -436,6 +458,364 @@ function readStdinIfAvailable(): string {
   } catch {
     return '';
   }
+}
+
+interface CheckupFinding {
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  text: string;
+}
+
+interface CheckupDimension {
+  score: number | null;
+  na?: boolean;
+  findings: CheckupFinding[];
+  details: string;
+}
+
+interface HealthCheckupReport {
+  timestamp: string;
+  composite_score: number;
+  tier: 'S' | 'A' | 'B' | 'F';
+  dimensions: {
+    code_safety: CheckupDimension;
+    credential_safety: CheckupDimension;
+    network_exposure: CheckupDimension;
+    runtime_protection: CheckupDimension;
+    web3_safety: CheckupDimension;
+  };
+  skills_scanned: number;
+  protection_level: string;
+  analysis: string;
+  recommendations: CheckupFinding[];
+}
+
+async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCheckupReport> {
+  const skillRoots = [
+    join(homedir(), '.claude', 'skills'),
+    join(homedir(), '.openclaw', 'skills'),
+    join(homedir(), '.openclaw', 'workspace', 'skills'),
+    join(homedir(), '.qclaw', 'skills'),
+    join(homedir(), '.qclaw', 'workspace', 'skills'),
+    join(homedir(), '.hermes', 'skills'),
+  ];
+  const skillDirs = discoverSkillDirs(skillRoots);
+  const scanner = new SkillScanner({ useExternalScanner: false });
+
+  const codeFindings: CheckupFinding[] = [];
+  let codeScore = skillDirs.length === 0 ? 70 : 100;
+  if (skillDirs.length === 0) {
+    codeFindings.push({ severity: 'LOW', text: 'No installed third-party skills were found to audit.' });
+  }
+  for (const dir of skillDirs) {
+    const result = await scanner.quickScan(dir);
+    const name = dir.split(/[\\/]/).pop() || dir;
+    if (result.risk_level === 'critical') codeScore -= 15;
+    if (result.risk_level === 'high') codeScore -= 8;
+    if (result.risk_level === 'medium') codeScore -= 3;
+    if (result.risk_level !== 'low') {
+      codeFindings.push({
+        severity: riskLevelToSeverity(result.risk_level),
+        text: `${name}: ${result.summary}${result.risk_tags.length ? ` (${result.risk_tags.join(', ')})` : ''}`,
+      });
+    }
+  }
+  codeScore = clampScore(codeScore);
+
+  const credential = checkCredentialSafety(skillDirs);
+  const network = await checkNetworkExposure(config);
+  const runtime = checkRuntimeProtection(config, skillDirs.length);
+  const web3 = checkWeb3Safety(skillDirs);
+
+  const dimensions = {
+    code_safety: {
+      score: codeScore,
+      findings: codeFindings,
+      details: `${skillDirs.length} installed skill(s) scanned with AgentGuard rules.`,
+    },
+    credential_safety: credential,
+    network_exposure: network,
+    runtime_protection: runtime,
+    web3_safety: web3,
+  };
+  const composite = calculateCompositeScore(dimensions);
+  const recommendations = Object.values(dimensions)
+    .flatMap((d) => d.findings)
+    .filter((f) => f.severity !== 'LOW')
+    .slice(0, 8);
+
+  return {
+    timestamp: new Date().toISOString(),
+    composite_score: composite,
+    tier: tierForScore(composite),
+    dimensions,
+    skills_scanned: skillDirs.length,
+    protection_level: config.level,
+    analysis: buildHealthAnalysis(composite, dimensions),
+    recommendations,
+  };
+}
+
+function discoverSkillDirs(roots: string[]): string[] {
+  const dirs: string[] = [];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    let entries;
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      if (existsSync(join(dir, 'SKILL.md'))) dirs.push(dir);
+    }
+  }
+  return dirs;
+}
+
+function checkCredentialSafety(skillDirs: string[]): CheckupDimension {
+  let score = 100;
+  const findings: CheckupFinding[] = [];
+  for (const [path, severity] of [
+    [join(homedir(), '.ssh'), 'HIGH'],
+    [join(homedir(), '.gnupg'), 'MEDIUM'],
+  ] as const) {
+    const mode = permissionMode(path);
+    if (mode !== null && mode > 0o700) {
+      score -= severity === 'HIGH' ? 25 : 15;
+      findings.push({ severity, text: `${path} permissions are ${mode.toString(8)}; expected 700 or stricter.` });
+    }
+  }
+
+  const secretPatterns = [
+    { re: /0x[a-fA-F0-9]{64}|-----BEGIN [A-Z ]*PRIVATE KEY-----/, severity: 'CRITICAL' as const, label: 'Plaintext private key pattern' },
+    { re: /\b(seed_phrase|mnemonic)\b/i, severity: 'CRITICAL' as const, label: 'Mnemonic or seed phrase marker' },
+    { re: /\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b/, severity: 'HIGH' as const, label: 'API key or token pattern' },
+  ];
+  for (const dir of skillDirs) {
+    const manifest = join(dir, 'SKILL.md');
+    if (!existsSync(manifest)) continue;
+    let body = '';
+    try {
+      body = readFileSync(manifest, 'utf8').slice(0, 256 * 1024);
+    } catch {
+      continue;
+    }
+    for (const pattern of secretPatterns) {
+      if (!pattern.re.test(body)) continue;
+      score -= pattern.severity === 'CRITICAL' ? 25 : 15;
+      findings.push({ severity: pattern.severity, text: `${pattern.label} found in ${manifest}.` });
+    }
+  }
+  return {
+    score: clampScore(score),
+    findings,
+    details: findings.length ? `${findings.length} credential hygiene issue(s) found.` : 'Credential permissions and scanned manifests look clean.',
+  };
+}
+
+async function checkNetworkExposure(config: AgentGuardConfig): Promise<CheckupDimension> {
+  let score = 100;
+  const findings: CheckupFinding[] = [];
+  const listeners = await runCommandText('lsof', ['-i', '-P', '-n']);
+  for (const port of ['2375', '3306', '6379', '27017']) {
+    const exposed = new RegExp(`(\\*|0\\.0\\.0\\.0):${port}\\b`).test(listeners);
+    if (exposed) {
+      score -= 25;
+      findings.push({ severity: 'HIGH', text: `High-risk service appears exposed on 0.0.0.0:${port}.` });
+    }
+  }
+
+  const cron = await runCommandText('crontab', ['-l']);
+  if (/(curl\b.*\|\s*(bash|sh)|wget\b.*\|\s*(bash|sh)|\.ssh)/i.test(cron)) {
+    score -= 30;
+    findings.push({ severity: 'HIGH', text: 'Suspicious cron entry found that downloads shell code or accesses SSH material.' });
+  }
+
+  const sensitiveEnvNames = Object.keys(process.env).filter((name) => /PRIVATE_KEY|MNEMONIC|SECRET|PASSWORD/i.test(name));
+  if (sensitiveEnvNames.length > 0) {
+    score -= 20;
+    findings.push({ severity: 'MEDIUM', text: `Sensitive environment variable names are present: ${sensitiveEnvNames.slice(0, 8).join(', ')}.` });
+  }
+
+  for (const path of [join(homedir(), '.openclaw', 'openclaw.json'), join(homedir(), '.openclaw', 'devices', 'paired.json')]) {
+    const mode = permissionMode(path);
+    if (mode !== null && mode > 0o600) {
+      score -= 15;
+      findings.push({ severity: 'MEDIUM', text: `${path} permissions are ${mode.toString(8)}; expected 600 or stricter.` });
+    }
+  }
+
+  return {
+    score: clampScore(score),
+    findings,
+    details: findings.length ? `${findings.length} network/system exposure issue(s) found.` : 'No dangerous ports, cron entries, or config permission issues found.',
+  };
+}
+
+function checkRuntimeProtection(config: AgentGuardConfig, skillsScanned: number): CheckupDimension {
+  let score = 0;
+  const findings: CheckupFinding[] = [];
+  const hookFiles = [
+    join(homedir(), '.claude', 'settings.json'),
+    join(homedir(), '.openclaw', 'openclaw.json'),
+    join(homedir(), '.hermes', 'config.yaml'),
+  ];
+  const hasHook = hookFiles.some((path) => {
+    if (!existsSync(path)) return false;
+    try {
+      return /agentguard|guard-hook|hermes-hook/i.test(readFileSync(path, 'utf8'));
+    } catch {
+      return false;
+    }
+  });
+  if (hasHook) score += 40;
+  else findings.push({ severity: 'HIGH', text: 'No AgentGuard runtime hook was detected in known agent configuration files.' });
+
+  if (existsSync(config.auditPath)) score += 30;
+  else findings.push({ severity: 'MEDIUM', text: 'No AgentGuard audit log exists yet, so runtime threat history is unavailable.' });
+
+  if (skillsScanned > 0) score += 30;
+  else findings.push({ severity: 'MEDIUM', text: 'No installed skills were scanned during this checkup.' });
+
+  return {
+    score: clampScore(score),
+    findings,
+    details: findings.length ? `${findings.length} runtime protection gap(s) found.` : 'Runtime hooks, audit logging, and skill scanning are present.',
+  };
+}
+
+function checkWeb3Safety(skillDirs: string[]): CheckupDimension {
+  const web3Detected = ['GOPLUS_API_KEY', 'CHAIN_ID', 'RPC_URL'].some((name) => process.env[name]) ||
+    skillDirs.some((dir) => /web3|wallet|chain|defi|token/i.test(dir));
+  if (!web3Detected) {
+    return { score: null, na: true, findings: [], details: 'No Web3 usage detected.' };
+  }
+
+  const findings: CheckupFinding[] = [];
+  let score = process.env.GOPLUS_API_KEY ? 100 : 70;
+  if (!process.env.GOPLUS_API_KEY) {
+    findings.push({ severity: 'MEDIUM', text: 'Web3 usage detected but GOPLUS_API_KEY is not configured for transaction checks.' });
+  }
+  return {
+    score,
+    findings,
+    details: findings.length ? 'Web3 usage detected with missing transaction security configuration.' : 'Web3 safety configuration is present.',
+  };
+}
+
+function permissionMode(path: string): number | null {
+  if (!existsSync(path)) return null;
+  try {
+    return statSync(path).mode & 0o777;
+  } catch {
+    return null;
+  }
+}
+
+function runCommandText(command: string, args: string[]): Promise<string> {
+  return new Promise((resolvePromise) => {
+    try {
+      const child = execFile(command, args, { timeout: 2000 }, (error, stdout, stderr) => {
+        if (error) resolvePromise('');
+        else resolvePromise(`${stdout || ''}${stderr || ''}`);
+      });
+      child.on('error', () => resolvePromise(''));
+    } catch {
+      resolvePromise('');
+    }
+  });
+}
+
+function calculateCompositeScore(dimensions: HealthCheckupReport['dimensions']): number {
+  const web3Score = dimensions.web3_safety.score;
+  if (web3Score === null || dimensions.web3_safety.na) {
+    return Math.round(
+      (dimensions.code_safety.score ?? 0) * 0.294 +
+      (dimensions.credential_safety.score ?? 0) * 0.294 +
+      (dimensions.network_exposure.score ?? 0) * 0.235 +
+      (dimensions.runtime_protection.score ?? 0) * 0.176
+    );
+  }
+  return Math.round(
+    (dimensions.code_safety.score ?? 0) * 0.25 +
+    (dimensions.credential_safety.score ?? 0) * 0.25 +
+    (dimensions.network_exposure.score ?? 0) * 0.20 +
+    (dimensions.runtime_protection.score ?? 0) * 0.15 +
+    web3Score * 0.15
+  );
+}
+
+async function generateCheckupHtml(report: HealthCheckupReport): Promise<string> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'agentguard-checkup-'));
+  const dataPath = join(tempDir, 'data.json');
+  writeFileSync(dataPath, JSON.stringify(report, null, 2), 'utf8');
+  const scriptPath = resolve(__dirname, '..', 'skills', 'agentguard', 'scripts', 'checkup-report.js');
+  return new Promise((resolvePromise, reject) => {
+    execFile('node', [scriptPath, '--file', dataPath], { timeout: 6000 }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr || error.message));
+      else resolvePromise(stdout.trim().split(/\r?\n/).pop() || '');
+    });
+  });
+}
+
+function printHealthCheckupSummary(report: HealthCheckupReport, htmlPath: string): void {
+  const totalFindings = Object.values(report.dimensions).reduce((sum, dim) => sum + dim.findings.length, 0);
+  console.log('AgentGuard Health Checkup');
+  console.log(`Overall Health Score: ${report.composite_score}/100 (Tier ${report.tier})`);
+  console.log(`Findings: ${totalFindings}`);
+  console.log(`Skills scanned: ${report.skills_scanned}`);
+  for (const [name, dim] of Object.entries(report.dimensions)) {
+    const score = dim.na || dim.score === null ? 'N/A' : `${dim.score}/100`;
+    console.log(`- ${name}: ${score} - ${dim.details}`);
+  }
+  console.log(`Full visual report: ${htmlPath}`);
+}
+
+function appendCheckupAudit(auditPath: string, report: HealthCheckupReport): void {
+  const totalFindings = Object.values(report.dimensions).reduce((sum, dim) => sum + dim.findings.length, 0);
+  try {
+    appendFileSync(auditPath, `${JSON.stringify({
+      timestamp: report.timestamp,
+      event: 'checkup',
+      composite_score: report.composite_score,
+      tier: report.tier,
+      checks: 5,
+      findings: totalFindings,
+      skills_scanned: report.skills_scanned,
+    })}\n`, { mode: 0o600 });
+  } catch {
+    // Checkup should still succeed if audit logging is unavailable.
+  }
+}
+
+function buildHealthAnalysis(score: number, dimensions: HealthCheckupReport['dimensions']): string {
+  const weak = Object.entries(dimensions)
+    .filter(([, dim]) => !dim.na && dim.score !== null && dim.score < 70)
+    .map(([name]) => name.replace(/_/g, ' '));
+  if (weak.length === 0) {
+    return `Overall posture is healthy at ${score}/100. AgentGuard did not find major weaknesses across the local skill, credential, network, and runtime checks.`;
+  }
+  return `Overall posture is ${score}/100. The areas needing attention are ${weak.join(', ')}; review the findings and fix the highest-severity items first.`;
+}
+
+function tierForScore(score: number): HealthCheckupReport['tier'] {
+  if (score >= 90) return 'S';
+  if (score >= 70) return 'A';
+  if (score >= 50) return 'B';
+  return 'F';
+}
+
+function clampScore(score: number): number {
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function riskLevelToSeverity(risk: string): CheckupFinding['severity'] {
+  if (risk === 'critical') return 'CRITICAL';
+  if (risk === 'high') return 'HIGH';
+  if (risk === 'medium') return 'MEDIUM';
+  return 'LOW';
 }
 
 interface SubscribeSummary {
