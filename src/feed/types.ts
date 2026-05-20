@@ -118,7 +118,7 @@ export interface SelfCheckMatch {
    *  caller's responsibility before reporting upstream. */
   path: string;
   /** Which matcher hit. Useful for explaining "why" to the user. */
-  matchedBy: 'namePattern' | 'sha256' | 'bodyRegex';
+  matchedBy: 'namePattern' | 'sha256' | 'bodyRegex' | 'urlPattern' | 'domainExact';
   /** When matched by hash, this is the local hash that equalled the advisory's. */
   hash?: string;
 }

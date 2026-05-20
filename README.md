@@ -68,20 +68,24 @@ printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/in
 AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gopluslabs.io
 
 # Optional: subscribe to AgentGuard's threat-intelligence feed. Pulls newly
-# published advisories from Cloud, runs a self-check against your installed
-# skills, and reports matches back. Run in cron / on boot.
+# published advisories from Cloud and asks you to review them.
 agentguard subscribe
 
-# Optional: after one subscribe run, install an OpenClaw isolated cron job that
-# repeats the feed self-check every 15 minutes and only notifies on matches.
-# Requires the local OpenClaw Gateway at 127.0.0.1:18789.
-agentguard subscribe --install-cron
+# Run the full quiet flow once: pull advisories, self-check local skills, and
+# report local matches back to Cloud.
+agentguard subscribe --quiet
 
-# Override the interval if needed
-agentguard subscribe --install-cron --interval-minutes 5
+# Optional: install an OpenClaw isolated cron job that checks every hour and
+# asks you to review newly published advisories.
+# Requires the local OpenClaw Gateway at 127.0.0.1:18789.
+agentguard subscribe --cron "0 * * * *"
+
+# Or install the hourly cron in quiet mode so matches are self-checked and
+# reported automatically.
+agentguard subscribe --cron "0 * * * *" --quiet
 
 # Replace an existing OpenClaw cron job with the same name
-agentguard subscribe --install-cron --force
+agentguard subscribe --cron "0 * * * *" --force
 
 # Machine-readable output always includes a cron status object:
 # cron.requested, cron.installed, and optional cron.result when installation succeeds.
