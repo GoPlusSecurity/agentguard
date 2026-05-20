@@ -424,7 +424,10 @@ async function main() {
         if (options.json) {
           console.log(JSON.stringify(report, null, 2));
         } else {
-          const htmlPath = await generateCheckupHtml(report);
+          const htmlPath = await generateCheckupHtml(report).catch((err) => {
+            console.error(`! Could not generate visual checkup report: ${(err as Error).message}`);
+            return null;
+          });
           printHealthCheckupSummary(report, htmlPath);
         }
         appendCheckupAudit(config.auditPath, report);
@@ -777,7 +780,12 @@ async function generateCheckupHtml(report: HealthCheckupReport): Promise<string>
   const tempDir = mkdtempSync(join(tmpdir(), 'agentguard-checkup-'));
   const dataPath = join(tempDir, 'data.json');
   writeFileSync(dataPath, JSON.stringify(report, null, 2), 'utf8');
-  const scriptPath = resolve(__dirname, '..', 'skills', 'agentguard', 'scripts', 'checkup-report.js');
+  const scriptPath = process.env.AGENTGUARD_CHECKUP_REPORT_SCRIPT
+    ? resolve(process.env.AGENTGUARD_CHECKUP_REPORT_SCRIPT)
+    : resolve(__dirname, '..', 'skills', 'agentguard', 'scripts', 'checkup-report.js');
+  if (!existsSync(scriptPath)) {
+    throw new Error(`report generator not found at ${scriptPath}`);
+  }
   return new Promise((resolvePromise, reject) => {
     execFile('node', [scriptPath, '--file', dataPath], { timeout: 6000 }, (error, stdout, stderr) => {
       if (error) reject(new Error(stderr || error.message));
@@ -786,7 +794,7 @@ async function generateCheckupHtml(report: HealthCheckupReport): Promise<string>
   });
 }
 
-function printHealthCheckupSummary(report: HealthCheckupReport, htmlPath: string): void {
+function printHealthCheckupSummary(report: HealthCheckupReport, htmlPath?: string | null): void {
   const totalFindings = Object.values(report.dimensions).reduce((sum, dim) => sum + dim.findings.length, 0);
   console.log('AgentGuard Health Checkup');
   console.log(`Overall Health Score: ${report.composite_score}/100 (Tier ${report.tier})`);
@@ -796,7 +804,11 @@ function printHealthCheckupSummary(report: HealthCheckupReport, htmlPath: string
     const score = dim.na || dim.score === null ? 'N/A' : `${dim.score}/100`;
     console.log(`- ${name}: ${score} - ${dim.details}`);
   }
-  console.log(`Full visual report: ${htmlPath}`);
+  if (htmlPath) {
+    console.log(`Full visual report: ${htmlPath}`);
+  } else {
+    console.log('Full visual report: unavailable (text summary shown above)');
+  }
 }
 
 function appendCheckupAudit(auditPath: string, report: HealthCheckupReport): void {

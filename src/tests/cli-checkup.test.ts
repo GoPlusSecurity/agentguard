@@ -8,11 +8,15 @@ import { join, resolve } from 'node:path';
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 
-function runCli(args: string[], home: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runCli(
+  args: string[],
+  home: string,
+  env: Record<string, string> = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
     const child = spawn('node', [CLI_PATH, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, ...env, AGENTGUARD_HOME: home },
     });
     let stdout = '';
     let stderr = '';
@@ -44,6 +48,20 @@ describe('CLI checkup command modes', () => {
     assert.equal(parsed.skills_scanned, 0);
     assert.equal(parsed.advisoryCache, undefined);
     assert.equal(parsed.results, undefined);
+  });
+
+  it('plain checkup falls back to text output when the HTML report generator is not packaged', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-checkup-'));
+    const missingScript = join(home, 'missing-checkup-report.js');
+
+    const result = await runCli(['checkup'], home, {
+      AGENTGUARD_CHECKUP_REPORT_SCRIPT: missingScript,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /AgentGuard Health Checkup/);
+    assert.match(result.stdout, /Full visual report: unavailable/);
+    assert.match(result.stderr, /Could not generate visual checkup report/);
   });
 
   it('requires Cloud connection for --against-advisory mode', async () => {

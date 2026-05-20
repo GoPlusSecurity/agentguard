@@ -57,10 +57,13 @@ export async function installOpenClawThreatFeedCron(
     };
   }
 
+  const mode = options.quiet ? 'quiet' : 'manual';
   const command = `agentguard subscribe${options.quiet ? ' --quiet' : ''} --json --cron-run`;
   const description = `AgentGuard Cloud threat feed subscription (${schedule})`;
   const message = [
-    `Run \`${command}\`.`,
+    `Mode: ${mode}.`,
+    `Command: \`${command}\`.`,
+    `Run exactly the command above.`,
     '',
     'Rules:',
     '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a notification.',
@@ -91,6 +94,10 @@ export async function installOpenClawThreatFeedCron(
           kind: 'agentTurn',
           message,
           timeoutSeconds: 300,
+          agentguard: {
+            mode,
+            command,
+          },
         },
         delivery: {
           mode: 'none',

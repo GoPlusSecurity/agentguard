@@ -14,6 +14,8 @@
 
 ### Fixed
 - Fixed disconnected targeted checkup behavior so `agentguard checkup --against-advisory <id>` requires an active Cloud connection instead of falling back to local advisory cache.
+- Fixed plain `agentguard checkup` so it falls back to the text summary when the optional visual report generator is unavailable in packaged installs.
+- Fixed OpenClaw cron payloads to persist the installed manual/quiet mode and exact subscribe command.
 - Fixed `domainExact` self-check matching so exact domains do not match substrings such as `evil.example.com` or `not-evil.example`.
 
 ### Removed

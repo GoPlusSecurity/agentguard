@@ -49,6 +49,12 @@ describe('feed/cron', () => {
     assert.deepEqual(job.delivery, { mode: 'none' });
     assert.equal(job.sessionTarget, 'isolated');
     assert.equal(job.payload.kind, 'agentTurn');
+    assert.deepEqual(job.payload.agentguard, {
+      mode: 'manual',
+      command: 'agentguard subscribe --json --cron-run',
+    });
+    assert.match(job.payload.message, /Mode: manual/);
+    assert.match(job.payload.message, /Command: `agentguard subscribe --json --cron-run`/);
     assert.match(job.payload.message, /agentguard subscribe --json --cron-run/);
     assert.match(job.payload.message, /hardFailures/);
   });
@@ -77,6 +83,12 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove', 'cron.add']);
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
     assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
+    assert.deepEqual(gateway.calls[2].params[0].payload.agentguard, {
+      mode: 'quiet',
+      command: 'agentguard subscribe --quiet --json --cron-run',
+    });
+    assert.match(gateway.calls[2].params[0].payload.message, /Mode: quiet/);
+    assert.match(gateway.calls[2].params[0].payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
     assert.match(gateway.calls[2].params[0].payload.message, /agentguard subscribe --quiet --json --cron-run/);
   });
 
