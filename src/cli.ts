@@ -28,7 +28,7 @@ import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js'
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import {
   installOpenClawThreatFeedCron,
-  parseIntervalMinutes,
+  validateCronExpression,
   type OpenClawCronInstallResult,
 } from './feed/cron.js';
 
@@ -239,10 +239,10 @@ async function main() {
     .description('Pull new threat-feed advisories from AgentGuard Cloud and run a self-check against locally installed skills')
     .option('--since <iso>', 'Override the persisted last-pulled timestamp')
     .option('--json', 'Emit machine-readable summary instead of human text')
+    .option('--quiet', 'Run the full pull, self-check, and match-reporting flow with minimal output')
     .option('--no-report', 'Skip uploading self-check results back to Cloud')
-    .option('--install-cron', 'After this run, install an OpenClaw cron job that reruns subscribe on the configured interval')
+    .option('--cron <expr>', 'Install an OpenClaw cron job with a five-field cron expression, for example "0 * * * *"')
     .option('--cron-name <name>', 'OpenClaw cron job name', 'agentguard-threat-feed')
-    .option('--interval-minutes <minutes>', 'OpenClaw cron interval in minutes', '15')
     .option('--force', 'Replace an existing OpenClaw cron job with the same name')
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
     .action(async (options) => {
@@ -250,6 +250,10 @@ async function main() {
       const client = new AgentGuardCloudClient(config);
       const state = loadFeedState();
       const since = (options.since as string | undefined) ?? state.lastPulledAt;
+      const quiet = Boolean(options.quiet);
+      const cronExpression = options.cron && !options.cronRun
+        ? validateCronExpression(options.cron as string)
+        : undefined;
 
       let advisories: Advisory[] | null;
       try {
@@ -263,7 +267,7 @@ async function main() {
         // 404 — older Cloud build without the feed endpoint. Not an error.
         if (options.json) {
           console.log(JSON.stringify({ supported: false, shouldNotify: false, results: [], cron: { requested: false, installed: false } }));
-        } else {
+        } else if (!quiet) {
           console.log('AgentGuard Cloud does not expose /api/v1/feed/advisories yet — nothing to do.');
         }
         return;
@@ -280,46 +284,55 @@ async function main() {
       let latestPublishedAt = state.lastPulledAt;
       let hardFailures = 0;
 
-      for (const advisory of fresh) {
-        let processed = true;
-        let result: SelfCheckResult;
-        try {
-          result = await runSelfCheckForAdvisory(advisory);
-        } catch (err) {
-          // runSelfCheck shouldn't throw, but if it does the advisory has
-          // not been evaluated — don't mark it seen and don't advance.
-          console.error(`! Self-check threw for ${advisory.id}: ${(err as Error).message}`);
-          hardFailures += 1;
-          cursorOk = false;
-          continue;
-        }
-        results.push(result);
-
-        if (options.report !== false && client.connected && result.matchedArtifacts.length > 0) {
-          // Report is on the critical path — if Cloud doesn't see the
-          // match, we must NOT mark the advisory seen, otherwise a
-          // transient network blip silently buries a real hit.
+      if (quiet) {
+        for (const advisory of fresh) {
+          let processed = true;
+          let result: SelfCheckResult;
           try {
-            await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
-              elapsedMs: result.elapsedMs,
-              warnings: result.warnings,
-            });
+            result = await runSelfCheckForAdvisory(advisory);
           } catch (err) {
-            console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
-            processed = false;
+            // runSelfCheck shouldn't throw, but if it does the advisory has
+            // not been evaluated — don't mark it seen and don't advance.
+            console.error(`! Self-check threw for ${advisory.id}: ${(err as Error).message}`);
             hardFailures += 1;
+            cursorOk = false;
+            continue;
+          }
+          results.push(result);
+
+          if (options.report !== false && client.connected && result.matchedArtifacts.length > 0) {
+            // Report is on the critical path — if Cloud doesn't see the
+            // match, we must NOT mark the advisory seen, otherwise a
+            // transient network blip silently buries a real hit.
+            try {
+              await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+                elapsedMs: result.elapsedMs,
+                warnings: result.warnings,
+              });
+            } catch (err) {
+              console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
+              processed = false;
+              hardFailures += 1;
+            }
+          }
+
+          if (processed) {
+            Object.assign(state, markAdvisorySeen(state, advisory.id));
+            if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
+              latestPublishedAt = advisory.publishedAt;
+            }
+          } else {
+            // From this point we no longer advance the pull cursor — the
+            // failed advisory must be re-pulled on the next run.
+            cursorOk = false;
           }
         }
-
-        if (processed) {
+      } else {
+        for (const advisory of fresh) {
           Object.assign(state, markAdvisorySeen(state, advisory.id));
           if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
             latestPublishedAt = advisory.publishedAt;
           }
-        } else {
-          // From this point we no longer advance the pull cursor — the
-          // failed advisory must be re-pulled on the next run.
-          cursorOk = false;
         }
       }
 
@@ -331,16 +344,19 @@ async function main() {
         supported: true,
         pulled: advisories.length,
         fresh: fresh.length,
+        freshAdvisories: fresh,
         results,
         hardFailures,
+        quiet,
       });
 
-      if (options.installCron && !options.cronRun) {
+      if (options.cron && !options.cronRun) {
         summary.cron.requested = true;
         try {
           summary.cron.result = await installOpenClawThreatFeedCron({
             name: options.cronName as string,
-            intervalMinutes: parseIntervalMinutes(options.intervalMinutes),
+            cronExpression: cronExpression!,
+            quiet,
             force: Boolean(options.force),
           });
           summary.cron.installed = true;
@@ -355,8 +371,18 @@ async function main() {
         return;
       }
 
+      if (quiet && fresh.length === 0 && !summary.cron.result) {
+        process.exitCode = 0;
+        return;
+      }
+
       console.log(`Pulled ${advisories.length} advisory record(s); ${fresh.length} new.`);
-      if (fresh.length > 0) {
+      if (!quiet && fresh.length > 0) {
+        console.log('New threat-feed advisories found. Review and handle them manually:');
+        for (const advisory of fresh) {
+          console.log(`  - ${advisory.id} [${advisory.severity}] ${advisory.summary}`);
+        }
+      } else if (quiet && fresh.length > 0) {
         console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
         for (const r of results) {
           if (r.matchedArtifacts.length === 0) continue;
@@ -368,8 +394,8 @@ async function main() {
       }
       if (summary.cron.result) {
         const action = summary.cron.result.created ? 'Installed' : 'OpenClaw cron job already exists';
-        console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}).`);
-        console.log('Notification rule: only send a message from the isolated cron session when threat-feed matches are found.');
+        console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}, ${summary.cron.result.timezone}).`);
+        console.log('Notification rule: non-quiet cron notifies on new advisories; quiet cron notifies on local matches.');
       }
 
       // Exit codes: 2 = matches found, 1 = at least one advisory failed
@@ -377,7 +403,7 @@ async function main() {
       if (hardFailures > 0) {
         console.error(`! ${hardFailures} advisory record(s) failed to process and will be re-pulled next run.`);
         process.exitCode = 1;
-      } else if (totalMatches > 0) {
+      } else if (quiet && totalMatches > 0) {
         process.exitCode = 2;
       } else {
         process.exitCode = 0;
@@ -842,11 +868,15 @@ function buildSubscribeSummary(options: {
   supported: boolean;
   pulled: number;
   fresh: number;
+  freshAdvisories: Advisory[];
   results: SelfCheckResult[];
   hardFailures: number;
+  quiet: boolean;
 }): SubscribeSummary {
   const matched = options.results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
-  const shouldNotify = options.supported && matched > 0 && options.hardFailures === 0;
+  const shouldNotify = options.supported
+    && options.hardFailures === 0
+    && (options.quiet ? matched > 0 : options.fresh > 0);
   const summary: SubscribeSummary = {
     supported: options.supported,
     pulled: options.pulled,
@@ -860,13 +890,30 @@ function buildSubscribeSummary(options: {
       installed: false,
     },
   };
-  if (shouldNotify) {
+  if (shouldNotify && options.quiet) {
     summary.notification = {
       title: `AgentGuard detected ${matched} threat-feed match${matched === 1 ? '' : 'es'}`,
       body: formatThreatFeedNotification(options.results),
     };
+  } else if (shouldNotify) {
+    summary.notification = {
+      title: `AgentGuard found ${options.fresh} new threat-feed advisor${options.fresh === 1 ? 'y' : 'ies'}`,
+      body: formatNewAdvisoryNotification(options.freshAdvisories),
+    };
   }
   return summary;
+}
+
+function formatNewAdvisoryNotification(advisories: Advisory[]): string {
+  const lines = ['AgentGuard found new threat-feed advisories that need manual review:'];
+  for (const advisory of advisories.slice(0, 10)) {
+    lines.push(`- ${advisory.id} [${advisory.severity}] ${advisory.summary}`);
+  }
+  if (advisories.length > 10) {
+    lines.push(`- ... ${advisories.length - 10} more`);
+  }
+  lines.push('Run `agentguard subscribe --quiet` to execute the local self-check and report matches automatically.');
+  return lines.join('\n');
 }
 
 function formatThreatFeedNotification(results: SelfCheckResult[]): string {

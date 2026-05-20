@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   installOpenClawThreatFeedCron,
   openClawGatewayRequest,
-  parseIntervalMinutes,
+  validateCronExpression,
 } from '../feed/cron.js';
 
 type RpcCall = { method: string; params: any };
@@ -24,38 +24,40 @@ function fakeGateway(jobs: Array<{ id: string; name: string }> = []): {
 }
 
 describe('feed/cron', () => {
-  it('parseIntervalMinutes rejects non-numeric and out-of-range values', () => {
-    assert.equal(parseIntervalMinutes('15'), 15);
-    assert.throws(() => parseIntervalMinutes('5abc'), /Invalid --interval-minutes/);
-    assert.throws(() => parseIntervalMinutes('0'), /Invalid --interval-minutes/);
-    assert.throws(() => parseIntervalMinutes('60'), /Invalid --interval-minutes/);
+  it('validateCronExpression rejects non-five-field values', () => {
+    assert.equal(validateCronExpression('0 * * * *'), '0 * * * *');
+    assert.equal(validateCronExpression('  */5   * * * *  '), '*/5 * * * *');
+    assert.throws(() => validateCronExpression('0 * * *'), /Invalid --cron/);
+    assert.throws(() => validateCronExpression('0 * * * * *'), /Invalid --cron/);
   });
 
-  it('adds an OpenClaw cron job with silent delivery and interval schedule', async () => {
+  it('adds an OpenClaw cron job with silent delivery and cron schedule', async () => {
     const gateway = fakeGateway();
 
     const result = await installOpenClawThreatFeedCron(
-      { name: 'agentguard-threat-feed', intervalMinutes: 15, force: false },
+      { name: 'agentguard-threat-feed', cronExpression: '0 * * * *', quiet: false, force: false, timezone: 'Asia/Shanghai' },
       { request: gateway.request }
     );
 
     assert.equal(result.created, true);
+    assert.equal(result.schedule, '0 * * * *');
+    assert.equal(result.timezone, 'Asia/Shanghai');
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
     const job = gateway.calls[1].params[0];
     assert.equal(job.name, 'agentguard-threat-feed');
-    assert.deepEqual(job.schedule, { kind: 'every', everyMs: 900000 });
+    assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'Asia/Shanghai' });
     assert.deepEqual(job.delivery, { mode: 'none' });
     assert.equal(job.sessionTarget, 'isolated');
     assert.equal(job.payload.kind, 'agentTurn');
+    assert.match(job.payload.message, /agentguard subscribe --json --cron-run/);
     assert.match(job.payload.message, /hardFailures/);
-    assert.equal('timezone' in job, false);
   });
 
   it('leaves an existing cron job untouched unless force is set', async () => {
     const gateway = fakeGateway([{ id: 'job-1', name: 'agentguard-threat-feed' }]);
 
     const result = await installOpenClawThreatFeedCron(
-      { name: 'agentguard-threat-feed', intervalMinutes: 15, force: false },
+      { name: 'agentguard-threat-feed', cronExpression: '0 * * * *', quiet: false, force: false, timezone: 'UTC' },
       { request: gateway.request }
     );
 
@@ -67,14 +69,15 @@ describe('feed/cron', () => {
     const gateway = fakeGateway([{ id: 'job-1', name: 'agentguard-threat-feed' }]);
 
     const result = await installOpenClawThreatFeedCron(
-      { name: 'agentguard-threat-feed', intervalMinutes: 5, force: true },
+      { name: 'agentguard-threat-feed', cronExpression: '*/5 * * * *', quiet: true, force: true, timezone: 'UTC' },
       { request: gateway.request }
     );
 
     assert.equal(result.created, true);
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove', 'cron.add']);
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
-    assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'every', everyMs: 300000 });
+    assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
+    assert.match(gateway.calls[2].params[0].payload.message, /agentguard subscribe --quiet --json --cron-run/);
   });
 
   it('does not add a replacement if force removal fails', async () => {
@@ -82,7 +85,7 @@ describe('feed/cron', () => {
     await assert.rejects(
       () =>
         installOpenClawThreatFeedCron(
-          { name: 'agentguard-threat-feed', intervalMinutes: 5, force: true },
+          { name: 'agentguard-threat-feed', cronExpression: '*/5 * * * *', quiet: false, force: true, timezone: 'UTC' },
           {
             async request(method, params) {
               calls.push({ method, params });

@@ -87,7 +87,7 @@ Supported CLI commands and options:
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
-| `agentguard subscribe` | `--since <iso>`, `--json`, `--no-report`, `--install-cron`, `--cron-name <name>`, `--interval-minutes <minutes>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and self-checks local skills |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
 If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
@@ -180,20 +180,23 @@ Examples:
 
 ```bash
 agentguard subscribe
+agentguard subscribe --quiet
 agentguard subscribe --json
 agentguard subscribe --since 2026-05-01T00:00:00.000Z
 agentguard subscribe --no-report
-agentguard subscribe --install-cron
-agentguard subscribe --install-cron --cron-name agentguard-threat-feed
-agentguard subscribe --install-cron --interval-minutes 5
-agentguard subscribe --install-cron --force
+agentguard subscribe --cron "0 * * * *"
+agentguard subscribe --cron "0 * * * *" --quiet
+agentguard subscribe --cron "0 * * * *" --cron-name agentguard-threat-feed
+agentguard subscribe --cron "0 * * * *" --force
 ```
 
-When `--install-cron` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789`. It runs every 15 minutes by default. Pass `--interval-minutes <n>` to override the cadence and `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` and only sends the configured notification when `shouldNotify` is `true`.
+Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
+
+When `--cron <expr>` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789` using a standard five-field crontab expression such as `"0 * * * *"`. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` or `agentguard subscribe --quiet --json --cron-run` depending on whether `--quiet` was used during installation. Non-quiet cron sends the configured notification when new advisories are found; quiet cron sends it when local matches are found.
 
 `agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
 
-`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud. `--cron-run` is internal and should only be used by the OpenClaw cron prompt unless the user explicitly asks to reproduce cron behavior.
+`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud in quiet mode. `--cron-run` is internal and should only be used by the OpenClaw cron prompt unless the user explicitly asks to reproduce cron behavior.
 
 ---
 

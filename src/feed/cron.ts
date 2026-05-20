@@ -3,6 +3,7 @@ import http from 'node:http';
 export interface OpenClawCronInstallResult {
   name: string;
   schedule: string;
+  timezone: string;
   created: boolean;
 }
 
@@ -18,44 +19,54 @@ interface OpenClawCronJob {
   name?: string;
 }
 
-export function parseIntervalMinutes(value: string): number {
-  if (!/^\d+$/.test(value)) {
-    throw new Error('Invalid --interval-minutes. Use an integer between 1 and 59.');
+export function validateCronExpression(value: string): string {
+  const expr = value.trim();
+  const fields = expr.split(/\s+/);
+  if (fields.length !== 5) {
+    throw new Error('Invalid --cron. Use a standard five-field cron expression, for example "0 * * * *".');
   }
-  const minutes = Number.parseInt(value, 10);
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 59) {
-    throw new Error('Invalid --interval-minutes. Use an integer between 1 and 59.');
+  if (fields.some((field) => field.length === 0)) {
+    throw new Error('Invalid --cron. Use a standard five-field cron expression, for example "0 * * * *".');
   }
-  return minutes;
+  return fields.join(' ');
+}
+
+export function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
 export async function installOpenClawThreatFeedCron(
   options: {
     name: string;
-    intervalMinutes: number;
+    cronExpression: string;
+    quiet: boolean;
     force: boolean;
+    timezone?: string;
   },
   gateway: OpenClawGatewayOptions = {}
 ): Promise<OpenClawCronInstallResult> {
-  const schedule = `*/${options.intervalMinutes} * * * *`;
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
   const existing = await findOpenClawCronJobsByName(options.name, gateway);
   if (existing.length > 0 && !options.force) {
     return {
       name: options.name,
       schedule,
+      timezone,
       created: false,
     };
   }
 
-  const description = `AgentGuard Cloud threat feed self-check every ${options.intervalMinutes} minute${options.intervalMinutes === 1 ? '' : 's'}`;
+  const command = `agentguard subscribe${options.quiet ? ' --quiet' : ''} --json --cron-run`;
+  const description = `AgentGuard Cloud threat feed subscription (${schedule})`;
   const message = [
-    'Run `agentguard subscribe --json --cron-run`.',
+    `Run \`${command}\`.`,
     '',
     'Rules:',
-    '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a threat-match notification.',
+    '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a notification.',
     '- If the JSON field `shouldNotify` is true, send `notification.body` exactly as-is using the current session notification context.',
     '- If `shouldNotify` is false, output "skipped" and finish without sending any message.',
-    '- If the command fails or the JSON cannot be parsed, output a short error summary and do not send a threat-match notification.',
+    '- If the command fails or the JSON cannot be parsed, output a short error summary and do not send a notification.',
     '',
     'Follow these rules exactly.',
   ].join('\n');
@@ -71,8 +82,9 @@ export async function installOpenClawThreatFeedCron(
         description,
         enabled: true,
         schedule: {
-          kind: 'every',
-          everyMs: options.intervalMinutes * 60 * 1000,
+          kind: 'cron',
+          expr: schedule,
+          tz: timezone,
         },
         sessionTarget: 'isolated',
         payload: {
@@ -91,6 +103,7 @@ export async function installOpenClawThreatFeedCron(
   return {
     name: options.name,
     schedule,
+    timezone,
     created: true,
   };
 }
