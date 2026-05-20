@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.9] - 2026-05-20
 
 ### Added
 - Added `agentguard subscribe --quiet` for the full automated threat-feed flow: pull new advisories, run local self-checks, report matches, and notify on local matches.
