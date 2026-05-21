@@ -4,8 +4,8 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type CronBackend = 'auto' | 'openclaw' | 'hermes' | 'system';
-export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'hermes' | 'system';
+export type CronBackend = 'auto' | 'openclaw' | 'qclaw' | 'hermes' | 'system';
+export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'qclaw-gateway' | 'hermes' | 'system';
 export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
 
 export interface OpenClawCronInstallResult {
@@ -21,6 +21,7 @@ export interface OpenClawCronInstallResult {
 export interface OpenClawGatewayOptions {
   host?: string;
   port?: number;
+  label?: string;
   timeoutMs?: number;
   request?: (method: string, params: unknown) => Promise<unknown>;
 }
@@ -73,10 +74,10 @@ export async function installThreatFeedCron(
   const backend = options.backend ?? 'auto';
   if (backend === 'auto' && !options.agentHost) {
     throw new Error(
-      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw`, `--cron-target hermes`, or `--cron-target system`.'
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system`.'
     );
   }
-  if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw' && options.agentHost !== 'hermes')) {
+  if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw' && options.agentHost !== 'qclaw' && options.agentHost !== 'hermes')) {
     return installSystemThreatFeedCron(options, adapters.runCommand);
   }
 
@@ -106,7 +107,16 @@ export async function installThreatFeedCron(
     }
   }
 
-  throw new Error('Invalid cron target. Use auto, openclaw, hermes, or system.');
+  if (backend === 'qclaw' || (backend === 'auto' && options.agentHost === 'qclaw')) {
+    const result = await installOpenClawThreatFeedCron(
+      options,
+      qclawGatewayOptions(adapters.gateway)
+    );
+    result.backend = 'qclaw-gateway';
+    return result;
+  }
+
+  throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, or system.');
 }
 
 export async function installOpenClawThreatFeedCron(
@@ -357,6 +367,14 @@ function threatFeedCommand(quiet: boolean): string {
   return `agentguard subscribe${quiet ? ' --quiet' : ''} --json --cron-run`;
 }
 
+function qclawGatewayOptions(gateway: OpenClawGatewayOptions = {}): OpenClawGatewayOptions {
+  return {
+    ...gateway,
+    port: gateway.port ?? 28789,
+    label: gateway.label ?? 'QClaw Gateway',
+  };
+}
+
 async function writeHermesThreatFeedScript(options: {
   name: string;
   quiet: boolean;
@@ -508,6 +526,7 @@ export function openClawGatewayRequest(
   });
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 18789;
+  const label = options.label ?? 'OpenClaw Gateway';
   const timeoutMs = options.timeoutMs ?? 5000;
 
   return new Promise((resolve, reject) => {
@@ -537,7 +556,7 @@ export function openClawGatewayRequest(
         let data = '';
         res.setEncoding('utf8');
         res.on('error', (err) => {
-          fail(new Error(`OpenClaw Gateway ${method} response failed: ${err.message}`));
+          fail(new Error(`${label} ${method} response failed: ${err.message}`));
         });
         res.on('data', (chunk) => {
           data += chunk;
@@ -547,15 +566,15 @@ export function openClawGatewayRequest(
           try {
             parsed = data ? JSON.parse(data) : null;
           } catch {
-            fail(new Error(`OpenClaw Gateway returned non-JSON response: ${data}`));
+            fail(new Error(`${label} returned non-JSON response: ${data}`));
             return;
           }
           if (parsed?.error) {
-            fail(new Error(`OpenClaw Gateway ${method} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`));
+            fail(new Error(`${label} ${method} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`));
             return;
           }
           if (res.statusCode && res.statusCode >= 400) {
-            fail(new Error(`OpenClaw Gateway ${method} failed with HTTP ${res.statusCode}`));
+            fail(new Error(`${label} ${method} failed with HTTP ${res.statusCode}`));
             return;
           }
           succeed(parsed?.result ?? parsed);
@@ -563,10 +582,10 @@ export function openClawGatewayRequest(
       }
     );
     req.on('error', (err) => {
-      fail(new Error(`Could not reach OpenClaw Gateway at ${host}:${port}: ${err.message}`));
+      fail(new Error(`Could not reach ${label} at ${host}:${port}: ${err.message}`));
     });
     req.setTimeout(timeoutMs, () => {
-      const err = new Error(`OpenClaw Gateway ${method} request timed out after ${timeoutMs}ms`);
+      const err = new Error(`${label} ${method} request timed out after ${timeoutMs}ms`);
       fail(err);
       req.destroy(err);
     });

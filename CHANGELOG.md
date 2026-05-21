@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- Added `agentguard subscribe --cron-target <auto|openclaw|hermes|system>` so OpenClaw can use native cron with Gateway fallback, Hermes can use native Hermes cron, while Claude Code, Codex, and QClaw use system crontab.
+- Added `agentguard subscribe --cron-target <auto|openclaw|qclaw|hermes|system>` so OpenClaw can use native cron with Gateway fallback, QClaw can use its Gateway at `127.0.0.1:28789`, Hermes can use native Hermes cron, while Claude Code and Codex use system crontab.
 - `agentguard init --agent <agent>` now persists the selected agent host in local config for later cron backend selection.
 - `agentguard init --agent` now supports `hermes` and `qclaw` in addition to `claude-code`, `codex`, and `openclaw`.
 

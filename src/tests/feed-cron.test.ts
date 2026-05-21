@@ -126,6 +126,33 @@ describe('feed/cron', () => {
     assert.ok(calls[1].args.includes('300'));
   });
 
+  it('auto-installs QClaw Gateway cron jobs for QClaw agents', async () => {
+    const gateway = fakeGateway();
+    const runner: CommandRunner = async () => {
+      throw new Error('system cron should not be used for qclaw auto target');
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'qclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner, gateway: { request: gateway.request } }
+    );
+
+    assert.equal(result.backend, 'qclaw-gateway');
+    assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
+    const job = gateway.calls[1].params[0];
+    assert.equal(job.name, 'agentguard-threat-feed');
+    assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'UTC' });
+    assert.equal(job.payload.agentguard.command, 'agentguard subscribe --json --cron-run');
+  });
+
   it('auto-installs native Hermes cron jobs for Hermes agents', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const hermesHome = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
