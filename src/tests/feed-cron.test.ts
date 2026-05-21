@@ -48,7 +48,7 @@ describe('feed/cron', () => {
     assert.equal(result.schedule, '0 * * * *');
     assert.equal(result.timezone, 'Asia/Shanghai');
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
-    const job = gateway.calls[1].params[0];
+    const job = gateway.calls[1].params;
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'Asia/Shanghai' });
     assert.deepEqual(job.delivery, { mode: 'none' });
@@ -279,7 +279,7 @@ describe('feed/cron', () => {
 
     assert.equal(result.backend, 'qclaw-gateway');
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
-    const job = gateway.calls[1].params[0];
+    const job = gateway.calls[1].params;
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'UTC' });
     assert.equal(job.payload.agentguard.command, 'agentguard subscribe --json --cron-run');
@@ -428,14 +428,14 @@ describe('feed/cron', () => {
     assert.equal(result.created, true);
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove', 'cron.add']);
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
-    assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
-    assert.deepEqual(gateway.calls[2].params[0].payload.agentguard, {
+    assert.deepEqual(gateway.calls[2].params.schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
+    assert.deepEqual(gateway.calls[2].params.payload.agentguard, {
       mode: 'quiet',
       command: 'agentguard subscribe --quiet --json --cron-run',
     });
-    assert.match(gateway.calls[2].params[0].payload.message, /Mode: quiet/);
-    assert.match(gateway.calls[2].params[0].payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
-    assert.match(gateway.calls[2].params[0].payload.message, /agentguard subscribe --quiet --json --cron-run/);
+    assert.match(gateway.calls[2].params.payload.message, /Mode: quiet/);
+    assert.match(gateway.calls[2].params.payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
+    assert.match(gateway.calls[2].params.payload.message, /agentguard subscribe --quiet --json --cron-run/);
   });
 
   it('does not add a replacement if force removal fails', async () => {

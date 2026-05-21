@@ -1,6 +1,7 @@
-import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -21,6 +22,7 @@ export interface OpenClawCronInstallResult {
 export interface OpenClawGatewayOptions {
   host?: string;
   port?: number;
+  url?: string;
   label?: string;
   timeoutMs?: number;
   request?: (method: string, params: unknown) => Promise<unknown>;
@@ -156,31 +158,29 @@ export async function installOpenClawThreatFeedCron(
   }
   await openClawGatewayRequest(
     'cron.add',
-    [
-      {
-        name: options.name,
-        description,
-        enabled: true,
-        schedule: {
-          kind: 'cron',
-          expr: schedule,
-          tz: timezone,
-        },
-        sessionTarget: 'isolated',
-        payload: {
-          kind: 'agentTurn',
-          message,
-          timeoutSeconds: 300,
-          agentguard: {
-            mode,
-            command,
-          },
-        },
-        delivery: {
-          mode: 'none',
+    {
+      name: options.name,
+      description,
+      enabled: true,
+      schedule: {
+        kind: 'cron',
+        expr: schedule,
+        tz: timezone,
+      },
+      sessionTarget: 'isolated',
+      payload: {
+        kind: 'agentTurn',
+        message,
+        timeoutSeconds: 300,
+        agentguard: {
+          mode,
+          command,
         },
       },
-    ],
+      delivery: {
+        mode: 'none',
+      },
+    },
     gateway
   );
 
@@ -604,78 +604,271 @@ export function openClawGatewayRequest(
     return options.request(method, params);
   }
 
-  const payload = JSON.stringify({
-    jsonrpc: '2.0',
-    method,
-    params,
-    id: 1,
-  });
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 18789;
   const label = options.label ?? 'OpenClaw Gateway';
   const timeoutMs = options.timeoutMs ?? 5000;
+  const url = options.url ?? `ws://${host}:${port}`;
+
+  return openClawGatewayWebSocketRequest({ url, method, params, label, timeoutMs });
+}
+
+function openClawGatewayWebSocketRequest(options: {
+  url: string;
+  method: string;
+  params: unknown;
+  label: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const endpoint = parseGatewayWebSocketUrl(options.url, options.label);
 
   return new Promise((resolve, reject) => {
+    const connectRequestId = randomUUID();
+    const methodRequestId = randomUUID();
+    const websocketKey = randomBytes(16).toString('base64');
+    let handshakeComplete = false;
+    let connected = false;
     let settled = false;
+    let buffer = Buffer.alloc(0);
+
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
       reject(err);
     };
     const succeed = (value: unknown) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
+      socket.end();
       resolve(value);
     };
-    const req = http.request(
-      {
-        hostname: host,
-        port,
-        path: '/',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      },
-      (res) => {
-        let data = '';
-        res.setEncoding('utf8');
-        res.on('error', (err) => {
-          fail(new Error(`${label} ${method} response failed: ${err.message}`));
-        });
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        res.on('end', () => {
-          let parsed: any;
-          try {
-            parsed = data ? JSON.parse(data) : null;
-          } catch {
-            fail(new Error(`${label} returned non-JSON response: ${data}`));
-            return;
-          }
-          if (parsed?.error) {
-            fail(new Error(`${label} ${method} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`));
-            return;
-          }
-          if (res.statusCode && res.statusCode >= 400) {
-            fail(new Error(`${label} ${method} failed with HTTP ${res.statusCode}`));
-            return;
-          }
-          succeed(parsed?.result ?? parsed);
-        });
+
+    const socket = net.createConnection({ host: endpoint.hostname, port: endpoint.port }, () => {
+      socket.write(buildWebSocketHandshake(endpoint, websocketKey));
+    });
+
+    const timeout = setTimeout(() => {
+      fail(new Error(`${options.label} ${options.method} request timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+
+    socket.on('error', (err) => {
+      fail(new Error(`Could not reach ${options.label} at ${endpoint.hostname}:${endpoint.port}: ${err.message}`));
+    });
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!handshakeComplete) {
+        const headerEnd = buffer.indexOf('\r\n\r\n');
+        if (headerEnd === -1) return;
+        const header = buffer.subarray(0, headerEnd + 4).toString('utf8');
+        buffer = buffer.subarray(headerEnd + 4);
+        try {
+          validateWebSocketHandshake(header, websocketKey, options.label);
+        } catch (err) {
+          fail(err as Error);
+          return;
+        }
+        handshakeComplete = true;
       }
-    );
-    req.on('error', (err) => {
-      fail(new Error(`Could not reach ${label} at ${host}:${port}: ${err.message}`));
+
+      while (true) {
+        let parsed: ReturnType<typeof readWebSocketFrame>;
+        try {
+          parsed = readWebSocketFrame(buffer);
+        } catch (err) {
+          fail(err as Error);
+          return;
+        }
+        if (!parsed) break;
+        buffer = parsed.rest;
+        if (parsed.opcode === 0x8) {
+          fail(new Error(`${options.label} closed the WebSocket before ${options.method} completed`));
+          return;
+        }
+        if (parsed.opcode === 0x9) {
+          socket.write(encodeWebSocketFrame(parsed.payload.toString('utf8'), 0xA));
+          continue;
+        }
+        if (parsed.opcode !== 0x1) continue;
+        handleGatewayFrame(parsed.payload.toString('utf8'));
+      }
     });
-    req.setTimeout(timeoutMs, () => {
-      const err = new Error(`${label} ${method} request timed out after ${timeoutMs}ms`);
-      fail(err);
-      req.destroy(err);
-    });
-    req.write(payload);
-    req.end();
+
+    function handleGatewayFrame(raw: string): void {
+      let frame: any;
+      try {
+        frame = JSON.parse(raw);
+      } catch {
+        fail(new Error(`${options.label} returned non-JSON WebSocket frame: ${raw}`));
+        return;
+      }
+      if (frame?.type === 'event' && frame.event === 'connect.challenge') {
+        socket.write(encodeWebSocketFrame(JSON.stringify({
+          type: 'req',
+          id: connectRequestId,
+          method: 'connect',
+          params: openClawConnectParams(),
+        })));
+        return;
+      }
+      if (frame?.type !== 'res') return;
+      if (frame.id === connectRequestId) {
+        if (!frame.ok) {
+          fail(new Error(`${options.label} connect failed: ${gatewayFrameErrorMessage(frame)}`));
+          return;
+        }
+        connected = true;
+        socket.write(encodeWebSocketFrame(JSON.stringify({
+          type: 'req',
+          id: methodRequestId,
+          method: options.method,
+          params: options.params,
+        })));
+        return;
+      }
+      if (connected && frame.id === methodRequestId) {
+        if (!frame.ok) {
+          fail(new Error(`${options.label} ${options.method} failed: ${gatewayFrameErrorMessage(frame)}`));
+          return;
+        }
+        succeed(frame.payload);
+      }
+    }
   });
+}
+
+function parseGatewayWebSocketUrl(raw: string, label: string): { hostname: string; port: number; path: string; hostHeader: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${label} URL is invalid: ${raw}`);
+  }
+  if (parsed.protocol !== 'ws:') {
+    throw new Error(`${label} URL must use ws:// for Gateway WebSocket RPC.`);
+  }
+  const port = parsed.port ? Number(parsed.port) : 80;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`${label} URL has an invalid port: ${raw}`);
+  }
+  const path = `${parsed.pathname || '/'}${parsed.search}`;
+  const hostname = parsed.hostname;
+  const hostHeader = parsed.port ? parsed.host : `${parsed.hostname}:${port}`;
+  return { hostname, port, path, hostHeader };
+}
+
+function buildWebSocketHandshake(endpoint: { path: string; hostHeader: string }, key: string): string {
+  return [
+    `GET ${endpoint.path || '/'} HTTP/1.1`,
+    `Host: ${endpoint.hostHeader}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Key: ${key}`,
+    'Sec-WebSocket-Version: 13',
+    '',
+    '',
+  ].join('\r\n');
+}
+
+function validateWebSocketHandshake(header: string, key: string, label: string): void {
+  const [statusLine, ...lines] = header.split(/\r\n/);
+  if (!/^HTTP\/1\.[01] 101\b/.test(statusLine ?? '')) {
+    throw new Error(`${label} WebSocket upgrade failed: ${statusLine || 'empty response'}`);
+  }
+  const headers = new Map<string, string>();
+  for (const line of lines) {
+    const index = line.indexOf(':');
+    if (index === -1) continue;
+    headers.set(line.slice(0, index).trim().toLowerCase(), line.slice(index + 1).trim());
+  }
+  const expected = createHash('sha1')
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest('base64');
+  if (headers.get('sec-websocket-accept') !== expected) {
+    throw new Error(`${label} WebSocket upgrade returned an invalid accept key.`);
+  }
+}
+
+function readWebSocketFrame(buffer: Buffer): { opcode: number; payload: Buffer; rest: Buffer } | null {
+  if (buffer.length < 2) return null;
+  const first = buffer[0]!;
+  const second = buffer[1]!;
+  const opcode = first & 0x0f;
+  const masked = (second & 0x80) !== 0;
+  let length = second & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < offset + 2) return null;
+    length = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (length === 127) {
+    if (buffer.length < offset + 8) return null;
+    const longLength = buffer.readBigUInt64BE(offset);
+    if (longLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error('WebSocket frame is too large.');
+    }
+    length = Number(longLength);
+    offset += 8;
+  }
+  const mask = masked ? buffer.subarray(offset, offset + 4) : null;
+  if (masked) offset += 4;
+  if (buffer.length < offset + length) return null;
+  const payload = Buffer.from(buffer.subarray(offset, offset + length));
+  if (mask) {
+    for (let i = 0; i < payload.length; i += 1) {
+      payload[i] = payload[i]! ^ mask[i % 4]!;
+    }
+  }
+  return { opcode, payload, rest: buffer.subarray(offset + length) };
+}
+
+function encodeWebSocketFrame(text: string, opcode = 0x1): Buffer {
+  const payload = Buffer.from(text, 'utf8');
+  const mask = randomBytes(4);
+  const headerLength = payload.length < 126 ? 2 : payload.length <= 0xffff ? 4 : 10;
+  const header = Buffer.alloc(headerLength);
+  header[0] = 0x80 | opcode;
+  if (payload.length < 126) {
+    header[1] = 0x80 | payload.length;
+  } else if (payload.length <= 0xffff) {
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  const masked = Buffer.from(payload);
+  for (let i = 0; i < masked.length; i += 1) {
+    masked[i] = masked[i]! ^ mask[i % 4]!;
+  }
+  return Buffer.concat([header, mask, masked]);
+}
+
+function openClawConnectParams(): unknown {
+  return {
+    minProtocol: 3,
+    maxProtocol: 3,
+    client: {
+      id: 'cli',
+      version: 'agentguard',
+      platform: process.platform,
+      mode: 'cli',
+    },
+    caps: [],
+    role: 'operator',
+    scopes: [
+      'operator.admin',
+      'operator.read',
+      'operator.write',
+      'operator.approvals',
+      'operator.pairing',
+      'operator.talk.secrets',
+    ],
+  };
+}
+
+function gatewayFrameErrorMessage(frame: any): string {
+  return frame?.error?.message ?? JSON.stringify(frame?.error ?? frame);
 }

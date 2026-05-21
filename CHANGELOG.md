@@ -10,6 +10,7 @@
 
 ### Fixed
 - Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
+- `agentguard subscribe --cron` Gateway fallback/QClaw installation now uses OpenClaw-compatible WebSocket Gateway RPC instead of HTTP `POST /`, and sends `cron.add` the object payload expected by the Gateway schema.
 
 ## [1.1.10] - 2026-05-21
 
