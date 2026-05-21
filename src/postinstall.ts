@@ -5,10 +5,8 @@ import { resolve } from 'node:path';
 import { ensureConfig, getAgentGuardPaths } from './config.js';
 
 const NEXT_STEPS = [
-  'Next steps:',
-  '  agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>',
-  '  agentguard connect',
-  '  agentguard checkup',
+  'Next step:',
+  '  agentguard init --agent auto',
   '',
 ].join('\n');
 

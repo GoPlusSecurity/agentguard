@@ -9,6 +9,7 @@
 ### Changed
 - `agentguard init` now stores all initialized agent hosts in config while keeping the first detected host as the default for `--cron-target auto`.
 - `agentguard init --agent codex` now writes `.codex/agentguard-hook.json` as the concrete AgentGuard hook configuration file instead of an example filename.
+- Install guidance now treats `agentguard init --agent auto` as the only required next step; Cloud connect and checkup remain optional commands.
 - Postinstall now writes persistent next-step guidance to `~/.agentguard/next-steps.txt` and the package directory so agent installers can discover it even when npm hides lifecycle output.
 
 ### Fixed

@@ -48,11 +48,11 @@ AI coding agents can execute any command, read any file, and install any skill â
 
 ```bash
 npm install -g @goplus/agentguard
-agentguard init
+agentguard init --agent auto
 agentguard status
 ```
 
-The npm install runs a best-effort local bootstrap; `agentguard init` ensures `~/.agentguard/config.json` exists and protects locally by default.
+The npm install runs a best-effort local bootstrap; `agentguard init --agent auto` is the required next step that detects installed agent directories and configures supported hooks/plugins.
 No Cloud account or network connection is required for the local runtime guard.
 
 ## 3 minutes: protect your agent
@@ -107,8 +107,7 @@ agentguard subscribe --json
 # Or run a one-off self-check against a single advisory id
 agentguard checkup --against-advisory AGS-2026-0042
 
-# Optional: write host-specific hook templates.
-# OpenClaw also installs and enables the AgentGuard plugin.
+# Re-run host setup manually when needed. `auto` detects installed agents.
 agentguard init --agent auto
 agentguard init --agent claude-code
 agentguard init --agent codex

@@ -56,17 +56,17 @@ cd ~/.openclaw/skills/agentguard && node scripts/checkup-report.js
 ### Post-Install Guidance
 
 When AgentGuard has just been installed, or the user asks what to do next after
-installing AgentGuard, recommend these steps in this order instead of deriving a
-longer list from every supported command:
+installing AgentGuard, recommend the required setup step below instead of
+deriving a longer list from every supported command:
 
 ```bash
-agentguard init --agent <agent>
-agentguard connect
-agentguard checkup
+agentguard init --agent auto
 ```
 
-Use the current agent host for `<agent>` when it is known; otherwise leave
-`<agent>` as a placeholder.
+Use a specific agent such as `hermes`, `qclaw`, `openclaw`, `claude-code`, or
+`codex` only when the current host is known and the user wants targeted setup.
+Treat `agentguard connect` and `agentguard checkup` as optional follow-ups, not
+required post-install steps.
 
 Parse `$ARGUMENTS` to determine the subcommand:
 

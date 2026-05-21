@@ -41,6 +41,7 @@ const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
   { agent: 'qclaw', dir: '.qclaw' },
   { agent: 'codex', dir: '.codex' },
 ];
+const REQUIRED_INIT_COMMAND = 'agentguard init --agent auto';
 
 async function main() {
   const program = new Command();
@@ -153,6 +154,7 @@ async function main() {
       console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
       console.log(`Audit log: ${config.auditPath}`);
+      printInitGuidanceIfNeeded(config);
     });
 
   const policy = program
@@ -261,6 +263,7 @@ async function main() {
       } else {
         console.log('! Cloud: not connected');
       }
+      printInitGuidanceIfNeeded(config);
     });
 
   program
@@ -510,6 +513,7 @@ async function main() {
             return null;
           });
           printHealthCheckupSummary(report, htmlPath);
+          printInitGuidanceIfNeeded(config);
         }
         appendCheckupAudit(config.auditPath, report);
         process.exitCode = 0;
@@ -558,6 +562,11 @@ async function main() {
       process.exitCode = result.matchedArtifacts.length > 0 ? 2 : 0;
     });
 
+  if (process.argv.length <= 2) {
+    printInstalledGuidance();
+    return;
+  }
+
   await program.parseAsync(process.argv);
 }
 
@@ -604,6 +613,27 @@ function appendAgentHost(
   const next = agentHosts ? [...agentHosts] : [];
   if (!next.includes(agent)) next.push(agent);
   return next;
+}
+
+function hasSavedAgentHost(config: AgentGuardConfig): boolean {
+  return Boolean(config.agentHost || config.agentHosts?.length);
+}
+
+function printInstalledGuidance(): void {
+  console.log('AgentGuard is installed.');
+  console.log('');
+  console.log('Required next step:');
+  console.log(`  ${REQUIRED_INIT_COMMAND}`);
+  console.log('');
+  console.log('This detects installed agent directories and configures supported hooks/plugins.');
+  console.log('Run `agentguard --help` to see all commands.');
+}
+
+function printInitGuidanceIfNeeded(config: AgentGuardConfig): void {
+  if (hasSavedAgentHost(config)) return;
+  console.log('');
+  console.log('Required next step:');
+  console.log(`  ${REQUIRED_INIT_COMMAND}`);
 }
 
 function resolveCronAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
