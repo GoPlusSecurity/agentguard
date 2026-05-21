@@ -2,10 +2,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
+export type AgentGuardAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+
 export interface AgentGuardConfig {
   version: 1;
   level: 'strict' | 'balanced' | 'permissive';
-  agentHost?: 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+  agentHost?: AgentGuardAgentHost;
+  agentHosts?: AgentGuardAgentHost[];
   cloudUrl?: string;
   apiKey?: string;
   connectedAt?: string;
@@ -76,6 +79,7 @@ export function loadConfig(): AgentGuardConfig {
       version: 1,
       level: normalizeLevel(parsed.level) ?? fallback.level,
       agentHost: normalizeAgentHost(parsed.agentHost),
+      agentHosts: normalizeAgentHosts(parsed.agentHosts),
       cloudUrl: parsed.cloudUrl || fallback.cloudUrl,
       policyCachePath: parsed.policyCachePath || fallback.policyCachePath,
       auditPath: parsed.auditPath || fallback.auditPath,
@@ -154,10 +158,20 @@ function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
     : null;
 }
 
-function normalizeAgentHost(value: unknown): AgentGuardConfig['agentHost'] | undefined {
+function normalizeAgentHost(value: unknown): AgentGuardAgentHost | undefined {
   return value === 'claude-code' || value === 'codex' || value === 'openclaw' || value === 'hermes' || value === 'qclaw'
     ? value
     : undefined;
+}
+
+function normalizeAgentHosts(value: unknown): AgentGuardAgentHost[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<AgentGuardAgentHost>();
+  for (const item of value) {
+    const host = normalizeAgentHost(item);
+    if (host) seen.add(host);
+  }
+  return seen.size > 0 ? [...seen] : undefined;
 }
 
 function chmodBestEffort(path: string, mode: number): void {
