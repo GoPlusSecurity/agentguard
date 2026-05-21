@@ -11,6 +11,68 @@ import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 const execFileAsync = promisify(execFile);
 
 describe('policy CLI', () => {
+  it('shows the cached effective policy as JSON', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-show-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.policyVersion = 'runtime-show-cache';
+    policy.mode = 'strict';
+    policy.blockedCommandPatterns = ['show-cache-danger'];
+    const cachePath = join(home, 'policy-cache.json');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: cachePath,
+      auditPath: join(home, 'audit.jsonl'),
+      eventSpoolPath: join(home, 'events-spool.jsonl'),
+    }));
+    writeFileSync(cachePath, JSON.stringify(policy));
+
+    const cliPath = resolve('dist/cli.js');
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'show', '--json'], {
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    const result = JSON.parse(stdout) as {
+      success: boolean;
+      source: string;
+      cachePath: string;
+      policy: typeof policy;
+    };
+    assert.equal(result.success, true);
+    assert.equal(result.source, 'cache');
+    assert.equal(result.cachePath, cachePath);
+    assert.equal(result.policy.policyVersion, 'runtime-show-cache');
+    assert.deepEqual(result.policy.blockedCommandPatterns, ['show-cache-danger']);
+  });
+
+  it('shows the bundled default policy when no cache exists', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-show-default-'));
+    const cachePath = join(home, 'policy-cache.json');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: cachePath,
+      auditPath: join(home, 'audit.jsonl'),
+      eventSpoolPath: join(home, 'events-spool.jsonl'),
+    }));
+
+    const cliPath = resolve('dist/cli.js');
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'show', '--json'], {
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    const result = JSON.parse(stdout) as {
+      success: boolean;
+      source: string;
+      policy: { policyVersion: string };
+    };
+    assert.equal(result.success, true);
+    assert.equal(result.source, 'default');
+    assert.equal(result.policy.policyVersion, 'runtime-local-v0.1');
+  });
+
   it('pulls the effective Cloud policy into the local cache', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-cli-'));
     const policy = getDefaultEffectiveRuntimePolicy();

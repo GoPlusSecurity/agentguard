@@ -19,7 +19,7 @@ import {
 import type { AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
-import { saveCachedPolicy } from './runtime/policy.js';
+import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller } from './installers.js';
 import { packageVersion } from './version.js';
@@ -167,6 +167,44 @@ async function main() {
         }
         process.exitCode = 1;
       }
+    });
+
+  policy
+    .command('show')
+    .description('Show the cached effective runtime policy, or the bundled default policy when no cache exists')
+    .option('--json', 'Print JSON output')
+    .action((options) => {
+      const config = ensureConfig();
+      const cachedPolicy = loadCachedPolicy(config.policyCachePath);
+      const source = cachedPolicy ? 'cache' : 'default';
+      const shownPolicy = cachedPolicy ?? getDefaultEffectiveRuntimePolicy();
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          success: true,
+          source,
+          cachePath: config.policyCachePath,
+          policy: shownPolicy,
+        }, null, 2));
+        return;
+      }
+
+      console.log(`Policy source: ${source}`);
+      console.log(`Policy version: ${shownPolicy.policyVersion}`);
+      console.log(`Mode: ${shownPolicy.mode}`);
+      console.log(`Updated at: ${shownPolicy.updatedAt}`);
+      console.log(`Cache path: ${config.policyCachePath}`);
+      console.log('Decisions:');
+      for (const [name, decision] of Object.entries(shownPolicy.decisions)) {
+        console.log(`- ${name}: ${decision}`);
+      }
+      console.log(`Protected paths: ${shownPolicy.protectedPaths.length}`);
+      console.log(`Blocked command patterns: ${shownPolicy.blockedCommandPatterns.length}`);
+      console.log(`Allowed command patterns: ${shownPolicy.allowedCommandPatterns.length}`);
+      console.log(`Approval action types: ${shownPolicy.approvalActionTypes.join(', ') || 'none'}`);
+      console.log(`Network default outbound: ${shownPolicy.network.defaultOutbound}`);
+      console.log(`Blocked domains: ${shownPolicy.network.blockedDomains.length}`);
+      console.log(`Approval domains: ${shownPolicy.network.approvalDomains.length}`);
     });
 
   program
