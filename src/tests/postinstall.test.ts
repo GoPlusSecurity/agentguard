@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -14,12 +14,17 @@ describe('postinstall', () => {
     const postinstallPath = resolve('dist', 'postinstall.js');
 
     const { stdout } = await execFileAsync(process.execPath, [postinstallPath], {
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, AGENTGUARD_HOME: home, AGENTGUARD_SKIP_PACKAGE_NEXT_STEPS: '1' },
     });
 
     assert.match(stdout, /AgentGuard local config ready:/);
-    assert.match(stdout, /agentguard init --agent <agent>/);
+    assert.match(stdout, /agentguard init --agent <claude-code\|codex\|openclaw\|hermes\|qclaw>/);
     assert.match(stdout, /agentguard connect/);
     assert.match(stdout, /agentguard checkup/);
+
+    const nextSteps = readFileSync(join(home, 'next-steps.txt'), 'utf8');
+    assert.match(nextSteps, /agentguard init --agent <claude-code\|codex\|openclaw\|hermes\|qclaw>/);
+    assert.match(nextSteps, /agentguard connect/);
+    assert.match(nextSteps, /agentguard checkup/);
   });
 });

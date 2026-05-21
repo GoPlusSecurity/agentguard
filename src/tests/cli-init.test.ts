@@ -38,4 +38,19 @@ describe('init CLI', () => {
       assert.equal(config.agentHost, agent);
     }
   });
+
+  it('normalizes --agent values to lowercase', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-uppercase-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-uppercase-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'Hermes', '--force'], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
+    assert.equal(config.agentHost, 'hermes');
+    assert.match(stdout, /Installed hermes template:/);
+  });
 });

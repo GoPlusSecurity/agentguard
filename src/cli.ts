@@ -65,10 +65,11 @@ async function main() {
       console.log(`AgentGuard initialized at ${paths.home}`);
       console.log(`Config: ${paths.configPath}`);
       if (options.agent) {
-        if (!['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'].includes(options.agent)) {
+        const normalizedAgent = String(options.agent).trim().toLowerCase();
+        if (!['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'].includes(normalizedAgent)) {
           throw new Error('Invalid agent. Use claude-code, codex, openclaw, hermes, or qclaw.');
         }
-        const agent = options.agent as AgentInstaller;
+        const agent = normalizedAgent as AgentInstaller;
         config.agentHost = agent;
         saveConfig(config);
         const result = installAgentTemplates(agent, { force: options.force });
