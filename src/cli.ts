@@ -19,7 +19,7 @@ import {
 import type { AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
-import { saveCachedPolicy } from './runtime/policy.js';
+import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller } from './installers.js';
 import { packageVersion } from './version.js';
@@ -27,9 +27,10 @@ import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import {
-  installOpenClawThreatFeedCron,
+  installThreatFeedCron,
   validateCronExpression,
   type OpenClawCronInstallResult,
+  type CronBackend,
 } from './feed/cron.js';
 
 async function main() {
@@ -44,7 +45,7 @@ async function main() {
     .command('init')
     .description('Create ~/.agentguard/config.json and local runtime paths')
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
-    .option('--agent <agent>', 'Install hook/template for claude-code, codex, or openclaw')
+    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--force', 'Overwrite existing hook/template files')
     .action((options) => {
@@ -64,10 +65,13 @@ async function main() {
       console.log(`AgentGuard initialized at ${paths.home}`);
       console.log(`Config: ${paths.configPath}`);
       if (options.agent) {
-        if (!['claude-code', 'codex', 'openclaw'].includes(options.agent)) {
-          throw new Error('Invalid agent. Use claude-code, codex, or openclaw.');
+        if (!['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'].includes(options.agent)) {
+          throw new Error('Invalid agent. Use claude-code, codex, openclaw, hermes, or qclaw.');
         }
-        const result = installAgentTemplates(options.agent as AgentInstaller, { force: options.force });
+        const agent = options.agent as AgentInstaller;
+        config.agentHost = agent;
+        saveConfig(config);
+        const result = installAgentTemplates(agent, { force: options.force });
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
       }
@@ -118,6 +122,7 @@ async function main() {
       console.log(`Protection level: ${config.level}`);
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
       console.log(`API key: ${maskApiKey(config.apiKey)}`);
+      console.log(`Agent host: ${config.agentHost || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
       console.log(`Audit log: ${config.auditPath}`);
     });
@@ -167,6 +172,44 @@ async function main() {
         }
         process.exitCode = 1;
       }
+    });
+
+  policy
+    .command('show')
+    .description('Show the cached effective runtime policy, or the bundled default policy when no cache exists')
+    .option('--json', 'Print JSON output')
+    .action((options) => {
+      const config = ensureConfig();
+      const cachedPolicy = loadCachedPolicy(config.policyCachePath);
+      const source = cachedPolicy ? 'cache' : 'default';
+      const shownPolicy = cachedPolicy ?? getDefaultEffectiveRuntimePolicy();
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          success: true,
+          source,
+          cachePath: config.policyCachePath,
+          policy: shownPolicy,
+        }, null, 2));
+        return;
+      }
+
+      console.log(`Policy source: ${source}`);
+      console.log(`Policy version: ${shownPolicy.policyVersion}`);
+      console.log(`Mode: ${shownPolicy.mode}`);
+      console.log(`Updated at: ${shownPolicy.updatedAt}`);
+      console.log(`Cache path: ${config.policyCachePath}`);
+      console.log('Decisions:');
+      for (const [name, decision] of Object.entries(shownPolicy.decisions)) {
+        console.log(`- ${name}: ${decision}`);
+      }
+      console.log(`Protected paths: ${shownPolicy.protectedPaths.length}`);
+      console.log(`Blocked command patterns: ${shownPolicy.blockedCommandPatterns.length}`);
+      console.log(`Allowed command patterns: ${shownPolicy.allowedCommandPatterns.length}`);
+      console.log(`Approval action types: ${shownPolicy.approvalActionTypes.join(', ') || 'none'}`);
+      console.log(`Network default outbound: ${shownPolicy.network.defaultOutbound}`);
+      console.log(`Blocked domains: ${shownPolicy.network.blockedDomains.length}`);
+      console.log(`Approval domains: ${shownPolicy.network.approvalDomains.length}`);
     });
 
   program
@@ -241,9 +284,10 @@ async function main() {
     .option('--json', 'Emit machine-readable summary instead of human text')
     .option('--quiet', 'Run the full pull, self-check, and match-reporting flow with minimal output')
     .option('--no-report', 'Skip uploading self-check results back to Cloud')
-    .option('--cron <expr>', 'Install an OpenClaw cron job with a five-field cron expression, for example "0 * * * *"')
-    .option('--cron-name <name>', 'OpenClaw cron job name', 'agentguard-threat-feed')
-    .option('--force', 'Replace an existing OpenClaw cron job with the same name')
+    .option('--cron <expr>', 'Install a cron job with a five-field cron expression, for example "0 * * * *"')
+    .option('--cron-target <target>', 'Cron backend: auto, openclaw, qclaw, hermes, or system', 'auto')
+    .option('--cron-name <name>', 'Cron job name', 'agentguard-threat-feed')
+    .option('--force', 'Replace an existing cron job with the same name')
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
     .action(async (options) => {
       const config = ensureConfig();
@@ -251,6 +295,7 @@ async function main() {
       const state = loadFeedState();
       const since = (options.since as string | undefined) ?? state.lastPulledAt;
       const quiet = Boolean(options.quiet);
+      const cronTarget = validateCronTarget(options.cronTarget);
       const cronExpression = options.cron && !options.cronRun
         ? validateCronExpression(options.cron as string)
         : undefined;
@@ -353,11 +398,14 @@ async function main() {
       if (options.cron && !options.cronRun) {
         summary.cron.requested = true;
         try {
-          summary.cron.result = await installOpenClawThreatFeedCron({
+          summary.cron.result = await installThreatFeedCron({
             name: options.cronName as string,
             cronExpression: cronExpression!,
             quiet,
             force: Boolean(options.force),
+            backend: cronTarget,
+            agentHost: config.agentHost,
+            agentGuardHome: getAgentGuardPaths().home,
           });
           summary.cron.installed = true;
         } catch (err) {
@@ -393,9 +441,14 @@ async function main() {
         }
       }
       if (summary.cron.result) {
-        const action = summary.cron.result.created ? 'Installed' : 'OpenClaw cron job already exists';
+        const label = summary.cron.result.backend ?? 'cron';
+        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists`;
         console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}, ${summary.cron.result.timezone}).`);
-        console.log('Notification rule: non-quiet cron notifies on new advisories; quiet cron notifies on local matches.');
+        if (summary.cron.result.backend === 'system') {
+          console.log(`System cron output: ${join(getAgentGuardPaths().home, 'feed-cron.log')}`);
+        } else {
+          console.log('Notification rule: non-quiet cron notifies on new advisories; quiet cron notifies on local matches.');
+        }
       }
 
       // Exit codes: 2 = matches found, 1 = at least one advisory failed
@@ -478,6 +531,11 @@ async function main() {
     });
 
   await program.parseAsync(process.argv);
+}
+
+function validateCronTarget(value: unknown): CronBackend {
+  if (value === 'auto' || value === 'openclaw' || value === 'qclaw' || value === 'hermes' || value === 'system') return value;
+  throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, or system.');
 }
 
 function readStdinIfAvailable(): string {

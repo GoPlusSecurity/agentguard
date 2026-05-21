@@ -1,9 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  installThreatFeedCron,
   installOpenClawThreatFeedCron,
   openClawGatewayRequest,
   validateCronExpression,
+  type CommandRunner,
 } from '../feed/cron.js';
 
 type RpcCall = { method: string; params: any };
@@ -57,6 +62,315 @@ describe('feed/cron', () => {
     assert.match(job.payload.message, /Command: `agentguard subscribe --json --cron-run`/);
     assert.match(job.payload.message, /agentguard subscribe --json --cron-run/);
     assert.match(job.payload.message, /hardFailures/);
+  });
+
+  it('auto-installs system crontab jobs for Codex and Claude Code agents', async () => {
+    const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-system-'));
+    const runner: CommandRunner = async (command, args, input) => {
+      calls.push({ command, args, input });
+      if (command === 'crontab' && args[0] === '-l') {
+        return { stdout: '# existing\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: true,
+        force: false,
+        backend: 'auto',
+        agentHost: 'codex',
+        agentGuardHome: home,
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.backend, 'system');
+    assert.equal(result.created, true);
+    assert.equal(calls[0].command, 'crontab');
+    assert.deepEqual(calls[0].args, ['-l']);
+    assert.equal(calls[1].command, 'crontab');
+    assert.deepEqual(calls[1].args, ['-']);
+    assert.match(calls[1].input ?? '', /# AgentGuard begin agentguard-threat-feed/);
+    assert.match(calls[1].input ?? '', /agentguard-system-.*\/scripts\/agentguard-threat-feed\.sh/);
+    assert.doesNotMatch(calls[1].input ?? '', /AGENTGUARD_HOME=/);
+    const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
+    assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
+    assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+  });
+
+  it('rejects unsafe AgentGuard home paths for system crontab jobs', async () => {
+    await assert.rejects(
+      () =>
+        installThreatFeedCron({
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'system',
+          agentGuardHome: '/tmp/ag-home"; touch /tmp/pwned #',
+          timezone: 'UTC',
+        }),
+      /must not contain quotes or newlines/
+    );
+  });
+
+  it('uses native OpenClaw cron command before Gateway fallback for OpenClaw agents', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') return { stdout: '', stderr: '' };
+      return { stdout: 'created', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.backend, 'openclaw');
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron add']);
+    assert.ok(calls[1].args.includes('--timeout-seconds'));
+    assert.ok(calls[1].args.includes('300'));
+  });
+
+  it('does not treat native OpenClaw cron name substrings as existing jobs', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return { stdout: 'agentguard-threat-feed-extra    0 * * * *\n', stderr: '' };
+      }
+      return { stdout: 'created', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron add']);
+  });
+
+  it('leaves exact native OpenClaw cron names untouched unless force is set', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      return {
+        stdout: JSON.stringify({ jobs: [{ name: 'agentguard-threat-feed' }] }),
+        stderr: '',
+      };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, false);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list']);
+  });
+
+  it('does not fall back to OpenClaw Gateway when native OpenClaw cron add fails', async () => {
+    const gateway = fakeGateway();
+    const runner: CommandRunner = async (_command, args) => {
+      if (args.join(' ') === 'cron list') return { stdout: '', stderr: '' };
+      throw new Error('invalid native OpenClaw cron arguments');
+    };
+
+    await assert.rejects(
+      () =>
+        installThreatFeedCron(
+          {
+            name: 'agentguard-threat-feed',
+            cronExpression: '0 * * * *',
+            quiet: false,
+            force: false,
+            backend: 'auto',
+            agentHost: 'openclaw',
+            timezone: 'UTC',
+          },
+          { runCommand: runner, gateway: { request: gateway.request } }
+        ),
+      /invalid native OpenClaw cron arguments/
+    );
+    assert.deepEqual(gateway.calls, []);
+  });
+
+  it('auto-installs QClaw Gateway cron jobs for QClaw agents', async () => {
+    const gateway = fakeGateway();
+    const runner: CommandRunner = async () => {
+      throw new Error('system cron should not be used for qclaw auto target');
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'qclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner, gateway: { request: gateway.request } }
+    );
+
+    assert.equal(result.backend, 'qclaw-gateway');
+    assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
+    const job = gateway.calls[1].params[0];
+    assert.equal(job.name, 'agentguard-threat-feed');
+    assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'UTC' });
+    assert.equal(job.payload.agentguard.command, 'agentguard subscribe --json --cron-run');
+  });
+
+  it('auto-installs native Hermes cron jobs for Hermes agents', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const hermesHome = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') return { stdout: 'No scheduled jobs.', stderr: '' };
+      return { stdout: 'created', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: true,
+        force: false,
+        backend: 'auto',
+        agentHost: 'hermes',
+        agentGuardHome: '/tmp/ag-home',
+        hermesHome,
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.backend, 'hermes');
+    assert.equal(result.script, 'agentguard-agentguard-threat-feed.sh');
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron create']);
+    assert.deepEqual(calls[1].args, [
+      'cron',
+      'create',
+      '0 * * * *',
+      '--name',
+      'agentguard-threat-feed',
+      '--deliver',
+      'local',
+      '--script',
+      'agentguard-agentguard-threat-feed.sh',
+      '--no-agent',
+    ]);
+    const script = readFileSync(join(hermesHome, 'scripts', 'agentguard-agentguard-threat-feed.sh'), 'utf8');
+    assert.match(script, /export AGENTGUARD_HOME='\/tmp\/ag-home'/);
+    assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+  });
+
+  it('requires init --agent when auto has no saved agent host', async () => {
+    await assert.rejects(
+      () =>
+        installThreatFeedCron({
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: false,
+          force: false,
+          backend: 'auto',
+          timezone: 'UTC',
+        }),
+      /agentguard init --agent/
+    );
+  });
+
+  it('fails fast when Hermes cron list is unavailable', async () => {
+    const runner: CommandRunner = async () => {
+      throw new Error('hermes command not found');
+    };
+
+    await assert.rejects(
+      () =>
+        installThreatFeedCron(
+          {
+            name: 'agentguard-threat-feed',
+            cronExpression: '0 * * * *',
+            quiet: false,
+            force: false,
+            backend: 'hermes',
+            timezone: 'UTC',
+          },
+          { runCommand: runner }
+        ),
+      /Could not list Hermes cron jobs/
+    );
+  });
+
+  it('falls back to OpenClaw Gateway when native OpenClaw cron command fails', async () => {
+    const gateway = fakeGateway();
+    const runner: CommandRunner = async () => {
+      throw new Error('openclaw command not found');
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner, gateway: { request: gateway.request } }
+    );
+
+    assert.equal(result.backend, 'openclaw-gateway');
+    assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
+  });
+
+  it('fails fast when OpenClaw Gateway cron.list is unavailable', async () => {
+    await assert.rejects(
+      () =>
+        installOpenClawThreatFeedCron(
+          { name: 'agentguard-threat-feed', cronExpression: '0 * * * *', quiet: false, force: false, timezone: 'UTC' },
+          {
+            async request(method) {
+              if (method === 'cron.list') throw new Error('Gateway unavailable');
+              return { ok: true };
+            },
+          }
+        ),
+      /Gateway unavailable/
+    );
   });
 
   it('leaves an existing cron job untouched unless force is set', async () => {

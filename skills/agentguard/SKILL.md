@@ -53,8 +53,25 @@ cd ~/.openclaw/skills/agentguard && node scripts/checkup-report.js
 
 ## Command Routing
 
+### Post-Install Guidance
+
+When AgentGuard has just been installed, or the user asks what to do next after
+installing AgentGuard, recommend these steps in this order instead of deriving a
+longer list from every supported command:
+
+```bash
+agentguard init --agent <agent>
+agentguard connect
+agentguard checkup
+```
+
+Use the current agent host for `<agent>` when it is known; otherwise leave
+`<agent>` as a placeholder.
+
 Parse `$ARGUMENTS` to determine the subcommand:
 
+- **`init [args...]`** — Run `agentguard init`, especially `agentguard init --agent <agent>` after installation
+- **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
@@ -74,20 +91,22 @@ This skill is allowed to run `agentguard *`, so CLI commands and flags are avail
 
 The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`.
 
-Use CLI passthrough for the CLI-only commands below, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
+Use CLI passthrough for the CLI-only commands below, for `init` and `connect`, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
 
 Supported CLI commands and options:
 
 | CLI command | Options | Notes |
 |---|---|---|
-| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config and optionally installs agent templates |
+| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs templates for `claude-code`, `codex`, `openclaw`, `hermes`, or `qclaw` |
 | `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
 | `agentguard disconnect` | none | Removes local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy; keeps Cloud URL, audit log, and installed hooks/templates |
 | `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
+| `agentguard policy show` | `--json` | Shows the cached effective runtime policy, or the bundled default policy when no cache exists |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
-| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard checkup` | `--json` | Runs the local agent health checkup |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
 If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
@@ -185,6 +204,10 @@ agentguard subscribe --json
 agentguard subscribe --since 2026-05-01T00:00:00.000Z
 agentguard subscribe --no-report
 agentguard subscribe --cron "0 * * * *"
+agentguard subscribe --cron "0 * * * *" --cron-target system
+agentguard subscribe --cron "0 * * * *" --cron-target openclaw
+agentguard subscribe --cron "0 * * * *" --cron-target qclaw
+agentguard subscribe --cron "0 * * * *" --cron-target hermes
 agentguard subscribe --cron "0 * * * *" --quiet
 agentguard subscribe --cron "0 * * * *" --cron-name agentguard-threat-feed
 agentguard subscribe --cron "0 * * * *" --force
@@ -192,7 +215,9 @@ agentguard subscribe --cron "0 * * * *" --force
 
 Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
 
-When `--cron <expr>` is used, the CLI registers an OpenClaw isolated cron job through the local OpenClaw Gateway at `127.0.0.1:18789` using a standard five-field crontab expression such as `"0 * * * *"`. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed. The cron delivery is intentionally silent (`delivery.mode = "none"`); the isolated turn executes `agentguard subscribe --json --cron-run` or `agentguard subscribe --quiet --json --cron-run` depending on whether `--quiet` was used during installation. Non-quiet cron sends the configured notification when new advisories are found; quiet cron sends it when local matches are found.
+When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code` and `codex` install a user crontab entry. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
+
+System cron writes output to `~/.agentguard/feed-cron.log`; it does not send OpenClaw agent-channel notifications.
 
 `agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
 
