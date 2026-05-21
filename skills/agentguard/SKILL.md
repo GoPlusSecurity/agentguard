@@ -705,16 +705,21 @@ After execution, verify with `openclaw cron list`.
 
 Resolve the absolute path to this skill's directory (parent of this SKILL.md file) as `<SKILL_DIR>`.
 
-Generate the crontab entry:
+Validate before generating the entry:
+- `<schedule>` must be a standard five-field cron expression. Reject values that contain newlines.
+- `<SKILL_DIR>` must be an absolute path. Reject paths containing single quotes, double quotes, null bytes, or newlines.
+- Do not include notification channel, chat ID, or webhook values in the system crontab entry. System cron writes only to the local patrol log.
+
+Generate the crontab entry using a single-quoted skill directory. If `<SKILL_DIR>` contains spaces, keep it inside the quotes exactly as shown:
 ```
-<schedule> cd <SKILL_DIR> && node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1
+<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> "$HOME/.agentguard/patrol.log" 2>&1
 ```
 
 **Show the exact entry and wait for explicit user confirmation before writing.**
 
 After confirmation, add the entry to the user's crontab:
 ```bash
-(crontab -l 2>/dev/null; echo "<schedule> cd <SKILL_DIR> && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1") | crontab -
+(crontab -l 2>/dev/null; printf '%s\n' "<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> \"\$HOME/.agentguard/patrol.log\" 2>&1") | crontab -
 ```
 
 Verify with `crontab -l | grep agentguard`.
@@ -723,7 +728,7 @@ Verify with `crontab -l | grep agentguard`.
 
 Output the crontab entry for the user to add manually:
 ```
-<schedule> cd <SKILL_DIR> && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> ~/.agentguard/patrol.log 2>&1
+<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> "$HOME/.agentguard/patrol.log" 2>&1
 ```
 Explain that neither `openclaw` nor `crontab` was found in PATH, so the entry must be added manually.
 

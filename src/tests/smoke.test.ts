@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
@@ -15,6 +15,8 @@ import { SkillScanner } from '../scanner/index.js';
 const projectRoot = resolve(__dirname, '..', '..');
 const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'guard-hook.js');
 const HERMES_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'hermes-hook.js');
+const TRUST_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'trust-cli.js');
+const ACTION_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'action-cli.js');
 
 function runGuardHook(input: Record<string, unknown>): Promise<{
   exitCode: number;
@@ -101,6 +103,56 @@ function runNodeHookRaw(
     });
 
     // Timeout safety
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish({ exitCode: -1, stdout, stderr: 'TIMEOUT' });
+    }, 8000);
+  });
+}
+
+function makeInstalledSkillCli(scriptPath: string): { skillDir: string; script: string } {
+  const skillDir = mkdtempSync(join(tmpdir(), 'agentguard-installed-skill-'));
+  const scriptsDir = join(skillDir, 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  writeFileSync(join(skillDir, 'package.json'), JSON.stringify({ private: true, type: 'module' }, null, 2));
+  cpSync(scriptPath, join(scriptsDir, scriptPath.split('/').pop() || 'cli.js'));
+  const scopedDir = join(skillDir, 'node_modules', '@goplus');
+  mkdirSync(scopedDir, { recursive: true });
+  symlinkSync(projectRoot, join(scopedDir, 'agentguard'), 'dir');
+  return { skillDir, script: join(scriptsDir, scriptPath.split('/').pop() || 'cli.js') };
+}
+
+function runInstalledSkillCli(
+  scriptPath: string,
+  args: string[]
+): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolvePromise) => {
+    const { skillDir, script } = makeInstalledSkillCli(scriptPath);
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-cli-home-'));
+    const child = spawn('node', [script, ...args], {
+      cwd: skillDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HOME: home, AGENTGUARD_HOME: join(home, '.agentguard') },
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result: { exitCode: number; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolvePromise(result);
+    };
+
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('close', (code) => finish({ exitCode: code ?? 1, stdout, stderr }));
+
     const timeout = setTimeout(() => {
       child.kill();
       finish({ exitCode: -1, stdout, stderr: 'TIMEOUT' });
@@ -271,7 +323,34 @@ describe('Smoke: hermes-hook.js E2E', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F: Scanner integration
+// F: skill CLI subprocess E2E
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Smoke: skill CLI scripts E2E', () => {
+  it('runs trust-cli.js from an installed ESM skill directory', async () => {
+    const { exitCode, stdout, stderr } = await runInstalledSkillCli(TRUST_CLI_PATH, ['list']);
+
+    assert.equal(exitCode, 0, stderr);
+    assert.doesNotThrow(() => JSON.parse(stdout));
+  });
+
+  it('runs action-cli.js from an installed ESM skill directory', async () => {
+    const { exitCode, stdout, stderr } = await runInstalledSkillCli(ACTION_CLI_PATH, [
+      'decide',
+      '--type',
+      'exec_command',
+      '--command',
+      'echo hello',
+    ]);
+
+    assert.equal(exitCode, 0, stderr);
+    const payload = JSON.parse(stdout) as { decision?: string; risk_level?: string };
+    assert.ok(payload.decision || payload.risk_level, stdout);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// G: Scanner integration
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Smoke: SkillScanner on vulnerable-skill', () => {
