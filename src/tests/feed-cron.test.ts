@@ -119,6 +119,38 @@ describe('feed/cron', () => {
     );
   });
 
+  it('quotes paths with spaces for system crontab jobs', async () => {
+    const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+    const root = mkdtempSync(join(tmpdir(), 'agentguard system root-'));
+    const home = join(root, 'AgentGuard Home With Spaces');
+    const runner: CommandRunner = async (command, args, input) => {
+      calls.push({ command, args, input });
+      if (command === 'crontab' && args[0] === '-l') {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    await installThreatFeedCron(
+      {
+        name: 'agentguard threat feed',
+        cronExpression: '0 * * * *',
+        quiet: true,
+        force: false,
+        backend: 'system',
+        agentGuardHome: home,
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    const crontab = calls.find((call) => call.command === 'crontab' && call.args[0] === '-')?.input ?? '';
+    assert.match(crontab, /'[^']*AgentGuard Home With Spaces\/scripts\/agentguard-threat-feed\.sh'/);
+    assert.match(crontab, /'[^']*AgentGuard Home With Spaces\/feed-cron\.log'/);
+    const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
+    assert.match(script, /export AGENTGUARD_HOME='[^']*AgentGuard Home With Spaces'/);
+  });
+
   it('uses native OpenClaw cron command before Gateway fallback for OpenClaw agents', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const runner: CommandRunner = async (command, args) => {

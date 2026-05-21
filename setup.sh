@@ -172,11 +172,10 @@ detect_platform() {
     return
   fi
 
-  # Nothing detected — require explicit --target
-  echo "  ERROR: Could not detect a supported agent platform."
-  echo "  Set \$OPENCLAW_STATE_DIR, or use --target <path> to specify the skills directory."
-  echo "  Example: ./setup.sh --target ~/minax/agents/cto-owen/skills"
-  exit 1
+  # Fallback: create Claude Code dir (most common legacy install path).
+  # Use --target for custom layouts when this default is not desired.
+  SKILLS_DIR="$HOME/.claude/skills/agentguard"
+  PLATFORM="claude-code"
 }
 
 detect_platform
