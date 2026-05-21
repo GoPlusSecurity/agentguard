@@ -18,7 +18,7 @@ To write Codex templates in the current project:
 agentguard init --agent codex
 ```
 
-This creates `.codex/skills/agentguard/SKILL.md` and `.codex/agentguard-hook.example.json`.
+This creates `.codex/skills/agentguard/SKILL.md` and `.codex/agentguard-hook.json`.
 
 Pipe a tool event to `agentguard protect`:
 

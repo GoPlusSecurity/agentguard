@@ -75,7 +75,9 @@ describe('init CLI', () => {
     assert.deepEqual(config.agentHosts, ['openclaw', 'hermes', 'codex']);
     assert.ok(existsSync(join(cwd, '.openclaw', 'plugins', 'agentguard', 'openclaw.plugin.json')));
     assert.ok(existsSync(join(cwd, '.hermes', 'skills', 'agentguard')));
+    assert.ok(readFileSync(join(cwd, '.hermes', 'config.yaml'), 'utf8').includes('hermes-hook.js'));
     assert.ok(existsSync(join(cwd, '.codex', 'skills', 'agentguard', 'SKILL.md')));
+    assert.ok(existsSync(join(cwd, '.codex', 'agentguard-hook.json')));
     assert.match(stdout, /Installed openclaw template:/);
     assert.match(stdout, /Installed hermes template:/);
     assert.match(stdout, /Installed codex template:/);

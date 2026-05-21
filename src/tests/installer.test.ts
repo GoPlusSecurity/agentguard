@@ -15,29 +15,54 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8').includes('agentguard-protect.sh'));
   });
 
-  it('writes Codex skill and hook templates', () => {
+  it('writes Codex skill and AgentGuard hook config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-'));
     installAgentTemplates('codex', { cwd: dir });
 
     assert.ok(existsSync(join(dir, '.codex', 'skills', 'agentguard', 'SKILL.md')));
-    assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.example.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
+    assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
   });
 
-  it('writes Hermes skill and hook config example', () => {
+  it('writes Hermes skill and enables hook config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
     const result = installAgentTemplates('hermes', { cwd: dir });
+    const config = readFileSync(join(dir, '.hermes', 'config.yaml'), 'utf8');
 
     assert.equal(result.agent, 'hermes');
     assert.ok(existsSync(join(dir, '.hermes', 'skills', 'agentguard', 'SKILL.md')));
     assert.ok(readFileSync(join(dir, '.hermes', 'agentguard-hooks.example.yaml'), 'utf8').includes('hermes-hook.js'));
+    assert.ok(config.includes('pre_tool_call:'));
+    assert.ok(config.includes('hermes-hook.js'));
+    assert.ok(config.includes('hooks_auto_accept: false'));
   });
 
-  it('writes QClaw skill template', () => {
+  it('merges Hermes hooks into an existing config', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-existing-'));
+    const configPath = join(dir, '.hermes', 'config.yaml');
+    mkdirSync(join(dir, '.hermes'), { recursive: true });
+    writeFileSync(configPath, 'theme: dark\nhooks:\n  custom_event:\n    - command: "echo keep"\n');
+
+    installAgentTemplates('hermes', { cwd: dir });
+
+    const config = readFileSync(configPath, 'utf8');
+    assert.ok(config.includes('theme: dark'));
+    assert.ok(config.includes('custom_event:'));
+    assert.ok(config.includes('pre_tool_call:'));
+    assert.ok(config.includes('hermes-hook.js'));
+  });
+
+  it('writes QClaw skill template and enables plugin', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-qclaw-'));
     const result = installAgentTemplates('qclaw', { cwd: dir });
+    const pluginDir = join(dir, '.qclaw', 'plugins', 'agentguard');
+    const packageJson = JSON.parse(readFileSync(join(pluginDir, 'package.json'), 'utf8'));
+    const config = JSON.parse(readFileSync(join(dir, '.qclaw', 'qclaw.json'), 'utf8'));
 
     assert.equal(result.agent, 'qclaw');
     assert.ok(existsSync(join(dir, '.qclaw', 'skills', 'agentguard', 'SKILL.md')));
+    assert.deepEqual(packageJson.qclaw.extensions, ['./index.js']);
+    assert.equal(config.plugins.entries.agentguard.enabled, true);
+    assert.deepEqual(config.plugins.load.paths, [pluginDir]);
   });
 
   it('writes and enables OpenClaw plugin template', () => {

@@ -12,9 +12,9 @@ Build AgentGuard first so the hook script can import `dist/index.js`:
 npm run build
 ```
 
-Copy the template from `skills/agentguard/hermes-hooks.yaml` into
-`~/.hermes/config.yaml` and replace `AGENTGUARD_SKILL_DIR` with the absolute
-path to the installed AgentGuard skill directory.
+Run `agentguard init --agent hermes` to install the skill and merge the
+AgentGuard hook entries into `~/.hermes/config.yaml`. The bundled template at
+`skills/agentguard/hermes-hooks.yaml` is still available for manual setups.
 
 ```yaml
 hooks:

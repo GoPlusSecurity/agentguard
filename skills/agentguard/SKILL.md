@@ -120,8 +120,10 @@ If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI co
 Help the user configure AgentGuard runtime protection for Hermes Agent.
 
 Hermes does **not** load hooks from `SKILL.md` automatically. Hermes shell hooks
-must be present in `~/.hermes/config.yaml`. This skill ships the hook runner at
-`scripts/hermes-hook.js` and a copyable template at `hermes-hooks.yaml`.
+must be present in `~/.hermes/config.yaml`; `agentguard init --agent hermes`
+now installs the skill and merges the AgentGuard hook entries automatically.
+This skill ships the hook runner at `scripts/hermes-hook.js` and a copyable
+template at `hermes-hooks.yaml`.
 
 ### What the Hermes hook protects
 
@@ -151,12 +153,13 @@ the shared runtime protection path and syncs pre-tool decisions to Cloud.
    ```bash
    npm install -g @goplus/agentguard
    ```
-3. Read `hermes-hooks.yaml`, replace `AGENTGUARD_SKILL_DIR` with the absolute
-   skill directory, and show the resulting YAML to the user.
-4. Ask for explicit confirmation before editing `~/.hermes/config.yaml`.
-5. If confirmed, merge the `hooks:` entries into `~/.hermes/config.yaml`.
-   Preserve existing hooks and config values. Do not overwrite unrelated user
-   configuration.
+3. Prefer `agentguard init --agent hermes --force` to install and merge the
+   hook entries automatically.
+4. For manual setup, read `hermes-hooks.yaml`, replace
+   `AGENTGUARD_SKILL_DIR` with the absolute skill directory, and show the
+   resulting YAML to the user.
+5. Ask for explicit confirmation before manually editing
+   `~/.hermes/config.yaml`.
 6. Tell the user to restart Hermes or launch it with one of the first-use
    consent options:
    ```bash

@@ -20,6 +20,9 @@ MIN_NODE_VERSION=18
 OPENCLAW_ROOT="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 OPENCLAW_PLUGIN_DIR="$OPENCLAW_ROOT/plugins/agentguard"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_ROOT/openclaw.json}"
+QCLAW_ROOT="${QCLAW_STATE_DIR:-$HOME/.qclaw}"
+QCLAW_PLUGIN_DIR="$QCLAW_ROOT/plugins/agentguard"
+QCLAW_CONFIG_PATH="${QCLAW_CONFIG_PATH:-$QCLAW_ROOT/qclaw.json}"
 
 # ---- Parse arguments ----
 TARGET_DIR=""
@@ -172,6 +175,24 @@ detect_platform() {
     return
   fi
 
+  if [ -d "$HOME/.hermes" ]; then
+    SKILLS_DIR="$HOME/.hermes/skills/agentguard"
+    PLATFORM="hermes"
+    return
+  fi
+
+  if [ -d "$HOME/.qclaw" ]; then
+    SKILLS_DIR="$HOME/.qclaw/skills/agentguard"
+    PLATFORM="qclaw"
+    return
+  fi
+
+  if [ -d "$HOME/.codex" ]; then
+    SKILLS_DIR="$HOME/.codex/skills/agentguard"
+    PLATFORM="codex"
+    return
+  fi
+
   # Fallback: create Claude Code dir (most common legacy install path).
   # Use --target for custom layouts when this default is not desired.
   SKILLS_DIR="$HOME/.claude/skills/agentguard"
@@ -224,7 +245,7 @@ echo "[3/5] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
 
 # Copy script files
-for f in checkup-report.js checkup-score.js scan-to-sarif.js guard-hook.js auto-scan.js trust-cli.js action-cli.js; do
+for f in checkup-report.js checkup-score.js scan-to-sarif.js guard-hook.js hermes-hook.js auto-scan.js trust-cli.js action-cli.js; do
   [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
 done
 
@@ -322,6 +343,166 @@ mkdirSync(dirname(configPath), { recursive: true });
 writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 NODE
   echo "  OK: OpenClaw plugin enabled in $OPENCLAW_CONFIG_PATH"
+fi
+
+if [ "$PLATFORM" = "qclaw" ]; then
+  echo "  Enabling QClaw plugin..."
+  mkdir -p "$QCLAW_PLUGIN_DIR"
+  AGENTGUARD_DIST_INDEX="$SCRIPT_DIR/dist/index.js" node - "$QCLAW_PLUGIN_DIR/index.js" <<'NODE'
+const { writeFileSync } = require('node:fs');
+const pluginPath = process.argv[2];
+const distIndex = process.env.AGENTGUARD_DIST_INDEX;
+writeFileSync(pluginPath, `const { registerOpenClawPlugin } = require(${JSON.stringify(distIndex)});
+
+module.exports = function setup(api) {
+  registerOpenClawPlugin(api, {
+    skipAutoScan: false,
+  });
+};
+module.exports.default = module.exports;
+`);
+NODE
+  cat > "$QCLAW_PLUGIN_DIR/package.json" <<'JSON'
+{
+  "name": "agentguard-qclaw-local",
+  "private": true,
+  "type": "commonjs",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "runtimeExtensions": ["./index.js"]
+  },
+  "qclaw": {
+    "extensions": ["./index.js"],
+    "runtimeExtensions": ["./index.js"]
+  }
+}
+JSON
+  cat > "$QCLAW_PLUGIN_DIR/openclaw.plugin.json" <<'JSON'
+{
+  "id": "agentguard",
+  "name": "GoPlus AgentGuard",
+  "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets"
+}
+JSON
+  node - "$QCLAW_CONFIG_PATH" "$QCLAW_PLUGIN_DIR" <<'NODE'
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { dirname } = require('node:path');
+const [configPath, pluginDir] = process.argv.slice(2);
+const ensureRecord = (parent, key) => {
+  const existing = parent[key];
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) return existing;
+  const next = {};
+  parent[key] = next;
+  return next;
+};
+let config = {};
+if (existsSync(configPath)) {
+  const raw = readFileSync(configPath, 'utf8').trim();
+  config = raw ? JSON.parse(raw) : {};
+}
+const plugins = ensureRecord(config, 'plugins');
+const load = ensureRecord(plugins, 'load');
+const entries = ensureRecord(plugins, 'entries');
+const agentguard = ensureRecord(entries, 'agentguard');
+agentguard.enabled = true;
+const paths = Array.isArray(load.paths) ? load.paths.filter((p) => typeof p === 'string') : [];
+if (!paths.includes(pluginDir)) paths.push(pluginDir);
+load.paths = paths;
+if (Array.isArray(plugins.allow)) {
+  const allow = plugins.allow.filter((id) => typeof id === 'string');
+  if (!allow.includes('agentguard')) allow.push('agentguard');
+  plugins.allow = allow;
+}
+mkdirSync(dirname(configPath), { recursive: true });
+writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+NODE
+  echo "  OK: QClaw plugin enabled in $QCLAW_CONFIG_PATH"
+fi
+
+if [ "$PLATFORM" = "hermes" ]; then
+  echo "  Configuring Hermes hooks..."
+  HERMES_CONFIG_PATH="$HOME/.hermes/config.yaml" AGENTGUARD_SKILL_DIR="$SKILLS_DIR" node <<'NODE'
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { dirname } = require('node:path');
+const configPath = process.env.HERMES_CONFIG_PATH;
+const skillDir = process.env.AGENTGUARD_SKILL_DIR;
+const block = `  on_session_start:
+    - command: "env AGENTGUARD_AUTO_SCAN=1 node \\"${skillDir}/scripts/auto-scan.js\\""
+      timeout: 30
+
+  pre_tool_call:
+    - matcher: "terminal|execute_code"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "write_file|patch|skill_manage"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "read_file"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+
+  post_tool_call:
+    - matcher: "terminal|execute_code|write_file|patch|skill_manage|read_file|web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 5`;
+const findNextTopLevel = (lines, start) => {
+  for (let i = start; i < lines.length; i += 1) {
+    if (/^\S/.test(lines[i]) && !/^#/.test(lines[i])) return i;
+  }
+  return lines.length;
+};
+const removeManaged = (lines) => {
+  const events = new Set(['on_session_start', 'pre_tool_call', 'post_tool_call']);
+  const kept = [];
+  for (let i = 0; i < lines.length;) {
+    const match = /^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/.exec(lines[i]);
+    if (match && events.has(match[1])) {
+      i += 1;
+      while (i < lines.length && !/^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(lines[i]) && !/^\S/.test(lines[i])) i += 1;
+      continue;
+    }
+    kept.push(lines[i]);
+    i += 1;
+  }
+  return kept;
+};
+const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+const lines = existing.replace(/\s+$/g, '').split(/\r?\n/).filter((line, index, arr) => !(arr.length === 1 && index === 0 && line === ''));
+const hooksIndex = lines.findIndex((line) => /^hooks:\s*(?:#.*)?$/.test(line));
+let merged;
+if (hooksIndex === -1) {
+  merged = `${lines.length ? `${lines.join('\n')}\n\n` : ''}hooks:\n${block}\n`;
+} else {
+  const hooksEnd = findNextTopLevel(lines, hooksIndex + 1);
+  merged = [...lines.slice(0, hooksIndex + 1), ...removeManaged(lines.slice(hooksIndex + 1, hooksEnd)), ...block.split('\n'), ...lines.slice(hooksEnd)].join('\n');
+}
+if (!/^hooks_auto_accept:\s*/m.test(merged)) merged += '\n\nhooks_auto_accept: false';
+mkdirSync(dirname(configPath), { recursive: true });
+writeFileSync(configPath, `${merged.replace(/\s+$/g, '')}\n`);
+NODE
+  echo "  OK: Hermes hooks configured in $HOME/.hermes/config.yaml"
+fi
+
+if [ "$PLATFORM" = "codex" ]; then
+  echo "  Writing Codex AgentGuard hook config..."
+  mkdir -p "$HOME/.codex"
+  cat > "$HOME/.codex/agentguard-hook.json" <<'JSON'
+{
+  "agentHost": "codex",
+  "command": "AGENTGUARD_AGENT_HOST=codex agentguard protect",
+  "actionTypes": {
+    "shell": "shell",
+    "fileRead": "file_read",
+    "fileWrite": "file_write",
+    "network": "network",
+    "mcpTool": "mcp_tool"
+  }
+}
+JSON
+  echo "  OK: Codex AgentGuard config written to $HOME/.codex/agentguard-hook.json"
 fi
 
 # ---- Done ----
