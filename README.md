@@ -78,7 +78,7 @@ agentguard subscribe --quiet
 # Optional: run once, then install a cron job that checks every hour and asks
 # you to review newly published advisories. Auto uses the agent host saved by
 # `agentguard init --agent`: OpenClaw uses native OpenClaw cron, while Claude
-# Code/Codex use system crontab. If no agent host is saved, run
+# Code/Codex/Hermes/QClaw use system crontab. If no agent host is saved, run
 # `agentguard init --agent <agent>` first or pass --cron-target explicitly.
 agentguard subscribe --cron "0 * * * *"
 
@@ -106,6 +106,8 @@ agentguard checkup --against-advisory AGS-2026-0042
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw
+agentguard init --agent hermes
+agentguard init --agent qclaw
 ```
 
 <details>

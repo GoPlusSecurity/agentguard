@@ -80,7 +80,7 @@ Supported CLI commands and options:
 
 | CLI command | Options | Notes |
 |---|---|---|
-| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs agent templates |
+| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs templates for `claude-code`, `codex`, `openclaw`, `hermes`, or `qclaw` |
 | `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
 | `agentguard disconnect` | none | Removes local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy; keeps Cloud URL, audit log, and installed hooks/templates |
 | `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
@@ -195,7 +195,7 @@ agentguard subscribe --cron "0 * * * *" --force
 
 Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
 
-When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, while `claude-code` and `codex` install a user crontab entry. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw>` first or pass `--cron-target openclaw` / `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
+When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, while `claude-code`, `codex`, `hermes`, and `qclaw` install a user crontab entry. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw` / `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
 
 System cron writes output to `~/.agentguard/feed-cron.log`; it does not send OpenClaw agent-channel notifications.
 

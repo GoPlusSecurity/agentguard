@@ -22,4 +22,20 @@ describe('init CLI', () => {
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
     assert.equal(config.agentHost, 'codex');
   });
+
+  it('accepts Hermes and QClaw agent installers', async () => {
+    for (const agent of ['hermes', 'qclaw']) {
+      const home = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-home-`));
+      const cwd = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-cwd-`));
+      const cliPath = resolve('dist', 'cli.js');
+
+      await execFileAsync(process.execPath, [cliPath, 'init', '--agent', agent, '--force'], {
+        cwd,
+        env: { ...process.env, AGENTGUARD_HOME: home },
+      });
+
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
+      assert.equal(config.agentHost, agent);
+    }
+  });
 });

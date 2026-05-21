@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 export interface AgentGuardConfig {
   version: 1;
   level: 'strict' | 'balanced' | 'permissive';
-  agentHost?: 'claude-code' | 'codex' | 'openclaw';
+  agentHost?: 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
   cloudUrl?: string;
   apiKey?: string;
   connectedAt?: string;
@@ -155,7 +155,7 @@ function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
 }
 
 function normalizeAgentHost(value: unknown): AgentGuardConfig['agentHost'] | undefined {
-  return value === 'claude-code' || value === 'codex' || value === 'openclaw'
+  return value === 'claude-code' || value === 'codex' || value === 'openclaw' || value === 'hermes' || value === 'qclaw'
     ? value
     : undefined;
 }

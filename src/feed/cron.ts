@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 export type CronBackend = 'auto' | 'openclaw' | 'system';
 export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'system';
-export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw';
+export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
 
 export interface OpenClawCronInstallResult {
   name: string;
@@ -70,10 +70,10 @@ export async function installThreatFeedCron(
   const backend = options.backend ?? 'auto';
   if (backend === 'auto' && !options.agentHost) {
     throw new Error(
-      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw>` first, or pass `--cron-target openclaw` or `--cron-target system`.'
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw` or `--cron-target system`.'
     );
   }
-  if (backend === 'system' || (backend === 'auto' && (options.agentHost === 'claude-code' || options.agentHost === 'codex'))) {
+  if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw')) {
     return installSystemThreatFeedCron(options, adapters.runCommand);
   }
 

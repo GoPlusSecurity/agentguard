@@ -17,6 +17,8 @@ export type RuntimeAgentHost =
   | 'claude-code'
   | 'codex'
   | 'openclaw'
+  | 'hermes'
+  | 'qclaw'
   | 'cursor'
   | 'gemini'
   | 'copilot'

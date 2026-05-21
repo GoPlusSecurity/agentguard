@@ -23,6 +23,23 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.example.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
   });
 
+  it('writes Hermes skill and hook config example', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
+    const result = installAgentTemplates('hermes', { cwd: dir });
+
+    assert.equal(result.agent, 'hermes');
+    assert.ok(existsSync(join(dir, '.hermes', 'skills', 'agentguard', 'SKILL.md')));
+    assert.ok(readFileSync(join(dir, '.hermes', 'agentguard-hooks.example.yaml'), 'utf8').includes('hermes-hook.js'));
+  });
+
+  it('writes QClaw skill template', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-qclaw-'));
+    const result = installAgentTemplates('qclaw', { cwd: dir });
+
+    assert.equal(result.agent, 'qclaw');
+    assert.ok(existsSync(join(dir, '.qclaw', 'skills', 'agentguard', 'SKILL.md')));
+  });
+
   it('writes and enables OpenClaw plugin template', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-'));
     const result = installAgentTemplates('openclaw', { cwd: dir });

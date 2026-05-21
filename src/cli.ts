@@ -45,7 +45,7 @@ async function main() {
     .command('init')
     .description('Create ~/.agentguard/config.json and local runtime paths')
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
-    .option('--agent <agent>', 'Install hook/template for claude-code, codex, or openclaw')
+    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--force', 'Overwrite existing hook/template files')
     .action((options) => {
@@ -65,8 +65,8 @@ async function main() {
       console.log(`AgentGuard initialized at ${paths.home}`);
       console.log(`Config: ${paths.configPath}`);
       if (options.agent) {
-        if (!['claude-code', 'codex', 'openclaw'].includes(options.agent)) {
-          throw new Error('Invalid agent. Use claude-code, codex, or openclaw.');
+        if (!['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'].includes(options.agent)) {
+          throw new Error('Invalid agent. Use claude-code, codex, openclaw, hermes, or qclaw.');
         }
         const agent = options.agent as AgentInstaller;
         config.agentHost = agent;

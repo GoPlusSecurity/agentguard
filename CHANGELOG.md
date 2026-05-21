@@ -5,6 +5,7 @@
 ### Added
 - Added `agentguard subscribe --cron-target <auto|openclaw|system>` so OpenClaw can use native cron with Gateway fallback, while Claude Code and Codex use system crontab.
 - `agentguard init --agent <agent>` now persists the selected agent host in local config for later cron backend selection.
+- `agentguard init --agent` now supports `hermes` and `qclaw` in addition to `claude-code`, `codex`, and `openclaw`.
 
 ### Changed
 - Threat-feed cron installation now fails fast when the OpenClaw Gateway preflight is unavailable instead of hiding `cron.list` errors until `cron.add`.

@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -14,6 +14,8 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force));
   if (agent === 'codex') return installCodex(root, Boolean(options.force));
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
+  if (agent === 'hermes') return installHermes(root, Boolean(options.force));
+  if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -57,10 +59,36 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
   return { agent: 'openclaw', files: [packagePath, pluginPath, manifestPath, configPath] };
 }
 
+function installHermes(root: string, force: boolean): InstallResult {
+  const skillDir = join(root, '.hermes', 'skills', 'agentguard');
+  const configExamplePath = join(root, '.hermes', 'agentguard-hooks.example.yaml');
+  copyBundledSkill(skillDir, force);
+  writeIfAllowed(configExamplePath, hermesHooksTemplate(skillDir), force);
+  return { agent: 'hermes', files: [skillDir, configExamplePath] };
+}
+
+function installQClaw(root: string, force: boolean): InstallResult {
+  const skillDir = join(root, '.qclaw', 'skills', 'agentguard');
+  copyBundledSkill(skillDir, force);
+  return { agent: 'qclaw', files: [skillDir] };
+}
+
 function writeIfAllowed(path: string, content: string, force: boolean): void {
   if (existsSync(path) && !force) return;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, { mode: path.endsWith('.sh') ? 0o755 : undefined });
+}
+
+function copyBundledSkill(targetDir: string, force: boolean): void {
+  if (existsSync(targetDir) && !force) return;
+  mkdirSync(dirname(targetDir), { recursive: true });
+  const sourceDir = resolve(__dirname, '..', 'skills', 'agentguard');
+  if (!existsSync(sourceDir)) {
+    mkdirSync(targetDir, { recursive: true });
+    writeIfAllowed(join(targetDir, 'SKILL.md'), codexSkillTemplate(), force);
+    return;
+  }
+  cpSync(sourceDir, targetDir, { recursive: true, force });
 }
 
 function claudeHookScript(): string {
@@ -150,6 +178,36 @@ function codexHookTemplate(): unknown {
       mcpTool: 'mcp_tool',
     },
   };
+}
+
+function hermesHooksTemplate(skillDir: string): string {
+  return `# Copy this block into ~/.hermes/config.yaml.
+hooks:
+  on_session_start:
+    - command: "env AGENTGUARD_AUTO_SCAN=1 node \\"${skillDir}/scripts/auto-scan.js\\""
+      timeout: 30
+
+  pre_tool_call:
+    - matcher: "terminal|execute_code"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "write_file|patch|skill_manage"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "read_file"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+
+  post_tool_call:
+    - matcher: "terminal|execute_code|write_file|patch|skill_manage|read_file|web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 5
+
+hooks_auto_accept: false
+`;
 }
 
 function openClawPluginTemplate(): string {
