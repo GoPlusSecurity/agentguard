@@ -640,7 +640,15 @@ function readOpenClawConfigLevel(
 
 type OpenClawBeforeToolCallResult =
   | { block: true; blockReason: string }
-  | { ask: true; askReason: string };
+  | {
+      requireApproval: {
+        title: string;
+        description: string;
+        severity?: 'info' | 'warning' | 'critical';
+        timeoutMs?: number;
+        timeoutBehavior?: 'allow' | 'deny';
+      };
+    };
 
 function runtimeResultToBeforeToolCallResult(
   result: ProtectResult | null
@@ -668,14 +676,25 @@ function runtimeResultToBeforeToolCallResult(
 
   if (decision === 'require_approval' && result.approvalChannel === 'agent') {
     return {
-      ask: true,
-      askReason: reason,
+      requireApproval: {
+        title: 'AgentGuard approval required',
+        description: reason,
+        severity: openClawApprovalSeverity(result.decision.riskLevel),
+        timeoutMs: 60_000,
+        timeoutBehavior: 'deny',
+      },
     };
   }
   return {
     block: true,
     blockReason: reason,
   };
+}
+
+function openClawApprovalSeverity(riskLevel: ProtectResult['decision']['riskLevel']): 'info' | 'warning' | 'critical' {
+  if (riskLevel === 'critical' || riskLevel === 'high') return 'critical';
+  if (riskLevel === 'medium') return 'warning';
+  return 'info';
 }
 
 function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {

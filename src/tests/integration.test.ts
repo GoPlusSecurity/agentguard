@@ -431,11 +431,19 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const result = await handlers['before_tool_call']({
       toolName: 'Read',
       params: { path: '/workspace/.env' },
-    }) as { ask?: boolean; askReason?: string } | undefined;
+    }) as {
+      ask?: boolean;
+      askReason?: string;
+      requireApproval?: { title?: string; description?: string; severity?: string; timeoutBehavior?: string };
+    } | undefined;
 
-    assert.equal(result?.ask, true);
-    assert.ok(result?.askReason?.includes('requires approval'));
-    assert.ok(result?.askReason?.includes('Protected path'));
+    assert.equal(result?.ask, undefined);
+    assert.equal(result?.askReason, undefined);
+    assert.equal(result?.requireApproval?.title, 'AgentGuard approval required');
+    assert.equal(result?.requireApproval?.severity, 'critical');
+    assert.equal(result?.requireApproval?.timeoutBehavior, 'deny');
+    assert.ok(result?.requireApproval?.description?.includes('requires approval'));
+    assert.ok(result?.requireApproval?.description?.includes('Protected path'));
   });
 
   it('should return { block: true } for rm -rf /', async () => {
@@ -467,10 +475,10 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const result = await handlers['before_tool_call']({
       toolName: 'write',
       params: { path: '/project/.env' },
-    }) as { ask?: boolean; askReason?: string } | undefined;
+    }) as { requireApproval?: { description?: string } } | undefined;
 
-    assert.ok(result?.ask, 'Should ask before writing .env');
-    assert.ok(result?.askReason?.includes('requires approval'));
+    assert.ok(result?.requireApproval, 'Should ask before writing .env');
+    assert.ok(result?.requireApproval?.description?.includes('requires approval'));
   });
 
   it('should handle after_tool_call without error', async () => {
