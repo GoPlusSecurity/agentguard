@@ -7,10 +7,14 @@
 
 ### Changed
 - `agentguard init` now stores all initialized agent hosts in config while keeping the first detected host as the default for `--cron-target auto`.
+- Postinstall now writes persistent next-step guidance to `~/.agentguard/next-steps.txt` and the package directory so agent installers can discover it even when npm hides lifecycle output.
 
 ### Fixed
+- `agentguard init --agent` now normalizes agent names before validation, so mixed-case values such as `Hermes` initialize correctly.
 - Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
-- `agentguard subscribe --cron` Gateway fallback/QClaw installation now uses OpenClaw-compatible WebSocket Gateway RPC instead of HTTP `POST /`, and sends `cron.add` the object payload expected by the Gateway schema.
+- `agentguard subscribe --cron` Gateway installation now preserves legacy HTTP Gateway compatibility, falls back to OpenClaw-compatible WebSocket RPC when needed, sends QClaw the `cron.add` object payload expected by the Gateway schema, and handles fragmented WebSocket responses.
+- `setup.sh` now falls back to the Claude Code skill directory when no supported agent platform is detected, while keeping `--target` available for custom layouts.
+- AgentGuard skill system-crontab guidance now validates cron expressions and skill paths, quotes paths with spaces, and avoids embedding notification secrets in crontab entries.
 
 ## [1.1.10] - 2026-05-21
 
@@ -25,7 +29,6 @@
 - `agentguard subscribe --cron` now requires a saved agent host when `--cron-target auto` is used; run `agentguard init --agent <agent>` first or pass an explicit cron target.
 - `agentguard status` now shows the saved agent host when one is configured.
 - Install and postinstall guidance now recommends `agentguard init --agent <agent>`, `agentguard connect`, and `agentguard checkup` as the focused next steps.
-- Postinstall now writes persistent next-step guidance to `~/.agentguard/next-steps.txt` and the package directory so agent installers can discover it even when npm hides lifecycle output.
 - System cron installation now writes and invokes a validated AgentGuard wrapper script instead of embedding config-derived paths directly in crontab.
 
 ## [1.1.9] - 2026-05-20
