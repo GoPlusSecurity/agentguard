@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   installThreatFeedCron,
   installOpenClawThreatFeedCron,
@@ -123,6 +126,50 @@ describe('feed/cron', () => {
     assert.ok(calls[1].args.includes('300'));
   });
 
+  it('auto-installs native Hermes cron jobs for Hermes agents', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const hermesHome = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') return { stdout: 'No scheduled jobs.', stderr: '' };
+      return { stdout: 'created', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: true,
+        force: false,
+        backend: 'auto',
+        agentHost: 'hermes',
+        agentGuardHome: '/tmp/ag-home',
+        hermesHome,
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.backend, 'hermes');
+    assert.equal(result.script, 'agentguard-agentguard-threat-feed.sh');
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron create']);
+    assert.deepEqual(calls[1].args, [
+      'cron',
+      'create',
+      '0 * * * *',
+      '--name',
+      'agentguard-threat-feed',
+      '--deliver',
+      'local',
+      '--script',
+      'agentguard-agentguard-threat-feed.sh',
+      '--no-agent',
+    ]);
+    const script = readFileSync(join(hermesHome, 'scripts', 'agentguard-agentguard-threat-feed.sh'), 'utf8');
+    assert.match(script, /export AGENTGUARD_HOME='\/tmp\/ag-home'/);
+    assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+  });
+
   it('requires init --agent when auto has no saved agent host', async () => {
     await assert.rejects(
       () =>
@@ -135,6 +182,28 @@ describe('feed/cron', () => {
           timezone: 'UTC',
         }),
       /agentguard init --agent/
+    );
+  });
+
+  it('fails fast when Hermes cron list is unavailable', async () => {
+    const runner: CommandRunner = async () => {
+      throw new Error('hermes command not found');
+    };
+
+    await assert.rejects(
+      () =>
+        installThreatFeedCron(
+          {
+            name: 'agentguard-threat-feed',
+            cronExpression: '0 * * * *',
+            quiet: false,
+            force: false,
+            backend: 'hermes',
+            timezone: 'UTC',
+          },
+          { runCommand: runner }
+        ),
+      /Could not list Hermes cron jobs/
     );
   });
 

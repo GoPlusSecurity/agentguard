@@ -285,7 +285,7 @@ async function main() {
     .option('--quiet', 'Run the full pull, self-check, and match-reporting flow with minimal output')
     .option('--no-report', 'Skip uploading self-check results back to Cloud')
     .option('--cron <expr>', 'Install a cron job with a five-field cron expression, for example "0 * * * *"')
-    .option('--cron-target <target>', 'Cron backend: auto, openclaw, or system', 'auto')
+    .option('--cron-target <target>', 'Cron backend: auto, openclaw, hermes, or system', 'auto')
     .option('--cron-name <name>', 'Cron job name', 'agentguard-threat-feed')
     .option('--force', 'Replace an existing cron job with the same name')
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
@@ -534,8 +534,8 @@ async function main() {
 }
 
 function validateCronTarget(value: unknown): CronBackend {
-  if (value === 'auto' || value === 'openclaw' || value === 'system') return value;
-  throw new Error('Invalid cron target. Use auto, openclaw, or system.');
+  if (value === 'auto' || value === 'openclaw' || value === 'hermes' || value === 'system') return value;
+  throw new Error('Invalid cron target. Use auto, openclaw, hermes, or system.');
 }
 
 function readStdinIfAvailable(): string {

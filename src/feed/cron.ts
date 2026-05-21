@@ -1,10 +1,11 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type CronBackend = 'auto' | 'openclaw' | 'system';
-export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'system';
+export type CronBackend = 'auto' | 'openclaw' | 'hermes' | 'system';
+export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'hermes' | 'system';
 export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
 
 export interface OpenClawCronInstallResult {
@@ -14,6 +15,7 @@ export interface OpenClawCronInstallResult {
   created: boolean;
   backend?: ResolvedCronBackend;
   command?: string;
+  script?: string;
 }
 
 export interface OpenClawGatewayOptions {
@@ -60,6 +62,7 @@ export async function installThreatFeedCron(
     backend?: CronBackend;
     agentHost?: CronAgentHost;
     agentGuardHome?: string;
+    hermesHome?: string;
     timezone?: string;
   },
   adapters: {
@@ -70,11 +73,15 @@ export async function installThreatFeedCron(
   const backend = options.backend ?? 'auto';
   if (backend === 'auto' && !options.agentHost) {
     throw new Error(
-      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw` or `--cron-target system`.'
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw`, `--cron-target hermes`, or `--cron-target system`.'
     );
   }
-  if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw')) {
+  if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw' && options.agentHost !== 'hermes')) {
     return installSystemThreatFeedCron(options, adapters.runCommand);
+  }
+
+  if (backend === 'hermes' || (backend === 'auto' && options.agentHost === 'hermes')) {
+    return installHermesNativeThreatFeedCron(options, adapters.runCommand);
   }
 
   if (backend === 'openclaw' || (backend === 'auto' && options.agentHost === 'openclaw')) {
@@ -99,7 +106,7 @@ export async function installThreatFeedCron(
     }
   }
 
-  throw new Error('Invalid cron target. Use auto, openclaw, or system.');
+  throw new Error('Invalid cron target. Use auto, openclaw, hermes, or system.');
 }
 
 export async function installOpenClawThreatFeedCron(
@@ -240,6 +247,67 @@ async function installOpenClawNativeThreatFeedCron(
   };
 }
 
+async function installHermesNativeThreatFeedCron(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    agentGuardHome?: string;
+    hermesHome?: string;
+    timezone?: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<OpenClawCronInstallResult> {
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
+  const command = threatFeedCommand(options.quiet);
+  let existing: CommandResult;
+  try {
+    existing = await runCommand('hermes', ['cron', 'list']);
+  } catch (err) {
+    throw new Error(`Could not list Hermes cron jobs. Is Hermes installed and available on PATH? ${(err as Error).message}`);
+  }
+  if (existing.stdout.includes(options.name) && !options.force) {
+    return {
+      name: options.name,
+      schedule,
+      timezone,
+      created: false,
+      backend: 'hermes',
+      command,
+    };
+  }
+
+  if (existing.stdout.includes(options.name) && options.force) {
+    await runCommand('hermes', ['cron', 'remove', options.name]);
+  }
+
+  const script = await writeHermesThreatFeedScript(options);
+  await runCommand('hermes', [
+    'cron',
+    'create',
+    schedule,
+    '--name',
+    options.name,
+    '--deliver',
+    'local',
+    '--script',
+    script,
+    '--no-agent',
+  ]);
+
+  return {
+    name: options.name,
+    schedule,
+    timezone,
+    created: true,
+    backend: 'hermes',
+    command,
+    script,
+  };
+}
+
 async function installSystemThreatFeedCron(
   options: {
     name: string;
@@ -287,6 +355,39 @@ async function installSystemThreatFeedCron(
 
 function threatFeedCommand(quiet: boolean): string {
   return `agentguard subscribe${quiet ? ' --quiet' : ''} --json --cron-run`;
+}
+
+async function writeHermesThreatFeedScript(options: {
+  name: string;
+  quiet: boolean;
+  agentGuardHome?: string;
+  hermesHome?: string;
+}): Promise<string> {
+  const hermesHome = (options.hermesHome ?? process.env.HERMES_HOME?.trim()) || join(homedir(), '.hermes');
+  const scriptsDir = join(hermesHome, 'scripts');
+  await mkdir(scriptsDir, { recursive: true });
+  const scriptName = `${sanitizeHermesScriptName(options.name)}.sh`;
+  const scriptPath = join(scriptsDir, scriptName);
+  const lines = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `export AGENTGUARD_HOME=${shellQuote(options.agentGuardHome ?? join(homedir(), '.agentguard'))}`,
+    process.env.PATH ? `export PATH=${shellQuote(process.env.PATH)}` : '',
+    `exec ${threatFeedCommand(options.quiet)}`,
+    '',
+  ].filter(Boolean);
+  await writeFile(scriptPath, lines.join('\n'), { mode: 0o700 });
+  await chmod(scriptPath, 0o700).catch(() => undefined);
+  return scriptName;
+}
+
+function sanitizeHermesScriptName(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized ? `agentguard-${normalized}` : 'agentguard-threat-feed';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function openClawCronMessage(quiet: boolean): string {

@@ -77,15 +77,18 @@ agentguard subscribe --quiet
 
 # Optional: run once, then install a cron job that checks every hour and asks
 # you to review newly published advisories. Auto uses the agent host saved by
-# `agentguard init --agent`: OpenClaw uses native OpenClaw cron, while Claude
-# Code/Codex/Hermes/QClaw use system crontab. If no agent host is saved, run
+# `agentguard init --agent`: OpenClaw uses native OpenClaw cron, Hermes uses
+# native Hermes cron, while Claude Code/Codex/QClaw use system crontab. If no agent host is saved, run
 # `agentguard init --agent <agent>` first or pass --cron-target explicitly.
 agentguard subscribe --cron "0 * * * *"
 
 # Override cron backend selection when needed.
 agentguard subscribe --cron "0 * * * *" --cron-target system
 agentguard subscribe --cron "0 * * * *" --cron-target openclaw
+agentguard subscribe --cron "0 * * * *" --cron-target hermes
 # System cron writes output to ~/.agentguard/feed-cron.log.
+# Hermes cron writes a no-agent script under ~/.hermes/scripts/ and requires
+# Hermes Gateway for automatic scheduled execution.
 
 # Or install the hourly cron in quiet mode so matches are self-checked and
 # reported automatically.
