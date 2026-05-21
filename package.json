@@ -1,12 +1,15 @@
 {
   "name": "@goplus/agentguard",
-  "version": "1.1.3",
+  "version": "1.1.10",
   "description": "GoPlus AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
     "extensions": [
-      "./dist/index.js"
+      "./dist/openclaw.js"
+    ],
+    "runtimeExtensions": [
+      "./dist/openclaw.js"
     ]
   },
   "bin": {
@@ -50,6 +53,7 @@
     "axios": "1.14.0",
     "commander": "12.1.0",
     "glob": "13.0.6",
+    "open": "10.2.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -66,6 +70,8 @@
     "examples/openclaw-docker",
     "README.md",
     "LICENSE",
+    "openclaw.d.ts",
+    "openclaw.js",
     "openclaw.plugin.json",
     "skills"
   ]

@@ -20,6 +20,9 @@ filesystem-access:
   - path: "~/.openclaw/"
     access: read-only
     reason: "Discover installed skills and read OpenClaw config for patrol checks"
+  - path: "~/.hermes/"
+    access: read-write
+    reason: "Discover installed Hermes skills and help configure AgentGuard shell hooks"
   - path: "~/.qclaw/"
     access: read-only
     reason: "Discover installed skills in QClaw environments"
@@ -27,8 +30,8 @@ filesystem-access:
     access: read-write
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(*checkup-report.js) Bash(*checkup-score.js) Bash(*scan-to-sarif.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...] [--format sarif|json] [--output <file>]"
+allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(*checkup-report.js) Bash(*checkup-score.js) Bash(*scan-to-sarif.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(agentguard *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+argument-hint: "[scan|action|patrol|subscribe|trust|report|config|checkup|cli] [args...] [--format sarif|json] [--output <file>]"
 ---
 
 # GoPlus AgentGuard — AI Agent Security Framework
@@ -50,17 +53,175 @@ cd ~/.openclaw/skills/agentguard && node scripts/checkup-report.js
 
 ## Command Routing
 
+### Post-Install Guidance
+
+When AgentGuard has just been installed, or the user asks what to do next after
+installing AgentGuard, recommend these steps in this order instead of deriving a
+longer list from every supported command:
+
+```bash
+agentguard init --agent <agent>
+agentguard connect
+agentguard checkup
+```
+
+Use the current agent host for `<agent>` when it is known; otherwise leave
+`<agent>` as a placeholder.
+
 Parse `$ARGUMENTS` to determine the subcommand:
 
+- **`init [args...]`** — Run `agentguard init`, especially `agentguard init --agent <agent>` after installation
+- **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
 - **`trust <lookup|attest|revoke|list|seed> [args]`** — Manage skill trust levels
+- **`subscribe [args...]`** — Pull AgentGuard Cloud threat-feed advisories, self-check local skills, and optionally install the OpenClaw 15-minute conditional notification cron
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
 - **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
+- **`hermes-hooks`** — Show or install Hermes shell-hook configuration for runtime protection
+- **`cli <args...>`** — Run the installed `agentguard` CLI directly for supported commands not otherwise routed by this skill
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
+
+### CLI Passthrough
+
+This skill is allowed to run `agentguard *`, so CLI commands and flags are available even when the skill has a higher-level workflow for the same area.
+
+The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`.
+
+Use CLI passthrough for the CLI-only commands below, for `init` and `connect`, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
+
+Supported CLI commands and options:
+
+| CLI command | Options | Notes |
+|---|---|---|
+| `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs templates for `claude-code`, `codex`, `openclaw`, `hermes`, or `qclaw` |
+| `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
+| `agentguard disconnect` | none | Removes local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy; keeps Cloud URL, audit log, and installed hooks/templates |
+| `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
+| `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
+| `agentguard policy show` | `--json` | Shows the cached effective runtime policy, or the bundled default policy when no cache exists |
+| `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
+| `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard checkup` | `--json` | Runs the local agent health checkup |
+| `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
+
+If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
+
+Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. Only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.
+
+If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI command `agentguard checkup --against-advisory <id>` instead of the comprehensive HTML health-report workflow.
+
+## Subcommand: hermes-hooks
+
+Help the user configure AgentGuard runtime protection for Hermes Agent.
+
+Hermes does **not** load hooks from `SKILL.md` automatically. Hermes shell hooks
+must be present in `~/.hermes/config.yaml`. This skill ships the hook runner at
+`scripts/hermes-hook.js` and a copyable template at `hermes-hooks.yaml`.
+
+### What the Hermes hook protects
+
+| Hermes hook | Tools | AgentGuard action |
+|---|---|---|
+| `pre_tool_call` | `terminal`, `execute_code` | `exec_command` |
+| `pre_tool_call` | `write_file`, `patch`, `skill_manage` | `write_file` |
+| `pre_tool_call` | `read_file` | `read_file` |
+| `pre_tool_call` | `web_search`, `web_extract`, `browser_navigate` | `network_request` |
+| `post_tool_call` | Same tools | Audit-only |
+
+Hermes `pre_tool_call` supports allow/block only. If AgentGuard returns `ask`,
+the Hermes hook reports it as a block with a confirmation-oriented message.
+
+### Procedure
+
+1. Resolve the AgentGuard skill directory using the "Important: Resolving Script
+   Paths" rules above.
+2. Confirm that dependencies are available. If `node scripts/hermes-hook.js`
+   cannot load `@goplus/agentguard`, tell the user to run:
+   ```bash
+   cd <agentguard-skill-dir> && npm install
+   ```
+   or install the published package globally:
+   ```bash
+   npm install -g @goplus/agentguard
+   ```
+3. Read `hermes-hooks.yaml`, replace `AGENTGUARD_SKILL_DIR` with the absolute
+   skill directory, and show the resulting YAML to the user.
+4. Ask for explicit confirmation before editing `~/.hermes/config.yaml`.
+5. If confirmed, merge the `hooks:` entries into `~/.hermes/config.yaml`.
+   Preserve existing hooks and config values. Do not overwrite unrelated user
+   configuration.
+6. Tell the user to restart Hermes or launch it with one of the first-use
+   consent options:
+   ```bash
+   hermes --accept-hooks chat
+   HERMES_ACCEPT_HOOKS=1 hermes chat
+   ```
+   They may also set `hooks_auto_accept: true` in `~/.hermes/config.yaml`.
+
+### Verification
+
+After configuration, suggest a harmless test:
+
+```bash
+printf '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"echo hello"}}' \
+  | node <agentguard-skill-dir>/scripts/hermes-hook.js
+```
+
+Expected output:
+
+```json
+{}
+```
+
+And a blocked-action test:
+
+```bash
+printf '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"rm -rf /"}}' \
+  | node <agentguard-skill-dir>/scripts/hermes-hook.js
+```
+
+Expected output contains:
+
+```json
+{"action":"block"}
+```
+
+## Subcommand: subscribe
+
+Run the AgentGuard Cloud threat-feed subscription workflow through the installed CLI.
+
+Examples:
+
+```bash
+agentguard subscribe
+agentguard subscribe --quiet
+agentguard subscribe --json
+agentguard subscribe --since 2026-05-01T00:00:00.000Z
+agentguard subscribe --no-report
+agentguard subscribe --cron "0 * * * *"
+agentguard subscribe --cron "0 * * * *" --cron-target system
+agentguard subscribe --cron "0 * * * *" --cron-target openclaw
+agentguard subscribe --cron "0 * * * *" --cron-target qclaw
+agentguard subscribe --cron "0 * * * *" --cron-target hermes
+agentguard subscribe --cron "0 * * * *" --quiet
+agentguard subscribe --cron "0 * * * *" --cron-name agentguard-threat-feed
+agentguard subscribe --cron "0 * * * *" --force
+```
+
+Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
+
+When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code` and `codex` install a user crontab entry. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
+
+System cron writes output to `~/.agentguard/feed-cron.log`; it does not send OpenClaw agent-channel notifications.
+
+`agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
+
+`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud in quiet mode. `--cron-run` is internal and should only be used by the OpenClaw cron prompt unless the user explicitly asks to reproduce cron behavior.
 
 ---
 
@@ -616,16 +777,16 @@ web3.tx_policy: 'allow' | 'confirm_high_risk' | 'deny'
 
 ### Operations
 
-**lookup** — `agentguard trust lookup --source <source> --version <version>`
+**lookup** — `node scripts/trust-cli.js lookup --source <source> --version <version>`
 Query the registry for a skill's trust record.
 
-**attest** — `agentguard trust attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
+**attest** — `node scripts/trust-cli.js attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
 Create or update a trust record. Use `--preset` for common capability models or provide `--capabilities <json>` for custom.
 
-**revoke** — `agentguard trust revoke --source <source> --reason <reason>`
+**revoke** — `node scripts/trust-cli.js revoke --source <source> --reason <reason>`
 Revoke trust for a skill. Supports `--source-pattern` for wildcards.
 
-**list** — `agentguard trust list [--trust-level <level>] [--status <status>]`
+**list** — `node scripts/trust-cli.js list [--trust-level <level>] [--status <status>]`
 List all trust records with optional filters.
 
 **seed** — `agentguard trust seed [--auto-attest-low-risk] [--auto-attest-medium-risk] [--dry-run]`
@@ -843,6 +1004,17 @@ Run a comprehensive agent health checkup across 5 security dimensions. Generates
 
 If `--format json` is present, follow the modified flow noted in Step 4 below.
 
+Plain `checkup` must always run this comprehensive workflow, even if the user phrases it as `agentguard checkup`. Do not answer that an advisory ID is required. Advisory IDs are optional and only switch to the targeted threat-feed self-check mode described below.
+
+If the arguments include `--against-advisory <id>`, do not run this comprehensive HTML workflow. Instead execute the CLI threat-feed self-check:
+
+```bash
+agentguard checkup --against-advisory <id>
+agentguard checkup --against-advisory <id> --json
+```
+
+That CLI path fetches the current Cloud advisory feed and checks local skills against the single advisory. It is separate from the full health report below.
+
 ### Step 1: Data Collection
 
 **IMPORTANT: You MUST run ALL 7 checks below — not just the skill scan. The checkup covers 5 security dimensions, not just code scanning. Do NOT skip checks 2–7.**
@@ -866,15 +1038,17 @@ Run these checks in parallel where possible. These are **universal agent securit
 3. **[REQUIRED] Sensitive credential scan / DLP** (→ feeds Dimension 2: Credential Safety): Use Grep to scan **all** agent workspace directories for leaked secrets. This MUST cover the entire workspace root, not just the current agent's directory:
    - For OpenClaw / QClaw: scan `~/.openclaw/workspace/` and `~/.qclaw/workspace/` recursively
    - For Claude Code: scan `~/.claude/` recursively
+   - For Hermes Agent: scan `~/.hermes/` recursively
    - Patterns to detect:
      - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
      - Mnemonics: sequences of 12+ BIP-39 words, `seed_phrase`, `mnemonic`
      - API keys/tokens: `AKIA[0-9A-Z]{16}`, `gh[pousr]_[A-Za-z0-9_]{36}`, plaintext passwords
    - Record: `private_keys_found`, `mnemonics_found`, `api_keys_found` (boolean, with location if found).
+   - **Important**: Use the workspace *root* directory as the scan target (e.g. `~/.qclaw/workspace/`), not a specific agent subdirectory. All sibling `workspace-agent-*` directories must be included.
 4. **[REQUIRED] Network exposure** (→ feeds Dimension 3: Network & System): Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0). Record list of dangerous ports found (e.g. `["Redis on 0.0.0.0:6379"]`).
 5. **[REQUIRED] Scheduled tasks audit** (→ feeds Dimension 3: Network & System): Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`. Record list of suspicious cron command strings found.
 6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values. Record list of sensitive variable names found.
-7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json` or `~/.openclaw/openclaw.json`. Check for audit logs at `~/.agentguard/audit.jsonl`. Check if installed skills have been previously scanned (audit log contains `scan` events). Record booleans: `hooks_installed`, `audit_log_exists`, `skills_ever_scanned`.
+7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json`, `~/.openclaw/openclaw.json`, or `~/.hermes/config.yaml`. Check for audit logs at `~/.agentguard/audit.jsonl`. Check if installed skills have been previously scanned (audit log contains `scan` events). Record booleans: `hooks_installed`, `audit_log_exists`, `skills_ever_scanned`.
 
 ### Step 2: Assemble Raw Facts JSON
 
@@ -1099,6 +1273,7 @@ AgentGuard can optionally scan installed skills at session startup. **This is di
 
 - **Claude Code**: Set environment variable `AGENTGUARD_AUTO_SCAN=1`
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
+- **Hermes Agent**: Configure the `on_session_start` shell hook from `hermes-hooks.yaml`; the template sets `AGENTGUARD_AUTO_SCAN=1` for that hook.
 
 When enabled, auto-scan operates in **report-only mode**:
 

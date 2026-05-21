@@ -20,7 +20,7 @@ export interface ProtectOptions {
 export interface ProtectResult {
   decision: RuntimeDecision;
   event: RuntimeAuditEvent;
-  approvalId?: string | null;
+  approvalChannel?: 'agent' | null;
   policySource: 'cloud' | 'cache' | 'default' | 'cloud-decision';
 }
 
@@ -62,20 +62,29 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     },
   };
 
-  writeAuditLog(options.config.auditPath, event);
+  try {
+    writeAuditLog(options.config.auditPath, event);
+  } catch {
+    // Audit I/O must not mask the policy decision, especially for agent hooks.
+  }
 
-  let approvalId: string | null | undefined;
+  let approvalChannel: ProtectResult['approvalChannel'];
   if (client.connected && policySource !== 'cloud-decision') {
     await client.ingestEvents([event]).catch(() => spoolEvent(options.config.eventSpoolPath, event));
   }
-  if (client.connected && decision.decision === 'require_approval') {
-    approvalId = await client.createApproval(event).catch(() => null);
+  if (decision.decision === 'require_approval') {
+    approvalChannel = 'agent';
   }
 
-  return { decision, event, approvalId, policySource };
+  return { decision, event, approvalChannel, policySource };
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {
+  if (!json) {
+    const agentApproval = formatAgentApproval(result);
+    if (agentApproval) return agentApproval;
+  }
+
   if (json) {
     return JSON.stringify({
       decision: publicDecision(result.decision.decision),
@@ -84,7 +93,7 @@ export function formatProtectResult(result: ProtectResult, json = false): string
       riskScore: result.decision.riskScore,
       riskLevel: result.decision.riskLevel,
       reasons: result.decision.reasons,
-      approvalId: result.approvalId,
+      approvalChannel: result.approvalChannel,
       policySource: result.policySource,
     }, null, 2);
   }
@@ -94,8 +103,7 @@ export function formatProtectResult(result: ProtectResult, json = false): string
     return `BLOCKED by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
   }
   if (result.decision.decision === 'require_approval') {
-    const approval = result.approvalId ? `approval: ${result.approvalId}, ` : '';
-    return `CONFIRM required by AgentGuard (${approval}action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
+    return `CONFIRM required by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
   }
   if (result.decision.decision === 'warn') {
     return `WARN from AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
@@ -103,12 +111,55 @@ export function formatProtectResult(result: ProtectResult, json = false): string
   return 'ALLOW by AgentGuard.';
 }
 
-export function exitCodeForDecision(decision: RuntimeDecision): number {
+export function exitCodeForDecision(decision: RuntimeDecision, result?: Pick<ProtectResult, 'approvalChannel'>): number {
+  if (decision.decision === 'require_approval' && result?.approvalChannel === 'agent') return 0;
   return decision.decision === 'block' || decision.decision === 'require_approval' ? 2 : 0;
 }
 
 function publicDecision(decision: RuntimeDecision['decision']): 'allow' | 'warn' | 'confirm' | 'block' {
   return decision === 'require_approval' ? 'confirm' : decision;
+}
+
+function formatAgentApproval(result: ProtectResult): string | null {
+  if (result.decision.decision !== 'require_approval' || result.approvalChannel !== 'agent') return null;
+
+  const reason = formatApprovalReason(result);
+  if (result.event.agentHost === 'claude-code') {
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'ask',
+        permissionDecisionReason: reason,
+      },
+    });
+  }
+
+  if (result.event.agentHost === 'codex') {
+    return JSON.stringify({
+      decision: 'confirm',
+      actionId: result.decision.actionId,
+      riskScore: result.decision.riskScore,
+      riskLevel: result.decision.riskLevel,
+      reasons: result.decision.reasons,
+      approvalChannel: 'agent',
+      message: reason,
+    }, null, 2);
+  }
+
+  return null;
+}
+
+function formatApprovalReason(result: ProtectResult): string {
+  const reasonSummary = result.decision.reasons
+    .map((reason) => reason.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(', ');
+  return (
+    `GoPlus AgentGuard requires approval for this action` +
+    ` (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}).` +
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '')
+  );
 }
 
 function buildRuntimeAction(options: ProtectOptions): RuntimeAction {

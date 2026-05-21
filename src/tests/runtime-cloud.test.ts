@@ -1,14 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
-import { protectAction } from '../runtime/protect.js';
-import { connectCloud, getAgentGuardPaths } from '../config.js';
+import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
+import type { ProtectResult } from '../runtime/protect.js';
+import { connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
@@ -34,8 +35,10 @@ describe('Runtime Cloud bridge', () => {
         () => connectCloud({ apiKey: 'not-a-key', cloudUrl: 'https://agentguard.example' }),
         /Invalid AgentGuard API key format/
       );
+      // Loopback http:// is now allowed (needed for local dev + tests). Test
+      // the rejection on a non-loopback http URL instead.
       assert.throws(
-        () => connectCloud({ apiKey: 'ag_live_test_key_123456', cloudUrl: 'http://127.0.0.1:9' }),
+        () => connectCloud({ apiKey: 'ag_live_test_key_123456', cloudUrl: 'http://agentguard.example' }),
         /must use https/
       );
       const config = connectCloud({
@@ -45,9 +48,43 @@ describe('Runtime Cloud bridge', () => {
       assert.equal(config.cloudUrl, 'https://agentguard.example');
       assert.equal(statSync(getAgentGuardPaths().configPath).mode & 0o777, 0o600);
       assert.throws(
-        () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' }),
+        () => new AgentGuardCloudClient({ cloudUrl: 'http://agentguard.example', apiKey: 'ag_live_test_key_123456' }),
         /must use https/
       );
+      // Loopback http:// should construct fine — confirms the new exception.
+      assert.doesNotThrow(
+        () => new AgentGuardCloudClient({ cloudUrl: 'http://127.0.0.1:9', apiKey: 'ag_live_test_key_123456' })
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
+  });
+
+  it('disconnects Cloud without deleting the local audit log', () => {
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-disconnect-'));
+    try {
+      const config = connectCloud({
+        apiKey: 'ag_live_test_key_123456',
+        cloudUrl: 'https://agentguard.example',
+      });
+      writeFileSync(config.eventSpoolPath, `${JSON.stringify(sampleEvent())}\n`);
+      writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+      writeFileSync(config.auditPath, `${JSON.stringify(sampleEvent())}\n`);
+
+      const disconnected = disconnectCloud();
+      const saved = JSON.parse(readFileSync(getAgentGuardPaths().configPath, 'utf8')) as AgentGuardConfig;
+
+      assert.equal(disconnected.apiKey, undefined);
+      assert.equal(disconnected.connectedAt, undefined);
+      assert.equal(disconnected.cloudUrl, 'https://agentguard.example');
+      assert.equal(saved.apiKey, undefined);
+      assert.equal(saved.connectedAt, undefined);
+      assert.equal(saved.cloudUrl, 'https://agentguard.example');
+      assert.equal(existsSync(config.eventSpoolPath), false);
+      assert.equal(existsSync(config.policyCachePath), false);
+      assert.equal(existsSync(config.auditPath), true);
     } finally {
       if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
       else process.env.AGENTGUARD_HOME = previousHome;
@@ -136,7 +173,35 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!audit.includes('secret-value'));
   });
 
-  it('syncs redacted audit events and creates Cloud approval on require_approval', async () => {
+  it('protectAction still returns policy decision when local audit write fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-audit-fail-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.blockedCommandPatterns = ['cached-danger'];
+
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://127.0.0.1:9',
+      apiKey: 'ag_live_test_key_123456',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: dir,
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(policy));
+
+    const result = await protectAction({
+      config,
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'cached-danger' },
+        session_id: 'sess_test',
+      }),
+    });
+
+    assert.equal(result?.decision.decision, 'block');
+  });
+
+  it('syncs redacted audit events and uses agent approval by default on require_approval', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-cloud-ok-'));
     const policy = getDefaultEffectiveRuntimePolicy();
@@ -152,17 +217,6 @@ describe('Runtime Cloud bridge', () => {
       }
       if (url.endsWith('/api/v1/events/ingest')) {
         return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
-      }
-      if (url.endsWith('/api/v1/approvals')) {
-        return jsonResponse({
-          success: true,
-          data: {
-            approvalId: 'apr_test',
-            actionId: 'act_test',
-            sessionId: 'sess_test',
-            status: 'pending',
-          },
-        }, 202);
       }
       return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
     }) as typeof fetch;
@@ -190,14 +244,42 @@ describe('Runtime Cloud bridge', () => {
       });
 
       assert.equal(result?.decision.decision, 'require_approval');
-      assert.equal(result?.approvalId, 'apr_test');
+      assert.equal(result?.approvalChannel, 'agent');
       assert.ok(requests.some((request) => request.url.endsWith('/api/v1/events/ingest')));
-      assert.ok(requests.some((request) => request.url.endsWith('/api/v1/approvals')));
+      assert.equal(requests.some((request) => request.url.endsWith('/api/v1/approvals')), false);
       assert.ok(!requests.map((request) => request.body || '').join('\n').includes('secret-value'));
       assert.ok(requests.map((request) => request.body || '').join('\n').includes('[REDACTED]'));
+      assert.equal(exitCodeForDecision(result!.decision, result!), 0);
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('formats Claude Code agent approval as a PreToolUse ask response', () => {
+    const result: ProtectResult = {
+      policySource: 'cloud',
+      approvalChannel: 'agent',
+      event: { ...sampleEvent(), agentHost: 'claude-code' as const },
+      decision: {
+        actionId: 'act_confirm',
+        decision: 'require_approval' as const,
+        riskScore: 70,
+        riskLevel: 'high' as const,
+        policyVersion: 'runtime-test',
+        reasons: [
+          {
+            code: 'SECRET_ACCESS',
+            severity: 'high' as const,
+            title: 'Protected path',
+            description: 'Protected path access requires approval.',
+          },
+        ],
+      },
+    };
+
+    const formatted = JSON.parse(formatProtectResult(result, false));
+    assert.equal(formatted.hookSpecificOutput.permissionDecision, 'ask');
+    assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /Protected path/);
   });
 });
 

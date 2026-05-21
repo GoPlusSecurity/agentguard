@@ -67,10 +67,53 @@ printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/in
 # Optional: connect paid AgentGuard Cloud policy, audit, and approvals
 AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gopluslabs.io
 
-# Optional: write host-specific hook templates
+# Optional: subscribe to AgentGuard's threat-intelligence feed. Pulls newly
+# published advisories from Cloud and asks you to review them.
+agentguard subscribe
+
+# Run the full quiet flow once: pull advisories, self-check local skills, and
+# report local matches back to Cloud.
+agentguard subscribe --quiet
+
+# Optional: run once, then install a cron job that checks every hour and asks
+# you to review newly published advisories. Auto uses the agent host saved by
+# `agentguard init --agent`: OpenClaw uses native OpenClaw cron with Gateway
+# fallback at 127.0.0.1:18789, QClaw uses QClaw Gateway at 127.0.0.1:28789,
+# Hermes uses native Hermes cron, while Claude Code/Codex use system crontab.
+# If no agent host is saved, run `agentguard init --agent <agent>` first or
+# pass --cron-target explicitly.
+agentguard subscribe --cron "0 * * * *"
+
+# Override cron backend selection when needed.
+agentguard subscribe --cron "0 * * * *" --cron-target system
+agentguard subscribe --cron "0 * * * *" --cron-target openclaw
+agentguard subscribe --cron "0 * * * *" --cron-target qclaw
+agentguard subscribe --cron "0 * * * *" --cron-target hermes
+# System cron writes output to ~/.agentguard/feed-cron.log.
+# Hermes cron writes a no-agent script under ~/.hermes/scripts/ and requires
+# Hermes Gateway for automatic scheduled execution.
+
+# Or install the hourly cron in quiet mode so matches are self-checked and
+# reported automatically.
+agentguard subscribe --cron "0 * * * *" --quiet
+
+# Replace an existing cron job with the same name
+agentguard subscribe --cron "0 * * * *" --force
+
+# Machine-readable output always includes a cron status object:
+# cron.requested, cron.installed, and optional cron.result when installation succeeds.
+agentguard subscribe --json
+
+# Or run a one-off self-check against a single advisory id
+agentguard checkup --against-advisory AGS-2026-0042
+
+# Optional: write host-specific hook templates.
+# OpenClaw also installs and enables the AgentGuard plugin.
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw
+agentguard init --agent hermes
+agentguard init --agent qclaw
 ```
 
 <details>
@@ -92,6 +135,7 @@ See also:
 - [Privacy and data boundary](docs/privacy-boundary.md)
 - [Claude Code setup](docs/claude-code.md)
 - [OpenClaw setup](docs/openclaw.md)
+- [Hermes Agent setup](docs/hermes.md)
 - [Codex setup](docs/codex.md)
 
 <details>
@@ -111,7 +155,13 @@ cp -r agentguard/skills/agentguard ~/.claude/skills/agentguard
 npm install @goplus/agentguard
 ```
 
-Register in your OpenClaw plugin config:
+Then enable it:
+
+```bash
+agentguard init --agent openclaw
+```
+
+Or register manually in your OpenClaw plugin config:
 
 ```typescript
 import register from '@goplus/agentguard/openclaw';
@@ -277,12 +327,13 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard, transcript-based skill tracking |
 | **OpenClaw** | Full | Plugin hooks + **auto-scan on load** + tool→plugin mapping + **daily patrol** |
+| **Hermes Agent** | Hooks | Shell hooks for `pre_tool_call` / `post_tool_call` runtime protection |
 | **OpenAI Codex CLI** | Skill | Scan/action/trust commands |
 | **Gemini CLI** | Skill | Scan/action/trust commands |
 | **Cursor** | Skill | Scan/action/trust commands |
 | **GitHub Copilot** | Skill | Scan/action/trust commands |
 
-> **Hooks-based auto-guard (Layer 1)** works on Claude Code (PreToolUse/PostToolUse) and OpenClaw (before_tool_call/after_tool_call). Both platforms share the same decision engine via a unified adapter abstraction layer.
+> **Hooks-based auto-guard (Layer 1)** works on Claude Code (PreToolUse/PostToolUse), OpenClaw (before_tool_call/after_tool_call), and Hermes Agent (pre_tool_call/post_tool_call shell hooks). These platforms share the same decision engine via a unified adapter abstraction layer.
 >
 > **OpenClaw exclusive**: Auto-scans all loaded plugins at registration time, automatically registers them to the trust registry, and supports automated daily security patrols via cron.
 
@@ -290,11 +341,12 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 
 The auto-guard hooks (Layer 1) have the following constraints:
 
-- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events or OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks. Both share the same decision engine via the adapter abstraction layer.
+- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events, OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks, or Hermes Agent's `pre_tool_call` / `post_tool_call` shell hooks. All share the same decision engine via the adapter abstraction layer.
 - **Default-deny policy**: First-time use may trigger confirmation prompts for certain commands. A built-in safe-command allowlist (`ls`, `echo`, `pwd`, `git status`, etc.) reduces false positives.
 - **Skill source tracking**:
   - *Claude Code*: Infers which skill initiated an action by analyzing the conversation transcript (heuristic, not 100% precise)
   - *OpenClaw*: Uses tool→plugin mapping built at registration time (more reliable)
+  - *Hermes Agent*: Uses session/tool metadata when available; most shell-hook payloads do not identify an initiating skill.
 - **Cannot intercept skill installation itself**: Hooks can only intercept tool calls (Bash, Write, WebFetch, etc.) that a skill makes *after* loading — they cannot block the Skill tool invocation itself.
 - **OpenClaw auto-scan timing**: Plugins are scanned asynchronously after AgentGuard registration completes. Very fast tool calls immediately after startup may execute before scan completes.
 

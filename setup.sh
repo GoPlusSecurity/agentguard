@@ -17,6 +17,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/skills/agentguard"
 AGENTGUARD_DIR="$HOME/.agentguard"
 MIN_NODE_VERSION=18
+OPENCLAW_ROOT="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+OPENCLAW_PLUGIN_DIR="$OPENCLAW_ROOT/plugins/agentguard"
+OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_ROOT/openclaw.json}"
 
 # ---- Parse arguments ----
 TARGET_DIR=""
@@ -189,6 +192,7 @@ if [ "$UNINSTALL" = true ]; then
   rm -rf "$HOME/.claude/skills/agentguard" 2>/dev/null || true
   rm -rf "$HOME/.openclaw/skills/agentguard" 2>/dev/null || true
   rm -rf "$HOME/.openclaw/workspace/skills/agentguard" 2>/dev/null || true
+  rm -rf "$OPENCLAW_PLUGIN_DIR" 2>/dev/null || true
   rm -rf "$AGENTGUARD_DIR" 2>/dev/null && echo "  Removed config from $AGENTGUARD_DIR" || true
   echo ""
   echo "  GoPlus AgentGuard has been uninstalled."
@@ -251,27 +255,91 @@ else
   echo "  OK: Config already exists (keeping current settings)"
 fi
 
+if [ "$PLATFORM" = "openclaw-workspace" ] || [ "$PLATFORM" = "openclaw-managed" ]; then
+  echo "  Enabling OpenClaw plugin..."
+  mkdir -p "$OPENCLAW_PLUGIN_DIR"
+  AGENTGUARD_DIST_INDEX="$SCRIPT_DIR/dist/index.js" node - "$OPENCLAW_PLUGIN_DIR/index.js" <<'NODE'
+const { writeFileSync } = require('node:fs');
+const pluginPath = process.argv[2];
+const distIndex = process.env.AGENTGUARD_DIST_INDEX;
+writeFileSync(pluginPath, `const { registerOpenClawPlugin } = require(${JSON.stringify(distIndex)});
+
+module.exports = function setup(api) {
+  registerOpenClawPlugin(api, {
+    skipAutoScan: false,
+  });
+};
+module.exports.default = module.exports;
+`);
+NODE
+  cat > "$OPENCLAW_PLUGIN_DIR/openclaw.plugin.json" <<'JSON'
+{
+  "id": "agentguard",
+  "name": "GoPlus AgentGuard",
+  "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "level": {
+        "type": "string",
+        "enum": ["strict", "balanced", "permissive"],
+        "default": "balanced",
+        "description": "Protection level: strict (block all risky), balanced (block dangerous, confirm risky), permissive (only block critical)"
+      }
+    }
+  }
+}
+JSON
+  node - "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_PLUGIN_DIR" <<'NODE'
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { dirname } = require('node:path');
+const [configPath, pluginDir] = process.argv.slice(2);
+const ensureRecord = (parent, key) => {
+  const existing = parent[key];
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) return existing;
+  const next = {};
+  parent[key] = next;
+  return next;
+};
+let config = {};
+if (existsSync(configPath)) {
+  const raw = readFileSync(configPath, 'utf8').trim();
+  config = raw ? JSON.parse(raw) : {};
+}
+const plugins = ensureRecord(config, 'plugins');
+const load = ensureRecord(plugins, 'load');
+const entries = ensureRecord(plugins, 'entries');
+const agentguard = ensureRecord(entries, 'agentguard');
+agentguard.enabled = true;
+const paths = Array.isArray(load.paths) ? load.paths.filter((p) => typeof p === 'string') : [];
+if (!paths.includes(pluginDir)) paths.push(pluginDir);
+load.paths = paths;
+if (Array.isArray(plugins.allow)) {
+  const allow = plugins.allow.filter((id) => typeof id === 'string');
+  if (!allow.includes('agentguard')) allow.push('agentguard');
+  plugins.allow = allow;
+}
+mkdirSync(dirname(configPath), { recursive: true });
+writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+NODE
+  echo "  OK: OpenClaw plugin enabled in $OPENCLAW_CONFIG_PATH"
+fi
+
 # ---- Done ----
 echo ""
 echo "  ✅ GoPlus AgentGuard is installed!"
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  🦞 NEXT STEP: Run your first security checkup"
+echo "  NEXT STEPS"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-if [ "$PLATFORM" = "claude-code" ]; then
-  echo "  Open Claude Code and type:"
-else
-  echo "  Send your OpenClaw bot:"
+AGENT_HOST="$PLATFORM"
+if [ "$PLATFORM" = "openclaw-workspace" ] || [ "$PLATFORM" = "openclaw-managed" ]; then
+  AGENT_HOST="openclaw"
 fi
-echo ""
-echo "    /agentguard checkup"
-echo ""
-echo "  This will:"
-echo "    • Scan all your installed skills for threats"
-echo "    • Check credentials, permissions & network exposure"
-echo "    • Generate a full HTML security report"
-echo "    • Deliver the report directly to you"
+echo "    agentguard init --agent $AGENT_HOST"
+echo "    agentguard connect"
+echo "    agentguard checkup"
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

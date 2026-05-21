@@ -8,10 +8,26 @@ import type {
 } from '../runtime/types.js';
 import { redactMetadata, redactPreview } from '../runtime/redaction.js';
 import { buildAuditEvent } from '../runtime/audit.js';
+import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
 interface ApiSuccess<T> {
   success: true;
   data: T;
+  meta?: ApiMeta;
+}
+
+interface ApiErrorEnvelope {
+  success: false;
+  error?: {
+    code?: string;
+    message?: string;
+    details?: unknown;
+  };
+  meta?: ApiMeta;
+}
+
+interface ApiMeta {
+  requestId?: string;
 }
 
 export class AgentGuardCloudClient {
@@ -27,9 +43,8 @@ export class AgentGuardCloudClient {
     return Boolean(this.apiKey);
   }
 
-  async status(): Promise<{ status: string; version?: string }> {
-    const body = await this.request<{ status: string; version?: string }>('/api/v1/status');
-    return body.data;
+  async status(): Promise<{ ok?: boolean; service?: string; status?: string; version?: string; detectors?: number }> {
+    return this.requestData('/api/v1/status', { allowBareSuccess: true });
   }
 
   async fetchEffectivePolicy(): Promise<EffectiveRuntimePolicy> {
@@ -57,16 +72,86 @@ export class AgentGuardCloudClient {
     });
   }
 
-  async createApproval(event: RuntimeAuditEvent): Promise<string | null> {
+  /**
+   * Pull threat-feed advisories newer than `since`. Returns null when the
+   * cloud doesn't expose the endpoint yet (404) — callers should treat null
+   * as "no new advisories" rather than an error, so the subscribe command
+   * works against older AgentGuard Cloud versions too.
+   */
+  async pullAdvisories(since?: string): Promise<Advisory[] | null> {
+    const params = new URLSearchParams();
+    if (since) params.set('since', since);
+    const qs = params.toString();
+    const path = `/api/v1/feed/advisories${qs ? `?${qs}` : ''}`;
+    try {
+      const body = await this.request<{ advisories: Advisory[] }>(path);
+      return body.data.advisories ?? [];
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  async getAdvisory(id: string): Promise<Advisory | null> {
+    try {
+      return await this.requestData<Advisory>(`/api/v1/feed/advisories/${encodeURIComponent(id)}`);
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Report the outcome of a single advisory self-check. Matches paths are
+   * redacted by the caller before they get here. Tolerates 404 so subscribe
+   * still completes locally even if the report sink is absent server-side.
+   */
+  async reportSelfCheck(
+    advisoryId: string,
+    matches: SelfCheckMatch[],
+    options: { elapsedMs?: number; warnings?: string[] } = {}
+  ): Promise<void> {
     this.requireApiKey();
-    const body = await this.request<{ approvalId: string }>('/api/v1/approvals', {
-      method: 'POST',
-      body: JSON.stringify(buildAuditEvent(event)),
-    });
-    return body.data.approvalId || null;
+    try {
+      await this.request('/api/v1/feed/self-check-report', {
+        method: 'POST',
+        body: JSON.stringify({
+          advisoryId,
+          matches,
+          elapsedMs: options.elapsedMs,
+          warnings: options.warnings,
+        }),
+      });
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return;
+      }
+      throw err;
+    }
   }
 
   private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T>> {
+    const body = await this.requestJson<T>(path, init);
+    if (isApiSuccess<T>(body)) return body;
+    throw buildCloudRequestError(200, path, body);
+  }
+
+  private async requestData<T = unknown>(
+    path: string,
+    init: RequestInit & { allowBareSuccess?: boolean } = {}
+  ): Promise<T> {
+    const { allowBareSuccess, ...requestInit } = init;
+    const body = await this.requestJson<T>(path, requestInit);
+    if (isApiSuccess<T>(body)) return body.data;
+    if (allowBareSuccess && !hasApiSuccessField(body)) return body as T;
+    throw buildCloudRequestError(200, path, body);
+  }
+
+  private async requestJson<T = unknown>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T> | ApiErrorEnvelope | T | null> {
     const response = await fetch(`${this.cloudUrl}${path}`, {
       ...init,
       headers: {
@@ -76,9 +161,9 @@ export class AgentGuardCloudClient {
       },
       signal: AbortSignal.timeout(5000),
     });
-    const body = (await response.json().catch(() => null)) as ApiSuccess<T> | null;
-    if (!response.ok || !body?.success) {
-      throw new Error(`AgentGuard Cloud request failed: ${response.status}`);
+    const body = (await response.json().catch(() => null)) as ApiSuccess<T> | ApiErrorEnvelope | T | null;
+    if (!response.ok) {
+      throw buildCloudRequestError(response.status, path, body);
     }
     return body;
   }
@@ -88,6 +173,46 @@ export class AgentGuardCloudClient {
       throw new Error('AgentGuard Cloud API key is not configured.');
     }
   }
+}
+
+export class CloudRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    public readonly code?: string,
+    message?: string,
+    public readonly requestId?: string,
+    public readonly details?: unknown
+  ) {
+    super(message ? `AgentGuard Cloud request failed: ${status} (${path}): ${message}` : `AgentGuard Cloud request failed: ${status} (${path})`);
+    this.name = 'CloudRequestError';
+  }
+}
+
+function isApiSuccess<T>(body: unknown): body is ApiSuccess<T> {
+  return Boolean(body) && typeof body === 'object' && (body as { success?: unknown }).success === true;
+}
+
+function isApiErrorEnvelope(body: unknown): body is ApiErrorEnvelope {
+  return Boolean(body) && typeof body === 'object' && (body as { success?: unknown }).success === false;
+}
+
+function hasApiSuccessField(body: unknown): boolean {
+  return body !== null && typeof body === 'object' && 'success' in body;
+}
+
+function buildCloudRequestError(status: number, path: string, body: unknown): CloudRequestError {
+  if (isApiErrorEnvelope(body)) {
+    return new CloudRequestError(
+      status,
+      path,
+      body.error?.code,
+      body.error?.message,
+      body.meta?.requestId,
+      body.error?.details
+    );
+  }
+  return new CloudRequestError(status, path);
 }
 
 function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {

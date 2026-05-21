@@ -4,13 +4,13 @@ OpenClaw can use AgentGuard as a local runtime guard and optional Cloud-connecte
 
 ## Plugin usage
 
-To write a starter plugin file in the current project:
+To install and enable the AgentGuard OpenClaw plugin:
 
 ```bash
 agentguard init --agent openclaw
 ```
 
-This creates `openclaw.agentguard.plugin.ts`.
+This creates a local plugin under `~/.openclaw/plugins/agentguard` and enables it in `~/.openclaw/openclaw.json`.
 
 ```ts
 import { registerOpenClawPlugin } from '@goplus/agentguard';

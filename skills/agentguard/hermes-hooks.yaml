@@ -1,0 +1,31 @@
+# GoPlus AgentGuard hook template for Hermes Agent.
+#
+# Copy this block into ~/.hermes/config.yaml and replace AGENTGUARD_SKILL_DIR
+# with the absolute path to the installed AgentGuard skill directory, e.g.
+# ~/.hermes/skills/agentguard or ~/.openclaw/skills/agentguard.
+
+hooks:
+  on_session_start:
+    - command: "env AGENTGUARD_AUTO_SCAN=1 node \"AGENTGUARD_SKILL_DIR/scripts/auto-scan.js\""
+      timeout: 30
+
+  pre_tool_call:
+    - matcher: "terminal|execute_code"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 10
+    - matcher: "write_file|patch|skill_manage"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 10
+    - matcher: "read_file"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 10
+    - matcher: "web_search|web_extract|browser_navigate"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 10
+
+  post_tool_call:
+    - matcher: "terminal|execute_code|write_file|patch|skill_manage|read_file|web_search|web_extract|browser_navigate"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 5
+
+hooks_auto_accept: false

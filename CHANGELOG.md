@@ -1,5 +1,89 @@
 # Changelog
 
+## [1.1.10] - 2026-05-21
+
+### Added
+- Added `agentguard policy show` to inspect the cached effective runtime policy, with `--json` output and fallback to the bundled default policy when no cache exists.
+- Added `agentguard subscribe --cron-target <auto|openclaw|qclaw|hermes|system>` so OpenClaw can use native cron with Gateway fallback, QClaw can use its Gateway at `127.0.0.1:28789`, Hermes can use native Hermes cron, while Claude Code and Codex use system crontab.
+- `agentguard init --agent <agent>` now persists the selected agent host in local config for later cron backend selection.
+- `agentguard init --agent` now supports `hermes` and `qclaw` in addition to `claude-code`, `codex`, and `openclaw`.
+
+### Changed
+- Threat-feed cron installation now fails fast when the OpenClaw Gateway preflight is unavailable instead of hiding `cron.list` errors until `cron.add`.
+- `agentguard subscribe --cron` now requires a saved agent host when `--cron-target auto` is used; run `agentguard init --agent <agent>` first or pass an explicit cron target.
+- `agentguard status` now shows the saved agent host when one is configured.
+- Install and postinstall guidance now recommends `agentguard init --agent <agent>`, `agentguard connect`, and `agentguard checkup` as the focused next steps.
+- Postinstall now writes persistent next-step guidance to `~/.agentguard/next-steps.txt` and the package directory so agent installers can discover it even when npm hides lifecycle output.
+- System cron installation now writes and invokes a validated AgentGuard wrapper script instead of embedding config-derived paths directly in crontab.
+
+## [1.1.9] - 2026-05-20
+
+### Added
+- Added `agentguard subscribe --quiet` for the full automated threat-feed flow: pull new advisories, run local self-checks, report matches, and notify on local matches.
+- Added `agentguard subscribe --cron <expr>` to install OpenClaw cron jobs with standard five-field crontab expressions such as `"0 * * * *"`.
+- Expanded threat-feed self-checks to cover all advisory ecosystems returned by AgentGuard Cloud: `skill`, `plugin`, `mcp_server`, `supply_chain`, `url`, and `prompt_injection`.
+
+### Changed
+- Restored plain `agentguard checkup` as the local health checkup workflow, while keeping `agentguard checkup --against-advisory <id>` as the targeted Cloud advisory self-check mode.
+- Threat-feed subscribe now separates manual and automated handling: non-quiet runs notify users about new advisories for manual review, while quiet runs self-check and report matches automatically.
+- OpenClaw threat-feed cron jobs now use `{ kind: "cron", expr, tz }` schedules and preserve the quiet/non-quiet mode used during installation.
+
+### Fixed
+- Fixed disconnected targeted checkup behavior so `agentguard checkup --against-advisory <id>` requires an active Cloud connection instead of falling back to local advisory cache.
+- Fixed plain `agentguard checkup` so it falls back to the text summary when the optional visual report generator is unavailable in packaged installs.
+- Fixed OpenClaw cron payloads to persist the installed manual/quiet mode and exact subscribe command.
+- Fixed `domainExact` self-check matching so exact domains do not match substrings such as `evil.example.com` or `not-evil.example`.
+
+### Removed
+- Removed the old `agentguard subscribe --install-cron` and `--interval-minutes` options from CLI docs and command handling.
+
+## [1.1.8] - 2026-05-19
+
+### Added
+- Added `agentguard disconnect` to remove local AgentGuard Cloud credentials, connection metadata, pending event spool, and cached Cloud policy while keeping local protection active.
+- Expanded threat-feed advisory types for supply-chain, URL, domain, and prompt-injection use cases, including self-check remediation metadata.
+
+### Changed
+- Aligned the AgentGuard Cloud feed client with the current API contract, including single-advisory lookup, richer error envelopes, bare status responses, and improved status output handling.
+- Runtime approval prompts now route through the connected agent host (`claude-code` or `codex`) instead of creating separate Cloud approval records, so confirm flows use the agent's native permission channel.
+
+### Fixed
+- Preserved AgentGuard skill command routing while adding Cloud disconnect support.
+- Aligned the OpenClaw plugin entry contract and installer behavior so OpenClaw loads the runtime plugin through the expected package entry.
+- Strengthened tests around Cloud feed calls, disconnect behavior, OpenClaw installation, runtime approval output, and integration flows.
+
+## [1.1.7] - 2026-05-18
+
+### Fixed
+- Added the missing `agentguard policy pull` command used by AgentGuard Cloud policy refresh instructions.
+- OpenClaw installs now enable the AgentGuard plugin when installing the skill through `setup.sh` or running `agentguard init --agent openclaw`.
+- Added a dedicated OpenClaw package entry so OpenClaw loads the runtime plugin instead of the generic SDK entrypoint.
+
+## [1.1.5] - 2026-05-18
+
+### Added
+- Added Hermes hook support, including installable hook metadata and docs.
+- Added `agentguard subscribe --install-cron` for silent OpenClaw Gateway cron subscription checks.
+
+### Changed
+- Routed OpenClaw tool calls through runtime protection and AgentGuard Cloud policy decisions.
+- Improved OpenClaw plugin config handling, registry discovery, and action classification.
+
+### Fixed
+- Hardened OpenClaw fallback behavior so security-sensitive actions fail closed when runtime protection is unavailable.
+- Prevented audit log write failures from masking runtime policy decisions.
+
+## [1.1.4] - 2026-05-14
+
+### Added
+- `agentguard subscribe` — pulls new threat-feed advisories from AgentGuard Cloud (`GET /api/v1/feed/advisories`), runs a self-check against locally installed skills, and reports matches back via `POST /api/v1/feed/self-check-report`. State persisted at `~/.agentguard/feed-state.json` so successive runs only process new entries.
+- `agentguard checkup --against-advisory <id>` — on-demand self-check for a single advisory. Useful when you just want to know "am I affected by AGS-2026-…?" without subscribing.
+- `src/feed/` module: `Advisory` / `AdvisoryAffected` / `FeedState` types modelled after OSV.dev, a self-check engine that matches by `namePattern` / `sha256` / `bodyRegex`, and a small state store.
+- `CloudRequestError` exported from `src/cloud/client.ts` so feed callers can branch on HTTP status (notably 404, which lets the CLI fall back gracefully when running against an older AgentGuard Cloud that doesn't expose the feed yet).
+
+### Changed
+- `normalizeCloudUrl` now accepts `http://` for loopback hosts (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`) in addition to https-everywhere-else. Required for local dev and unit tests against a local Cloud build; production URLs are unaffected.
+
 ## [1.1.3] - 2026-05-12
 
 ### Added

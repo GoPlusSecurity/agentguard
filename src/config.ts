@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface AgentGuardConfig {
   version: 1;
   level: 'strict' | 'balanced' | 'permissive';
+  agentHost?: 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
   cloudUrl?: string;
   apiKey?: string;
   connectedAt?: string;
@@ -74,6 +75,7 @@ export function loadConfig(): AgentGuardConfig {
       ...parsed,
       version: 1,
       level: normalizeLevel(parsed.level) ?? fallback.level,
+      agentHost: normalizeAgentHost(parsed.agentHost),
       cloudUrl: parsed.cloudUrl || fallback.cloudUrl,
       policyCachePath: parsed.policyCachePath || fallback.policyCachePath,
       auditPath: parsed.auditPath || fallback.auditPath,
@@ -104,6 +106,17 @@ export function connectCloud(options: { apiKey: string; cloudUrl?: string }): Ag
   return next;
 }
 
+export function disconnectCloud(): AgentGuardConfig {
+  const current = ensureConfig();
+  const next: AgentGuardConfig = { ...current };
+  delete next.apiKey;
+  delete next.connectedAt;
+  rmSync(current.eventSpoolPath, { force: true });
+  rmSync(current.policyCachePath, { force: true });
+  saveConfig(next);
+  return next;
+}
+
 export function maskApiKey(apiKey?: string): string {
   if (!apiKey) return 'not configured';
   if (apiKey.length <= 12) return `${apiKey.slice(0, 4)}…`;
@@ -116,6 +129,8 @@ export function validateApiKey(apiKey: string): void {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+
 export function normalizeCloudUrl(value: string): string {
   const normalized = value.replace(/\/+$/, '');
   let parsed: URL;
@@ -124,8 +139,11 @@ export function normalizeCloudUrl(value: string): string {
   } catch {
     throw new Error('Invalid Cloud URL.');
   }
-  if (parsed.protocol !== 'https:') {
-    throw new Error('Invalid Cloud URL. AgentGuard Cloud URLs must use https://.');
+  const isLoopback = LOOPBACK_HOSTS.has(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+    throw new Error(
+      'Invalid Cloud URL. AgentGuard Cloud URLs must use https:// (http:// allowed only for loopback hosts).'
+    );
   }
   return normalized;
 }
@@ -134,6 +152,12 @@ function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
   return value === 'strict' || value === 'balanced' || value === 'permissive'
     ? value
     : null;
+}
+
+function normalizeAgentHost(value: unknown): AgentGuardConfig['agentHost'] | undefined {
+  return value === 'claude-code' || value === 'codex' || value === 'openclaw' || value === 'hermes' || value === 'qclaw'
+    ? value
+    : undefined;
 }
 
 function chmodBestEffort(path: string, mode: number): void {
