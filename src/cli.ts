@@ -16,12 +16,12 @@ import {
   normalizeCloudUrl,
   saveConfig,
 } from './config.js';
-import type { AgentGuardConfig } from './config.js';
+import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
-import { installAgentTemplates, type AgentInstaller } from './installers.js';
+import { installAgentTemplates, type AgentInstaller, type InstallResult } from './installers.js';
 import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
@@ -32,6 +32,15 @@ import {
   type OpenClawCronInstallResult,
   type CronBackend,
 } from './feed/cron.js';
+
+const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'];
+const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
+  { agent: 'claude-code', dir: '.claude' },
+  { agent: 'openclaw', dir: '.openclaw' },
+  { agent: 'hermes', dir: '.hermes' },
+  { agent: 'qclaw', dir: '.qclaw' },
+  { agent: 'codex', dir: '.codex' },
+];
 
 async function main() {
   const program = new Command();
@@ -66,11 +75,28 @@ async function main() {
       console.log(`Config: ${paths.configPath}`);
       if (options.agent) {
         const normalizedAgent = String(options.agent).trim().toLowerCase();
-        if (!['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'].includes(normalizedAgent)) {
-          throw new Error('Invalid agent. Use claude-code, codex, openclaw, hermes, or qclaw.');
+        if (normalizedAgent === 'auto') {
+          const results = initAutoAgents(config, Boolean(options.force));
+          if (results.detected.length === 0) {
+            console.log('No supported agent directories found. Looked for .claude, .openclaw, .hermes, .qclaw, and .codex.');
+          } else if (results.installed.length === 0) {
+            console.log('No agent templates were installed; all detected agent initializers failed.');
+          }
+          for (const result of results.installed) {
+            console.log(`Installed ${result.agent} template:`);
+            for (const file of result.files) console.log(`- ${file}`);
+          }
+          for (const failure of results.failed) {
+            console.error(`! Failed to initialize ${failure.agent}: ${failure.error}`);
+          }
+          return;
+        }
+        if (!SUPPORTED_AGENT_INSTALLERS.includes(normalizedAgent as AgentInstaller)) {
+          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, or qclaw.');
         }
         const agent = normalizedAgent as AgentInstaller;
         config.agentHost = agent;
+        config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
         const result = installAgentTemplates(agent, { force: options.force });
         console.log(`Installed ${result.agent} template:`);
@@ -124,6 +150,7 @@ async function main() {
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
       console.log(`API key: ${maskApiKey(config.apiKey)}`);
       console.log(`Agent host: ${config.agentHost || 'not configured'}`);
+      console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
       console.log(`Audit log: ${config.auditPath}`);
     });
@@ -405,7 +432,7 @@ async function main() {
             quiet,
             force: Boolean(options.force),
             backend: cronTarget,
-            agentHost: config.agentHost,
+            agentHost: resolveCronAgentHost(config),
             agentGuardHome: getAgentGuardPaths().home,
           });
           summary.cron.installed = true;
@@ -537,6 +564,50 @@ async function main() {
 function validateCronTarget(value: unknown): CronBackend {
   if (value === 'auto' || value === 'openclaw' || value === 'qclaw' || value === 'hermes' || value === 'system') return value;
   throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, or system.');
+}
+
+function initAutoAgents(config: AgentGuardConfig, force: boolean): {
+  installed: InstallResult[];
+  failed: Array<{ agent: AgentInstaller; error: string }>;
+  detected: AgentInstaller[];
+} {
+  const installed: InstallResult[] = [];
+  const failed: Array<{ agent: AgentInstaller; error: string }> = [];
+  const detectedAgents = AUTO_AGENT_DETECTION
+    .filter(({ dir }) => existsSync(join(process.cwd(), dir)))
+    .map(({ agent }) => agent);
+
+  for (const agent of detectedAgents) {
+    try {
+      installed.push(installAgentTemplates(agent, { cwd: process.cwd(), force }));
+    } catch (err) {
+      failed.push({
+        agent,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (installed.length > 0) {
+    config.agentHosts = installed.map((result) => result.agent);
+    config.agentHost = installed[0].agent;
+    saveConfig(config);
+  }
+
+  return { installed, failed, detected: detectedAgents };
+}
+
+function appendAgentHost(
+  agentHosts: AgentGuardConfig['agentHosts'] | undefined,
+  agent: AgentGuardAgentHost
+): AgentGuardAgentHost[] {
+  const next = agentHosts ? [...agentHosts] : [];
+  if (!next.includes(agent)) next.push(agent);
+  return next;
+}
+
+function resolveCronAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
+  return config.agentHost ?? config.agentHosts?.[0];
 }
 
 function readStdinIfAvailable(): string {

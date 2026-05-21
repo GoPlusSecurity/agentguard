@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added `agentguard init --agent auto` to detect installed agent directories and initialize each supported agent in order while continuing after per-agent failures.
+
+### Changed
+- `agentguard init` now stores all initialized agent hosts in config while keeping the first detected host as the default for `--cron-target auto`.
+
+### Fixed
+- Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
+- `agentguard subscribe --cron` Gateway fallback/QClaw installation now uses OpenClaw-compatible WebSocket Gateway RPC instead of HTTP `POST /`, and sends `cron.add` the object payload expected by the Gateway schema.
+
 ## [1.1.10] - 2026-05-21
 
 ### Added

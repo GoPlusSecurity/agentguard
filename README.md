@@ -109,6 +109,7 @@ agentguard checkup --against-advisory AGS-2026-0042
 
 # Optional: write host-specific hook templates.
 # OpenClaw also installs and enables the AgentGuard plugin.
+agentguard init --agent auto
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw

@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,6 +15,61 @@ import {
 } from '../feed/cron.js';
 
 type RpcCall = { method: string; params: any };
+
+async function closeServer(server: http.Server | net.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function serverPort(server: http.Server | net.Server): number {
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return address.port;
+}
+
+function encodeServerWebSocketFrame(text: string, opcode = 0x1, fin = true): Buffer {
+  const payload = Buffer.from(text, 'utf8');
+  const headerLength = payload.length < 126 ? 2 : payload.length <= 0xffff ? 4 : 10;
+  const header = Buffer.alloc(headerLength);
+  header[0] = (fin ? 0x80 : 0) | opcode;
+  if (payload.length < 126) {
+    header[1] = payload.length;
+  } else if (payload.length <= 0xffff) {
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+function readClientWebSocketFrame(buffer: Buffer): { payload: string; rest: Buffer } | null {
+  if (buffer.length < 2) return null;
+  let length = buffer[1]! & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < offset + 2) return null;
+    length = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (length === 127) {
+    if (buffer.length < offset + 8) return null;
+    length = Number(buffer.readBigUInt64BE(offset));
+    offset += 8;
+  }
+  if (buffer.length < offset + 4 + length) return null;
+  const mask = buffer.subarray(offset, offset + 4);
+  offset += 4;
+  const payload = Buffer.from(buffer.subarray(offset, offset + length));
+  for (let i = 0; i < payload.length; i += 1) {
+    payload[i] = payload[i]! ^ mask[i % 4]!;
+  }
+  return { payload: payload.toString('utf8'), rest: buffer.subarray(offset + length) };
+}
 
 function fakeGateway(jobs: Array<{ id: string; name: string }> = []): {
   calls: RpcCall[];
@@ -48,7 +106,7 @@ describe('feed/cron', () => {
     assert.equal(result.schedule, '0 * * * *');
     assert.equal(result.timezone, 'Asia/Shanghai');
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
-    const job = gateway.calls[1].params[0];
+    const job = gateway.calls[1].params;
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'Asia/Shanghai' });
     assert.deepEqual(job.delivery, { mode: 'none' });
@@ -279,7 +337,7 @@ describe('feed/cron', () => {
 
     assert.equal(result.backend, 'qclaw-gateway');
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
-    const job = gateway.calls[1].params[0];
+    const job = gateway.calls[1].params;
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'UTC' });
     assert.equal(job.payload.agentguard.command, 'agentguard subscribe --json --cron-run');
@@ -428,14 +486,14 @@ describe('feed/cron', () => {
     assert.equal(result.created, true);
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove', 'cron.add']);
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
-    assert.deepEqual(gateway.calls[2].params[0].schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
-    assert.deepEqual(gateway.calls[2].params[0].payload.agentguard, {
+    assert.deepEqual(gateway.calls[2].params.schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
+    assert.deepEqual(gateway.calls[2].params.payload.agentguard, {
       mode: 'quiet',
       command: 'agentguard subscribe --quiet --json --cron-run',
     });
-    assert.match(gateway.calls[2].params[0].payload.message, /Mode: quiet/);
-    assert.match(gateway.calls[2].params[0].payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
-    assert.match(gateway.calls[2].params[0].payload.message, /agentguard subscribe --quiet --json --cron-run/);
+    assert.match(gateway.calls[2].params.payload.message, /Mode: quiet/);
+    assert.match(gateway.calls[2].params.payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
+    assert.match(gateway.calls[2].params.payload.message, /agentguard subscribe --quiet --json --cron-run/);
   });
 
   it('does not add a replacement if force removal fails', async () => {
@@ -468,5 +526,102 @@ describe('feed/cron', () => {
         }),
       /timed out/
     );
+  });
+
+  it('keeps the default HTTP JSON-RPC Gateway path and legacy cron.add params', async () => {
+    let requestBody: any;
+    const server = http.createServer((req, res) => {
+      assert.equal(req.method, 'POST');
+      assert.equal(req.url, '/');
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requestBody = JSON.parse(raw);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: requestBody.id, result: { ok: true } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await openClawGatewayRequest('cron.add', { name: 'agentguard-threat-feed' }, {
+        host: '127.0.0.1',
+        port: serverPort(server),
+        timeoutMs: 100,
+      });
+
+      assert.deepEqual(result, { ok: true });
+      assert.equal(requestBody.method, 'cron.add');
+      assert.deepEqual(requestBody.params, [{ name: 'agentguard-threat-feed' }]);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('handles fragmented WebSocket Gateway text responses', async () => {
+    const server = net.createServer((socket) => {
+      let handshakeComplete = false;
+      let buffer = Buffer.alloc(0);
+      let clientRequests = 0;
+
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        if (!handshakeComplete) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;
+          const header = buffer.subarray(0, headerEnd + 4).toString('utf8');
+          const key = /^Sec-WebSocket-Key:\s*(.+)$/im.exec(header)?.[1]?.trim();
+          assert.ok(key);
+          const accept = createHash('sha1')
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+          socket.write([
+            'HTTP/1.1 101 Switching Protocols',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Accept: ${accept}`,
+            '',
+            '',
+          ].join('\r\n'));
+          handshakeComplete = true;
+          buffer = buffer.subarray(headerEnd + 4);
+          socket.write(encodeServerWebSocketFrame(JSON.stringify({ type: 'event', event: 'connect.challenge' })));
+        }
+
+        while (true) {
+          const parsed = readClientWebSocketFrame(buffer);
+          if (!parsed) break;
+          buffer = parsed.rest;
+          clientRequests += 1;
+          const frame = JSON.parse(parsed.payload);
+          if (clientRequests === 1) {
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: {} })));
+          } else {
+            const response = JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: { jobs: [{ id: 'job-1', name: 'agentguard-threat-feed' }] },
+            });
+            const splitAt = Math.floor(response.length / 2);
+            socket.write(encodeServerWebSocketFrame(response.slice(0, splitAt), 0x1, false));
+            socket.write(encodeServerWebSocketFrame(response.slice(splitAt), 0x0, true));
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await openClawGatewayRequest('cron.list', {}, {
+        url: `ws://127.0.0.1:${serverPort(server)}`,
+        timeoutMs: 500,
+      });
+
+      assert.deepEqual(result, { jobs: [{ id: 'job-1', name: 'agentguard-threat-feed' }] });
+    } finally {
+      await closeServer(server);
+    }
   });
 });

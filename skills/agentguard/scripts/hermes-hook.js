@@ -4,10 +4,10 @@
  * GoPlus AgentGuard Hermes shell hook.
  *
  * Hermes shell hooks read JSON from stdin and use stdout JSON to influence
- * behavior. For pre_tool_call, returning { action: "block", message: "..." }
- * vetoes tool execution. There is no native "ask" decision in Hermes'
- * pre_tool_call contract, so AgentGuard's ask decision is represented as a
- * block with a confirmation-oriented message.
+ * behavior. For pre_tool_call, returning a block decision vetoes tool
+ * execution. There is no native "ask" decision in Hermes' pre_tool_call
+ * contract, so AgentGuard's confirmation decision is represented as a block
+ * with a confirmation-oriented message.
  */
 
 import { join } from 'node:path';
@@ -62,6 +62,11 @@ function validatePreToolPayload(input) {
       return null;
     case 'web_extract':
     case 'browser_navigate':
+    case 'browser_open':
+    case 'web_open':
+    case 'open_url':
+    case 'visit_url':
+    case 'open':
       if (!firstString(toolInput.url, toolInput.href, toolInput.target)) return `Hermes ${toolName} hook payload is missing URL`;
       return null;
     case 'web_search':
@@ -82,7 +87,7 @@ function shouldFailClosed(input) {
 
 const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
 
-let createAgentGuard, HermesAdapter, evaluateHook, loadConfig;
+let loadRuntimeConfig, loadHookConfig, protectAction, createAgentGuard, HermesAdapter, evaluateHook;
 
 async function loadEngine() {
   if (process.env.AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE === '1') {
@@ -92,19 +97,23 @@ async function loadEngine() {
   try {
     const gs = await import(agentguardPath);
     return {
+      loadRuntimeConfig: gs.loadAgentGuardConfig || gs.ensureConfig,
+      loadHookConfig: gs.loadConfig,
+      protectAction: gs.protectAction,
       createAgentGuard: gs.createAgentGuard || gs.default,
       HermesAdapter: gs.HermesAdapter,
       evaluateHook: gs.evaluateHook,
-      loadConfig: gs.loadConfig,
     };
   } catch {
     try {
       const gs = await import('@goplus/agentguard');
       return {
+        loadRuntimeConfig: gs.loadAgentGuardConfig || gs.ensureConfig,
+        loadHookConfig: gs.loadConfig,
+        protectAction: gs.protectAction,
         createAgentGuard: gs.createAgentGuard || gs.default,
         HermesAdapter: gs.HermesAdapter,
         evaluateHook: gs.evaluateHook,
-        loadConfig: gs.loadConfig,
       };
     } catch {
       return null;
@@ -148,7 +157,10 @@ function readStdin() {
 function outputBlock(reason) {
   console.log(JSON.stringify({
     action: 'block',
+    decision: 'block',
+    block: true,
     message: reason || 'GoPlus AgentGuard blocked this action',
+    reason: reason || 'GoPlus AgentGuard blocked this action',
   }));
   process.exit(0);
 }
@@ -156,6 +168,41 @@ function outputBlock(reason) {
 function outputAllow() {
   console.log('{}');
   process.exit(0);
+}
+
+function runtimeActionTypeFrom(toolName) {
+  switch (toolName) {
+    case 'terminal':
+    case 'execute_code':
+      return 'shell';
+    case 'write_file':
+    case 'patch':
+    case 'skill_manage':
+      return 'file_write';
+    case 'read_file':
+      return 'file_read';
+    case 'web_search':
+    case 'web_extract':
+    case 'browser_navigate':
+    case 'browser_open':
+    case 'web_open':
+    case 'open_url':
+    case 'visit_url':
+    case 'open':
+      return 'network';
+    default:
+      return 'other';
+  }
+}
+
+function runtimeToolNameFrom(toolName) {
+  return toolName || 'HermesTool';
+}
+
+function debugLog(message, details) {
+  if (process.env.AGENTGUARD_HERMES_DEBUG !== '1') return;
+  const suffix = details === undefined ? '' : ` ${JSON.stringify(details)}`;
+  console.error(`[AgentGuard Hermes] ${message}${suffix}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,21 +228,61 @@ async function main() {
     outputAllow();
   }
 
-  ({ createAgentGuard, HermesAdapter, evaluateHook, loadConfig } = engine);
+  ({ loadRuntimeConfig, loadHookConfig, protectAction, createAgentGuard, HermesAdapter, evaluateHook } = engine);
 
-  const adapter = new HermesAdapter();
-  const config = loadConfig();
-  const agentguard = createAgentGuard();
+  if (isPostHook(input)) {
+    try {
+      if (createAgentGuard && HermesAdapter && evaluateHook) {
+        const adapter = new HermesAdapter();
+        const config = loadHookConfig ? loadHookConfig() : { level: loadRuntimeConfig().level };
+        const agentguard = createAgentGuard();
+        await evaluateHook(adapter, input, { config, agentguard });
+      }
+    } catch {
+      // Post hooks are audit-only; never affect Hermes execution.
+    }
+    outputAllow();
+  }
 
-  const result = await evaluateHook(adapter, input, { config, agentguard });
+  const config = loadRuntimeConfig();
+  const result = await protectAction({
+    config,
+    rawInput: input,
+    agentHost: 'hermes',
+    actionType: runtimeActionTypeFrom(toolNameFrom(input)),
+    toolName: runtimeToolNameFrom(toolNameFrom(input)),
+    sessionId: typeof input.session_id === 'string' ? input.session_id : undefined,
+  });
 
-  if (result.decision === 'deny') {
-    outputBlock(result.reason || 'GoPlus AgentGuard blocked this Hermes tool call');
-  } else if (result.decision === 'ask') {
-    outputBlock(result.reason || 'GoPlus AgentGuard requires confirmation for this Hermes tool call');
+  if (!result) {
+    debugLog('allow: no runtime action was built');
+    outputAllow();
+  }
+
+  debugLog('decision', {
+    decision: result.decision.decision,
+    riskLevel: result.decision.riskLevel,
+    riskScore: result.decision.riskScore,
+    policySource: result.policySource,
+  });
+
+  if (result.decision.decision === 'block') {
+    outputBlock(formatDecisionReason(result, 'blocked this Hermes tool call'));
+  } else if (result.decision.decision === 'require_approval') {
+    outputBlock(formatDecisionReason(result, 'requires confirmation for this Hermes tool call'));
   } else {
     outputAllow();
   }
+}
+
+function formatDecisionReason(result, fallback) {
+  const titles = result.decision.reasons
+    .map((item) => item.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(', ');
+  const suffix = titles ? ` Reasons: ${titles}.` : '';
+  return `GoPlus AgentGuard ${fallback} (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}).${suffix}`;
 }
 
 main();
