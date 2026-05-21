@@ -32,7 +32,7 @@ function installClaudeCode(root: string, force: boolean): InstallResult {
 function installCodex(root: string, force: boolean): InstallResult {
   const skillDir = join(root, '.codex', 'skills', 'agentguard');
   const skillPath = join(skillDir, 'SKILL.md');
-  const hookPath = join(root, '.codex', 'agentguard-hook.example.json');
+  const hookPath = join(root, '.codex', 'agentguard-hook.json');
   mkdirSync(skillDir, { recursive: true });
   writeIfAllowed(skillPath, codexSkillTemplate(), force);
   writeIfAllowed(hookPath, JSON.stringify(codexHookTemplate(), null, 2) + '\n', force);
@@ -43,34 +43,30 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
   const openClawRoot = cwd
     ? join(cwd, '.openclaw')
     : process.env.OPENCLAW_STATE_DIR || join(homedir(), '.openclaw');
-  const pluginDir = join(openClawRoot, 'plugins', 'agentguard');
-  const packagePath = join(pluginDir, 'package.json');
-  const pluginPath = join(pluginDir, 'index.js');
-  const manifestPath = join(pluginDir, 'openclaw.plugin.json');
   const configPath = cwd
     ? join(openClawRoot, 'openclaw.json')
     : process.env.OPENCLAW_CONFIG_PATH || join(openClawRoot, 'openclaw.json');
 
-  writeIfAllowed(packagePath, JSON.stringify(openClawPackageManifest(), null, 2) + '\n', force);
-  writeIfAllowed(pluginPath, openClawPluginTemplate(), force);
-  writeIfAllowed(manifestPath, JSON.stringify(openClawPluginManifest(), null, 2) + '\n', force);
-  enableOpenClawPlugin(configPath, pluginDir);
-
-  return { agent: 'openclaw', files: [packagePath, pluginPath, manifestPath, configPath] };
+  return installClawPlugin('openclaw', openClawRoot, configPath, force);
 }
 
 function installHermes(root: string, force: boolean): InstallResult {
   const skillDir = join(root, '.hermes', 'skills', 'agentguard');
   const configExamplePath = join(root, '.hermes', 'agentguard-hooks.example.yaml');
+  const configPath = join(root, '.hermes', 'config.yaml');
   copyBundledSkill(skillDir, force);
   writeIfAllowed(configExamplePath, hermesHooksTemplate(skillDir), force);
-  return { agent: 'hermes', files: [skillDir, configExamplePath] };
+  enableHermesHooks(configPath, skillDir, force);
+  return { agent: 'hermes', files: [skillDir, configExamplePath, configPath] };
 }
 
 function installQClaw(root: string, force: boolean): InstallResult {
-  const skillDir = join(root, '.qclaw', 'skills', 'agentguard');
+  const qclawRoot = join(root, '.qclaw');
+  const skillDir = join(qclawRoot, 'skills', 'agentguard');
+  const configPath = join(qclawRoot, 'qclaw.json');
   copyBundledSkill(skillDir, force);
-  return { agent: 'qclaw', files: [skillDir] };
+  const pluginResult = installClawPlugin('qclaw', qclawRoot, configPath, force);
+  return { agent: 'qclaw', files: [skillDir, ...pluginResult.files] };
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
@@ -210,6 +206,20 @@ hooks_auto_accept: false
 `;
 }
 
+function installClawPlugin(agent: 'openclaw' | 'qclaw', root: string, configPath: string, force: boolean): InstallResult {
+  const pluginDir = join(root, 'plugins', 'agentguard');
+  const packagePath = join(pluginDir, 'package.json');
+  const pluginPath = join(pluginDir, 'index.js');
+  const manifestPath = join(pluginDir, 'openclaw.plugin.json');
+
+  writeIfAllowed(packagePath, JSON.stringify(openClawPackageManifest(agent), null, 2) + '\n', force);
+  writeIfAllowed(pluginPath, openClawPluginTemplate(), force);
+  writeIfAllowed(manifestPath, JSON.stringify(openClawPluginManifest(), null, 2) + '\n', force);
+  enableClawPlugin(configPath, pluginDir);
+
+  return { agent, files: [packagePath, pluginPath, manifestPath, configPath] };
+}
+
 function openClawPluginTemplate(): string {
   return `const { registerOpenClawPlugin } = require('@goplus/agentguard');
 
@@ -231,8 +241,8 @@ module.exports = Object.defineProperties(register, {
 `;
 }
 
-function openClawPackageManifest(): unknown {
-  return {
+function openClawPackageManifest(agent: 'openclaw' | 'qclaw' = 'openclaw'): unknown {
+  const manifest: Record<string, unknown> = {
     name: 'agentguard-openclaw-local',
     private: true,
     type: 'commonjs',
@@ -241,6 +251,14 @@ function openClawPackageManifest(): unknown {
       runtimeExtensions: ['./index.js'],
     },
   };
+  if (agent === 'qclaw') {
+    manifest.name = 'agentguard-qclaw-local';
+    manifest.qclaw = {
+      extensions: ['./index.js'],
+      runtimeExtensions: ['./index.js'],
+    };
+  }
+  return manifest;
 }
 
 function openClawPluginManifest(): unknown {
@@ -262,7 +280,7 @@ function openClawPluginManifest(): unknown {
   };
 }
 
-function enableOpenClawPlugin(configPath: string, pluginDir: string): void {
+function enableClawPlugin(configPath: string, pluginDir: string): void {
   let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     const raw = readFileSync(configPath, 'utf8').trim();
@@ -291,6 +309,94 @@ function enableOpenClawPlugin(configPath: string, pluginDir: string): void {
 
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+}
+
+function enableHermesHooks(configPath: string, skillDir: string, force: boolean): void {
+  if (existsSync(configPath) && !force && readFileSync(configPath, 'utf8').includes(`${skillDir}/scripts/hermes-hook.js`)) {
+    return;
+  }
+
+  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  const next = mergeHermesHooks(existing, skillDir);
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, next);
+}
+
+function mergeHermesHooks(existing: string, skillDir: string): string {
+  const lines = existing.replace(/\s+$/g, '').split(/\r?\n/).filter((line, index, arr) => !(arr.length === 1 && index === 0 && line === ''));
+  const hooksBlock = hermesHookEventBlock(skillDir).split('\n').filter(Boolean);
+  const hooksIndex = lines.findIndex((line) => /^hooks:\s*(?:#.*)?$/.test(line));
+
+  if (hooksIndex === -1) {
+    const prefix = lines.length ? `${lines.join('\n')}\n\n` : '';
+    return `${prefix}hooks:\n${hooksBlock.join('\n')}\n\n${hermesAutoAcceptLine(lines)}\n`;
+  }
+
+  const hooksEnd = findNextTopLevelIndex(lines, hooksIndex + 1);
+  const before = lines.slice(0, hooksIndex + 1);
+  const body = removeHermesManagedEvents(lines.slice(hooksIndex + 1, hooksEnd));
+  const after = lines.slice(hooksEnd);
+  const merged = [...before, ...body, ...hooksBlock, ...after];
+
+  if (!merged.some((line) => /^hooks_auto_accept:\s*/.test(line))) {
+    merged.push('', 'hooks_auto_accept: false');
+  }
+
+  return `${merged.join('\n').replace(/\s+$/g, '')}\n`;
+}
+
+function hermesHookEventBlock(skillDir: string): string {
+  return `  on_session_start:
+    - command: "env AGENTGUARD_AUTO_SCAN=1 node \\"${skillDir}/scripts/auto-scan.js\\""
+      timeout: 30
+
+  pre_tool_call:
+    - matcher: "terminal|execute_code"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "write_file|patch|skill_manage"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "read_file"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+
+  post_tool_call:
+    - matcher: "terminal|execute_code|write_file|patch|skill_manage|read_file|web_search|web_extract|browser_navigate"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 5`;
+}
+
+function removeHermesManagedEvents(lines: string[]): string[] {
+  const events = new Set(['on_session_start', 'pre_tool_call', 'post_tool_call']);
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    const match = /^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/.exec(lines[index]);
+    if (match && events.has(match[1])) {
+      index += 1;
+      while (index < lines.length && !/^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(lines[index]) && !/^\S/.test(lines[index])) {
+        index += 1;
+      }
+      continue;
+    }
+    kept.push(lines[index]);
+    index += 1;
+  }
+  return kept;
+}
+
+function findNextTopLevelIndex(lines: string[], start: number): number {
+  for (let index = start; index < lines.length; index += 1) {
+    if (/^\S/.test(lines[index]) && !/^#/.test(lines[index])) return index;
+  }
+  return lines.length;
+}
+
+function hermesAutoAcceptLine(lines: string[]): string {
+  return lines.some((line) => /^hooks_auto_accept:\s*/.test(line)) ? '' : 'hooks_auto_accept: false';
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {

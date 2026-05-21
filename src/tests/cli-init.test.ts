@@ -9,6 +9,38 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 describe('init CLI', () => {
+  it('prints required init guidance when run without a command', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-guidance-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-guidance-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    assert.match(stdout, /Required next step:/);
+    assert.match(stdout, /agentguard init --agent auto/);
+    assert.doesNotMatch(stdout, /agentguard connect/);
+    assert.doesNotMatch(stdout, /agentguard checkup/);
+  });
+
+  it('prints required init guidance from status when no agent host is saved', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-status-guidance-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-status-guidance-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'status'], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    assert.match(stdout, /Agent host: not configured/);
+    assert.match(stdout, /agentguard init --agent auto/);
+    assert.doesNotMatch(stdout, /agentguard connect/);
+    assert.doesNotMatch(stdout, /agentguard checkup/);
+  });
+
   it('persists the selected agent host in AgentGuard config', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-init-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-cwd-'));
@@ -75,7 +107,9 @@ describe('init CLI', () => {
     assert.deepEqual(config.agentHosts, ['openclaw', 'hermes', 'codex']);
     assert.ok(existsSync(join(cwd, '.openclaw', 'plugins', 'agentguard', 'openclaw.plugin.json')));
     assert.ok(existsSync(join(cwd, '.hermes', 'skills', 'agentguard')));
+    assert.ok(readFileSync(join(cwd, '.hermes', 'config.yaml'), 'utf8').includes('hermes-hook.js'));
     assert.ok(existsSync(join(cwd, '.codex', 'skills', 'agentguard', 'SKILL.md')));
+    assert.ok(existsSync(join(cwd, '.codex', 'agentguard-hook.json')));
     assert.match(stdout, /Installed openclaw template:/);
     assert.match(stdout, /Installed hermes template:/);
     assert.match(stdout, /Installed codex template:/);

@@ -18,13 +18,13 @@ describe('postinstall', () => {
     });
 
     assert.match(stdout, /AgentGuard local config ready:/);
-    assert.match(stdout, /agentguard init --agent <claude-code\|codex\|openclaw\|hermes\|qclaw>/);
-    assert.match(stdout, /agentguard connect/);
-    assert.match(stdout, /agentguard checkup/);
+    assert.match(stdout, /agentguard init --agent auto/);
+    assert.doesNotMatch(stdout, /agentguard connect/);
+    assert.doesNotMatch(stdout, /agentguard checkup/);
 
     const nextSteps = readFileSync(join(home, 'next-steps.txt'), 'utf8');
-    assert.match(nextSteps, /agentguard init --agent <claude-code\|codex\|openclaw\|hermes\|qclaw>/);
-    assert.match(nextSteps, /agentguard connect/);
-    assert.match(nextSteps, /agentguard checkup/);
+    assert.match(nextSteps, /agentguard init --agent auto/);
+    assert.doesNotMatch(nextSteps, /agentguard connect/);
+    assert.doesNotMatch(nextSteps, /agentguard checkup/);
   });
 });
