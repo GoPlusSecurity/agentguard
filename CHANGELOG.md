@@ -8,6 +8,9 @@
 ### Changed
 - `agentguard init` now stores all initialized agent hosts in config while keeping the first detected host as the default for `--cron-target auto`.
 
+### Fixed
+- Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
+
 ## [1.1.10] - 2026-05-21
 
 ### Added

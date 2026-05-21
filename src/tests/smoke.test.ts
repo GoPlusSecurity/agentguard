@@ -237,6 +237,20 @@ describe('Smoke: hermes-hook.js E2E', () => {
     assert.equal(payload.action, 'block');
   });
 
+  it('should block confirm-only secret reads because Hermes has no ask protocol', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: 'cat /home/hermes/.hermes/.env' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { action?: string; decision?: string; block?: boolean; message?: string };
+    assert.equal(payload.action, 'block');
+    assert.equal(payload.decision, 'block');
+    assert.equal(payload.block, true);
+    assert.ok(payload.message?.includes('requires confirmation'));
+  });
+
   it('should allow post_tool_call event for audit-only handling', async () => {
     const { exitCode, stdout } = await runHermesHook({
       hook_event_name: 'post_tool_call',
@@ -308,6 +322,18 @@ describe('Smoke: hermes-hook.js E2E', () => {
     const payload = JSON.parse(stdout) as { action?: string; message?: string };
     assert.equal(payload.action, 'block');
     assert.ok(payload.message?.includes('missing URL'));
+  });
+
+  it('should evaluate Hermes open-style URL tools', async () => {
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'open',
+      tool_input: { url: 'https://www.tiktok.com' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { action?: string; message?: string };
+    assert.equal(payload.action, 'block');
+    assert.ok(payload.message?.includes('requires confirmation'));
   });
 
   it('should block invalid stdin without waiting for the stdin timeout', async () => {

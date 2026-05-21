@@ -130,11 +130,13 @@ must be present in `~/.hermes/config.yaml`. This skill ships the hook runner at
 | `pre_tool_call` | `terminal`, `execute_code` | `exec_command` |
 | `pre_tool_call` | `write_file`, `patch`, `skill_manage` | `write_file` |
 | `pre_tool_call` | `read_file` | `read_file` |
-| `pre_tool_call` | `web_search`, `web_extract`, `browser_navigate` | `network_request` |
+| `pre_tool_call` | `web_search`, `web_extract`, `browser_navigate`, `browser_open`, `web_open`, `open_url`, `visit_url`, `open` | `network_request` |
 | `post_tool_call` | Same tools | Audit-only |
 
 Hermes `pre_tool_call` supports allow/block only. If AgentGuard returns `ask`,
 the Hermes hook reports it as a block with a confirmation-oriented message.
+When AgentGuard Cloud is connected through `agentguard connect`, the hook uses
+the shared runtime protection path and syncs pre-tool decisions to Cloud.
 
 ### Procedure
 
@@ -162,6 +164,11 @@ the Hermes hook reports it as a block with a confirmation-oriented message.
    HERMES_ACCEPT_HOOKS=1 hermes chat
    ```
    They may also set `hooks_auto_accept: true` in `~/.hermes/config.yaml`.
+7. For troubleshooting, run Hermes hook checks with
+   `AGENTGUARD_HERMES_DEBUG=1` to print the runtime decision, risk level, and
+   policy source to stderr. Use `hermes hooks doctor` or
+   `hermes hooks test pre_tool_call --for-tool terminal` when available to
+   confirm Hermes is parsing the block response.
 
 ### Verification
 
@@ -188,7 +195,7 @@ printf '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{
 Expected output contains:
 
 ```json
-{"action":"block"}
+{"action":"block","decision":"block","block":true}
 ```
 
 ## Subcommand: subscribe
