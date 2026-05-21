@@ -4,11 +4,11 @@
  * GoPlus AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
  *
  * Usage:
- *   node trust-cli.ts lookup --id <id> --source <source> --version <version> --hash <hash>
- *   node trust-cli.ts attest  --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> [--preset <preset>] [--capabilities <json>] [--reviewed-by <name>] [--notes <text>] [--expires <iso>] [--force]
- *   node trust-cli.ts revoke  [--source <source>] [--key <record_key>] --reason <reason>
- *   node trust-cli.ts list    [--trust-level <level>] [--status <status>] [--source-pattern <pattern>]
- *   node trust-cli.ts hash    --path <dir>
+ *   node trust-cli.js lookup --id <id> --source <source> --version <version> --hash <hash>
+ *   node trust-cli.js attest  --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> [--preset <preset>] [--capabilities <json>] [--reviewed-by <name>] [--notes <text>] [--expires <iso>] [--force]
+ *   node trust-cli.js revoke  [--source <source>] [--key <record_key>] --reason <reason>
+ *   node trust-cli.js list    [--trust-level <level>] [--status <status>] [--source-pattern <pattern>]
+ *   node trust-cli.js hash    --path <dir>
  */
 
 import { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } from '@goplus/agentguard';
@@ -16,13 +16,13 @@ import { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } from '@goplus/agen
 const args = process.argv.slice(2);
 const command = args[0];
 
-function getArg(name: string): string | undefined {
+function getArg(name) {
   const idx = args.indexOf(`--${name}`);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   return args[idx + 1];
 }
 
-function hasFlag(name: string): boolean {
+function hasFlag(name) {
   return args.includes(`--${name}`);
 }
 
@@ -50,18 +50,14 @@ async function main() {
         version_ref: getArg('version') || '',
         artifact_hash: getArg('hash') || '',
       };
-      const trustLevel = (getArg('trust-level') || 'restricted') as
-        | 'untrusted'
-        | 'restricted'
-        | 'trusted';
+      const trustLevel = getArg('trust-level') || 'restricted';
 
       let capabilities;
       const preset = getArg('preset');
       if (preset && preset in CAPABILITY_PRESETS) {
-        capabilities =
-          CAPABILITY_PRESETS[preset as keyof typeof CAPABILITY_PRESETS];
+        capabilities = CAPABILITY_PRESETS[preset];
       } else if (getArg('capabilities')) {
-        capabilities = JSON.parse(getArg('capabilities')!);
+        capabilities = JSON.parse(getArg('capabilities'));
       }
 
       const force = hasFlag('force');
@@ -94,7 +90,7 @@ async function main() {
     }
 
     case 'list': {
-      const filters: Record<string, string> = {};
+      const filters = {};
       const trustLevel = getArg('trust-level');
       const status = getArg('status');
       const sourcePattern = getArg('source-pattern');
@@ -121,7 +117,7 @@ async function main() {
 
     default:
       console.error(
-        'Usage: trust-cli.ts <lookup|attest|revoke|list|hash> [options]'
+        'Usage: trust-cli.js <lookup|attest|revoke|list|hash> [options]'
       );
       console.error('Run with --help for details.');
       process.exit(1);
