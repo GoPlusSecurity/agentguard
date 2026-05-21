@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.1.10] - 2026-05-21
 
 ### Added
 - Added `agentguard policy show` to inspect the cached effective runtime policy, with `--json` output and fallback to the bundled default policy when no cache exists.
