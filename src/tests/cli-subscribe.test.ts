@@ -130,4 +130,46 @@ describe('CLI subscribe command modes', () => {
       assert.deepEqual((reports[0] as { advisoryId: string }).advisoryId, 'AGS-2026-subscribe');
     });
   });
+
+  it('--cron-notify-run prints only the manual notification body when new advisories exist', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-'));
+
+      const result = await runCli(['subscribe', '--cron-notify-run'], home, cloudUrl);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /^AgentGuard found new threat-feed advisories/m);
+      assert.match(result.stdout, /AGS-2026-subscribe/);
+      assert.doesNotMatch(result.stdout, /Pulled \d+ advisory/);
+    });
+  });
+
+  it('--cron-notify-run prints NO_REPLY when nothing should notify', async () => {
+    await withFeedServer([], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-'));
+
+      const result = await runCli(['subscribe', '--cron-notify-run'], home, cloudUrl);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.equal(result.stdout, 'NO_REPLY\n');
+    });
+  });
+
+  it('--quiet --cron-notify-run prints only the match notification body and exits zero', async () => {
+    await withFeedServer([advisory], async (cloudUrl, reports) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-'));
+      installMatchingSkill(home);
+
+      const result = await runCli(['subscribe', '--quiet', '--cron-notify-run'], home, cloudUrl);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /^AgentGuard threat-feed self-check found local matches:/m);
+      assert.match(result.stdout, /AGS-2026-subscribe: 1 match/);
+      assert.doesNotMatch(result.stdout, /Self-check found/);
+      assert.equal(reports.length, 1);
+    });
+  });
 });

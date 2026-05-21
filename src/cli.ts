@@ -320,12 +320,14 @@ async function main() {
     .option('--cron-name <name>', 'Cron job name', 'agentguard-threat-feed')
     .option('--force', 'Replace an existing cron job with the same name')
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
+    .option('--cron-notify-run', 'Internal: run from an OpenClaw cron prompt and print only the notification body or NO_REPLY')
     .action(async (options) => {
       const config = ensureConfig();
       const client = new AgentGuardCloudClient(config);
       const state = loadFeedState();
       const since = (options.since as string | undefined) ?? state.lastPulledAt;
       const quiet = Boolean(options.quiet);
+      const cronNotifyRun = Boolean(options.cronNotifyRun);
       const cronTarget = validateCronTarget(options.cronTarget);
       const cronExpression = options.cron && !options.cronRun
         ? validateCronExpression(options.cron as string)
@@ -335,13 +337,20 @@ async function main() {
       try {
         advisories = await client.pullAdvisories(since);
       } catch (err) {
+        if (cronNotifyRun) {
+          console.log('NO_REPLY');
+          process.exitCode = 0;
+          return;
+        }
         console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
         process.exitCode = 1;
         return;
       }
       if (advisories === null) {
         // 404 — older Cloud build without the feed endpoint. Not an error.
-        if (options.json) {
+        if (cronNotifyRun) {
+          console.log('NO_REPLY');
+        } else if (options.json) {
           console.log(JSON.stringify({ supported: false, shouldNotify: false, results: [], cron: { requested: false, installed: false } }));
         } else if (!quiet) {
           console.log('AgentGuard Cloud does not expose /api/v1/feed/advisories yet — nothing to do.');
@@ -443,6 +452,12 @@ async function main() {
           summary.cron.error = (err as Error).message;
           throw err;
         }
+      }
+
+      if (cronNotifyRun) {
+        console.log(summary.shouldNotify && summary.hardFailures === 0 ? summary.notification?.body ?? 'NO_REPLY' : 'NO_REPLY');
+        process.exitCode = 0;
+        return;
       }
 
       if (options.json) {
