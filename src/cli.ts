@@ -27,9 +27,10 @@ import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import {
-  installOpenClawThreatFeedCron,
+  installThreatFeedCron,
   validateCronExpression,
   type OpenClawCronInstallResult,
+  type CronBackend,
 } from './feed/cron.js';
 
 async function main() {
@@ -67,7 +68,10 @@ async function main() {
         if (!['claude-code', 'codex', 'openclaw'].includes(options.agent)) {
           throw new Error('Invalid agent. Use claude-code, codex, or openclaw.');
         }
-        const result = installAgentTemplates(options.agent as AgentInstaller, { force: options.force });
+        const agent = options.agent as AgentInstaller;
+        config.agentHost = agent;
+        saveConfig(config);
+        const result = installAgentTemplates(agent, { force: options.force });
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
       }
@@ -118,6 +122,7 @@ async function main() {
       console.log(`Protection level: ${config.level}`);
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
       console.log(`API key: ${maskApiKey(config.apiKey)}`);
+      console.log(`Agent host: ${config.agentHost || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
       console.log(`Audit log: ${config.auditPath}`);
     });
@@ -279,9 +284,10 @@ async function main() {
     .option('--json', 'Emit machine-readable summary instead of human text')
     .option('--quiet', 'Run the full pull, self-check, and match-reporting flow with minimal output')
     .option('--no-report', 'Skip uploading self-check results back to Cloud')
-    .option('--cron <expr>', 'Install an OpenClaw cron job with a five-field cron expression, for example "0 * * * *"')
-    .option('--cron-name <name>', 'OpenClaw cron job name', 'agentguard-threat-feed')
-    .option('--force', 'Replace an existing OpenClaw cron job with the same name')
+    .option('--cron <expr>', 'Install a cron job with a five-field cron expression, for example "0 * * * *"')
+    .option('--cron-target <target>', 'Cron backend: auto, openclaw, or system', 'auto')
+    .option('--cron-name <name>', 'Cron job name', 'agentguard-threat-feed')
+    .option('--force', 'Replace an existing cron job with the same name')
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
     .action(async (options) => {
       const config = ensureConfig();
@@ -289,6 +295,7 @@ async function main() {
       const state = loadFeedState();
       const since = (options.since as string | undefined) ?? state.lastPulledAt;
       const quiet = Boolean(options.quiet);
+      const cronTarget = validateCronTarget(options.cronTarget);
       const cronExpression = options.cron && !options.cronRun
         ? validateCronExpression(options.cron as string)
         : undefined;
@@ -391,11 +398,14 @@ async function main() {
       if (options.cron && !options.cronRun) {
         summary.cron.requested = true;
         try {
-          summary.cron.result = await installOpenClawThreatFeedCron({
+          summary.cron.result = await installThreatFeedCron({
             name: options.cronName as string,
             cronExpression: cronExpression!,
             quiet,
             force: Boolean(options.force),
+            backend: cronTarget,
+            agentHost: config.agentHost,
+            agentGuardHome: getAgentGuardPaths().home,
           });
           summary.cron.installed = true;
         } catch (err) {
@@ -431,9 +441,14 @@ async function main() {
         }
       }
       if (summary.cron.result) {
-        const action = summary.cron.result.created ? 'Installed' : 'OpenClaw cron job already exists';
+        const label = summary.cron.result.backend ?? 'cron';
+        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists`;
         console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}, ${summary.cron.result.timezone}).`);
-        console.log('Notification rule: non-quiet cron notifies on new advisories; quiet cron notifies on local matches.');
+        if (summary.cron.result.backend === 'system') {
+          console.log(`System cron output: ${join(getAgentGuardPaths().home, 'feed-cron.log')}`);
+        } else {
+          console.log('Notification rule: non-quiet cron notifies on new advisories; quiet cron notifies on local matches.');
+        }
       }
 
       // Exit codes: 2 = matches found, 1 = at least one advisory failed
@@ -516,6 +531,11 @@ async function main() {
     });
 
   await program.parseAsync(process.argv);
+}
+
+function validateCronTarget(value: unknown): CronBackend {
+  if (value === 'auto' || value === 'openclaw' || value === 'system') return value;
+  throw new Error('Invalid cron target. Use auto, openclaw, or system.');
 }
 
 function readStdinIfAvailable(): string {

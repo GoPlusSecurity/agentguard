@@ -1,10 +1,19 @@
 import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+export type CronBackend = 'auto' | 'openclaw' | 'system';
+export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'system';
+export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw';
 
 export interface OpenClawCronInstallResult {
   name: string;
   schedule: string;
   timezone: string;
   created: boolean;
+  backend?: ResolvedCronBackend;
+  command?: string;
 }
 
 export interface OpenClawGatewayOptions {
@@ -13,6 +22,13 @@ export interface OpenClawGatewayOptions {
   timeoutMs?: number;
   request?: (method: string, params: unknown) => Promise<unknown>;
 }
+
+export interface CommandResult {
+  stdout: string;
+  stderr: string;
+}
+
+export type CommandRunner = (command: string, args: string[], input?: string) => Promise<CommandResult>;
 
 interface OpenClawCronJob {
   id?: string;
@@ -35,6 +51,57 @@ export function localTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+export async function installThreatFeedCron(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    backend?: CronBackend;
+    agentHost?: CronAgentHost;
+    agentGuardHome?: string;
+    timezone?: string;
+  },
+  adapters: {
+    gateway?: OpenClawGatewayOptions;
+    runCommand?: CommandRunner;
+  } = {}
+): Promise<OpenClawCronInstallResult> {
+  const backend = options.backend ?? 'auto';
+  if (backend === 'auto' && !options.agentHost) {
+    throw new Error(
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw>` first, or pass `--cron-target openclaw` or `--cron-target system`.'
+    );
+  }
+  if (backend === 'system' || (backend === 'auto' && (options.agentHost === 'claude-code' || options.agentHost === 'codex'))) {
+    return installSystemThreatFeedCron(options, adapters.runCommand);
+  }
+
+  if (backend === 'openclaw' || (backend === 'auto' && options.agentHost === 'openclaw')) {
+    let nativeError: Error | null = null;
+    try {
+      const result = await installOpenClawNativeThreatFeedCron(options, adapters.runCommand);
+      result.backend = 'openclaw';
+      return result;
+    } catch (err) {
+      nativeError = err as Error;
+    }
+
+    try {
+      const result = await installOpenClawThreatFeedCron(options, adapters.gateway);
+      result.backend = 'openclaw-gateway';
+      return result;
+    } catch (gatewayError) {
+      throw new Error(
+        `Could not install OpenClaw cron. Native openclaw command failed: ${nativeError.message}. ` +
+        `Gateway fallback failed: ${(gatewayError as Error).message}`
+      );
+    }
+  }
+
+  throw new Error('Invalid cron target. Use auto, openclaw, or system.');
+}
+
 export async function installOpenClawThreatFeedCron(
   options: {
     name: string;
@@ -47,6 +114,7 @@ export async function installOpenClawThreatFeedCron(
 ): Promise<OpenClawCronInstallResult> {
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
+  const command = threatFeedCommand(options.quiet);
   const existing = await findOpenClawCronJobsByName(options.name, gateway);
   if (existing.length > 0 && !options.force) {
     return {
@@ -54,25 +122,14 @@ export async function installOpenClawThreatFeedCron(
       schedule,
       timezone,
       created: false,
+      backend: 'openclaw-gateway',
+      command,
     };
   }
 
   const mode = options.quiet ? 'quiet' : 'manual';
-  const command = `agentguard subscribe${options.quiet ? ' --quiet' : ''} --json --cron-run`;
   const description = `AgentGuard Cloud threat feed subscription (${schedule})`;
-  const message = [
-    `Mode: ${mode}.`,
-    `Command: \`${command}\`.`,
-    `Run exactly the command above.`,
-    '',
-    'Rules:',
-    '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a notification.',
-    '- If the JSON field `shouldNotify` is true, send `notification.body` exactly as-is using the current session notification context.',
-    '- If `shouldNotify` is false, output "skipped" and finish without sending any message.',
-    '- If the command fails or the JSON cannot be parsed, output a short error summary and do not send a notification.',
-    '',
-    'Follow these rules exactly.',
-  ].join('\n');
+  const message = openClawCronMessage(options.quiet);
 
   if (existing.length > 0) {
     await removeOpenClawCronJobs(existing, gateway);
@@ -112,6 +169,8 @@ export async function installOpenClawThreatFeedCron(
     schedule,
     timezone,
     created: true,
+    backend: 'openclaw-gateway',
+    command,
   };
 }
 
@@ -119,8 +178,190 @@ async function findOpenClawCronJobsByName(
   name: string,
   gateway: OpenClawGatewayOptions
 ): Promise<OpenClawCronJob[]> {
-  const listed = await openClawGatewayRequest('cron.list', {}, gateway).catch(() => null);
+  const listed = await openClawGatewayRequest('cron.list', {}, gateway);
   return extractOpenClawCronJobs(listed).filter((job) => job.name === name);
+}
+
+async function installOpenClawNativeThreatFeedCron(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    timezone?: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<OpenClawCronInstallResult> {
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
+  const command = threatFeedCommand(options.quiet);
+  const message = openClawCronMessage(options.quiet);
+  const existing = await runCommand('openclaw', ['cron', 'list']).catch(() => null);
+  if (existing && existing.stdout.includes(options.name) && !options.force) {
+    return {
+      name: options.name,
+      schedule,
+      timezone,
+      created: false,
+      backend: 'openclaw',
+      command,
+    };
+  }
+
+  const args = [
+    'cron',
+    'add',
+    '--name',
+    options.name,
+    '--description',
+    `AgentGuard Cloud threat feed subscription (${schedule})`,
+    '--cron',
+    schedule,
+    '--tz',
+    timezone,
+    '--session',
+    'isolated',
+    '--message',
+    message,
+    '--timeout-seconds',
+    '300',
+    '--thinking',
+    'off',
+  ];
+  if (options.force) args.push('--force');
+  await runCommand('openclaw', args);
+  return {
+    name: options.name,
+    schedule,
+    timezone,
+    created: true,
+    backend: 'openclaw',
+    command,
+  };
+}
+
+async function installSystemThreatFeedCron(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    agentGuardHome?: string;
+    timezone?: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<OpenClawCronInstallResult> {
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
+  const command = threatFeedCommand(options.quiet);
+  const home = options.agentGuardHome ?? join(homedir(), '.agentguard');
+  const begin = `# AgentGuard begin ${options.name}`;
+  const end = `# AgentGuard end ${options.name}`;
+  const pathPrefix = process.env.PATH ? `PATH="${process.env.PATH}" ` : '';
+  const line = `${schedule} ${pathPrefix}AGENTGUARD_HOME="${home}" ${command} >> "${join(home, 'feed-cron.log')}" 2>&1`;
+  const existing = await runCommand('crontab', ['-l']).then((result) => result.stdout, () => '');
+  const hasExisting = existing.includes(begin);
+  if (hasExisting && !options.force) {
+    return {
+      name: options.name,
+      schedule,
+      timezone,
+      created: false,
+      backend: 'system',
+      command,
+    };
+  }
+
+  const withoutExisting = removeAgentGuardCronBlock(existing, options.name).trimEnd();
+  const next = `${withoutExisting}${withoutExisting ? '\n' : ''}${begin}\n${line}\n${end}\n`;
+  await runCommand('crontab', ['-'], next);
+  return {
+    name: options.name,
+    schedule,
+    timezone,
+    created: true,
+    backend: 'system',
+    command,
+  };
+}
+
+function threatFeedCommand(quiet: boolean): string {
+  return `agentguard subscribe${quiet ? ' --quiet' : ''} --json --cron-run`;
+}
+
+function openClawCronMessage(quiet: boolean): string {
+  const mode = quiet ? 'quiet' : 'manual';
+  const command = threatFeedCommand(quiet);
+  return [
+    `Mode: ${mode}.`,
+    `Command: \`${command}\`.`,
+    `Run exactly the command above.`,
+    '',
+    'Rules:',
+    '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a notification.',
+    '- If the JSON field `shouldNotify` is true, send `notification.body` exactly as-is using the current session notification context.',
+    '- If `shouldNotify` is false, output "skipped" and finish without sending any message.',
+    '- If the command fails or the JSON cannot be parsed, output a short error summary and do not send a notification.',
+    '',
+    'Follow these rules exactly.',
+  ].join('\n');
+}
+
+function removeAgentGuardCronBlock(value: string, name: string): string {
+  const begin = `# AgentGuard begin ${name}`;
+  const end = `# AgentGuard end ${name}`;
+  const lines = value.split(/\r?\n/);
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (line.trim() === begin) {
+      skipping = true;
+      continue;
+    }
+    if (line.trim() === end) {
+      skipping = false;
+      continue;
+    }
+    if (!skipping) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+function execCommand(command: string, args: string[], input?: string): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn();
+    };
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish(() => reject(new Error(`${command} ${args.join(' ')} timed out after 10000ms`)));
+    }, 10000);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (err) => {
+      finish(() => reject(err));
+    });
+    child.on('close', (code) => {
+      if (code === 0) {
+        finish(() => resolve({ stdout, stderr }));
+        return;
+      }
+      finish(() => reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}: ${stderr || stdout}`.trim())));
+    });
+    if (input) child.stdin.write(input);
+    child.stdin.end();
+  });
 }
 
 async function removeOpenClawCronJobs(

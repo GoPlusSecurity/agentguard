@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 export interface AgentGuardConfig {
   version: 1;
   level: 'strict' | 'balanced' | 'permissive';
+  agentHost?: 'claude-code' | 'codex' | 'openclaw';
   cloudUrl?: string;
   apiKey?: string;
   connectedAt?: string;
@@ -74,6 +75,7 @@ export function loadConfig(): AgentGuardConfig {
       ...parsed,
       version: 1,
       level: normalizeLevel(parsed.level) ?? fallback.level,
+      agentHost: normalizeAgentHost(parsed.agentHost),
       cloudUrl: parsed.cloudUrl || fallback.cloudUrl,
       policyCachePath: parsed.policyCachePath || fallback.policyCachePath,
       auditPath: parsed.auditPath || fallback.auditPath,
@@ -150,6 +152,12 @@ function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
   return value === 'strict' || value === 'balanced' || value === 'permissive'
     ? value
     : null;
+}
+
+function normalizeAgentHost(value: unknown): AgentGuardConfig['agentHost'] | undefined {
+  return value === 'claude-code' || value === 'codex' || value === 'openclaw'
+    ? value
+    : undefined;
 }
 
 function chmodBestEffort(path: string, mode: number): void {

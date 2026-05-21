@@ -75,16 +75,23 @@ agentguard subscribe
 # report local matches back to Cloud.
 agentguard subscribe --quiet
 
-# Optional: install an OpenClaw isolated cron job that checks every hour and
-# asks you to review newly published advisories.
-# Requires the local OpenClaw Gateway at 127.0.0.1:18789.
+# Optional: run once, then install a cron job that checks every hour and asks
+# you to review newly published advisories. Auto uses the agent host saved by
+# `agentguard init --agent`: OpenClaw uses native OpenClaw cron, while Claude
+# Code/Codex use system crontab. If no agent host is saved, run
+# `agentguard init --agent <agent>` first or pass --cron-target explicitly.
 agentguard subscribe --cron "0 * * * *"
+
+# Override cron backend selection when needed.
+agentguard subscribe --cron "0 * * * *" --cron-target system
+agentguard subscribe --cron "0 * * * *" --cron-target openclaw
+# System cron writes output to ~/.agentguard/feed-cron.log.
 
 # Or install the hourly cron in quiet mode so matches are self-checked and
 # reported automatically.
 agentguard subscribe --cron "0 * * * *" --quiet
 
-# Replace an existing OpenClaw cron job with the same name
+# Replace an existing cron job with the same name
 agentguard subscribe --cron "0 * * * *" --force
 
 # Machine-readable output always includes a cron status object:
