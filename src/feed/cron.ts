@@ -139,7 +139,7 @@ export async function installOpenClawThreatFeedCron(
 ): Promise<OpenClawCronInstallResult> {
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
-  const command = threatFeedCommand(options.quiet);
+  const command = threatFeedCommand(options.quiet, { notifyRun: true });
   const existing = await findOpenClawCronJobsByName(options.name, gateway);
   if (existing.length > 0 && !options.force) {
     return {
@@ -181,7 +181,8 @@ export async function installOpenClawThreatFeedCron(
         },
       },
       delivery: {
-        mode: 'none',
+        mode: 'announce',
+        channel: 'last',
       },
     },
     gateway
@@ -217,7 +218,7 @@ async function installOpenClawNativeThreatFeedCron(
 ): Promise<OpenClawCronInstallResult> {
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
-  const command = threatFeedCommand(options.quiet);
+  const command = threatFeedCommand(options.quiet, { notifyRun: true });
   const message = openClawCronMessage(options.quiet);
   let existing: CommandResult;
   try {
@@ -253,6 +254,9 @@ async function installOpenClawNativeThreatFeedCron(
     message,
     '--timeout-seconds',
     '300',
+    '--announce',
+    '--channel',
+    'last',
     '--thinking',
     'off',
   ];
@@ -416,8 +420,9 @@ async function installSystemThreatFeedCron(
   };
 }
 
-function threatFeedCommand(quiet: boolean): string {
-  return `agentguard subscribe${quiet ? ' --quiet' : ''} --json --cron-run`;
+function threatFeedCommand(quiet: boolean, options: { notifyRun?: boolean } = {}): string {
+  const modeFlag = options.notifyRun ? '--cron-notify-run' : '--json --cron-run';
+  return `agentguard subscribe${quiet ? ' --quiet' : ''} ${modeFlag}`;
 }
 
 function qclawGatewayOptions(gateway: OpenClawGatewayOptions = {}): OpenClawGatewayOptions {
@@ -499,17 +504,17 @@ function shellQuote(value: string): string {
 
 function openClawCronMessage(quiet: boolean): string {
   const mode = quiet ? 'quiet' : 'manual';
-  const command = threatFeedCommand(quiet);
+  const command = threatFeedCommand(quiet, { notifyRun: true });
   return [
     `Mode: ${mode}.`,
     `Command: \`${command}\`.`,
     `Run exactly the command above.`,
     '',
     'Rules:',
-    '- If the JSON field `hardFailures` is greater than 0, output a short error summary and do not send a notification.',
-    '- If the JSON field `shouldNotify` is true, send `notification.body` exactly as-is using the current session notification context.',
-    '- If `shouldNotify` is false, output "skipped" and finish without sending any message.',
-    '- If the command fails or the JSON cannot be parsed, output a short error summary and do not send a notification.',
+    '- The command prints either the exact notification body or `NO_REPLY`.',
+    '- Output the command stdout exactly as your final response.',
+    '- Do not summarize, transform, add labels, or send a separate message.',
+    '- If the command fails or prints no stdout, output `NO_REPLY`.',
     '',
     'Follow these rules exactly.',
   ].join('\n');

@@ -105,7 +105,7 @@ Supported CLI commands and options:
 | `agentguard policy show` | `--json` | Shows the cached effective runtime policy, or the bundled default policy when no cache exists |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
-| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run`, `--cron-notify-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
 | `agentguard checkup` | `--json` | Runs the local agent health checkup |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
@@ -225,13 +225,13 @@ agentguard subscribe --cron "0 * * * *" --force
 
 Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
 
-When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code` and `codex` install a user crontab entry. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
+When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code` and `codex` install a user crontab entry. OpenClaw/QClaw cron jobs use host `announce` delivery to the last chat route and run internal `--cron-notify-run`, which prints either the exact notification body or `NO_REPLY`; this keeps no-op cron ticks silent without embedding chat IDs in the job. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system` explicitly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
 
 System cron writes output to `~/.agentguard/feed-cron.log`; it does not send OpenClaw agent-channel notifications.
 
 `agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
 
-`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud in quiet mode. `--cron-run` is internal and should only be used by the OpenClaw cron prompt unless the user explicitly asks to reproduce cron behavior.
+`--since <iso>` overrides the persisted feed cursor for one run. `--no-report` skips uploading local matches back to Cloud in quiet mode. `--cron-run` and `--cron-notify-run` are internal and should only be used by installed cron jobs unless the user explicitly asks to reproduce cron behavior.
 
 ---
 

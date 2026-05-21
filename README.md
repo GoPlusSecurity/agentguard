@@ -80,6 +80,8 @@ agentguard subscribe --quiet
 # `agentguard init --agent`: OpenClaw uses native OpenClaw cron with Gateway
 # fallback at 127.0.0.1:18789, QClaw uses QClaw Gateway at 127.0.0.1:28789,
 # Hermes uses native Hermes cron, while Claude Code/Codex use system crontab.
+# OpenClaw/QClaw cron jobs deliver through the host's last chat route only when
+# AgentGuard prints a notification body; no-notification runs print NO_REPLY.
 # If no agent host is saved, run `agentguard init --agent <agent>` first or
 # pass --cron-target explicitly.
 agentguard subscribe --cron "0 * * * *"
