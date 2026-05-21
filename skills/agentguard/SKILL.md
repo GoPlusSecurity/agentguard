@@ -53,8 +53,25 @@ cd ~/.openclaw/skills/agentguard && node scripts/checkup-report.js
 
 ## Command Routing
 
+### Post-Install Guidance
+
+When AgentGuard has just been installed, or the user asks what to do next after
+installing AgentGuard, recommend these steps in this order instead of deriving a
+longer list from every supported command:
+
+```bash
+agentguard init --agent <agent>
+agentguard connect
+agentguard checkup
+```
+
+Use the current agent host for `<agent>` when it is known; otherwise leave
+`<agent>` as a placeholder.
+
 Parse `$ARGUMENTS` to determine the subcommand:
 
+- **`init [args...]`** — Run `agentguard init`, especially `agentguard init --agent <agent>` after installation
+- **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
@@ -74,7 +91,7 @@ This skill is allowed to run `agentguard *`, so CLI commands and flags are avail
 
 The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`.
 
-Use CLI passthrough for the CLI-only commands below, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
+Use CLI passthrough for the CLI-only commands below, for `init` and `connect`, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
 
 Supported CLI commands and options:
 
@@ -89,6 +106,7 @@ Supported CLI commands and options:
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
 | `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard checkup` | `--json` | Runs the local agent health checkup |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
 If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
