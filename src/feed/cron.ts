@@ -93,6 +93,9 @@ export async function installThreatFeedCron(
       return result;
     } catch (err) {
       nativeError = err as Error;
+      if (!(nativeError instanceof CronBackendUnavailableError)) {
+        throw nativeError;
+      }
     }
 
     try {
@@ -213,8 +216,13 @@ async function installOpenClawNativeThreatFeedCron(
   const timezone = options.timezone ?? localTimeZone();
   const command = threatFeedCommand(options.quiet);
   const message = openClawCronMessage(options.quiet);
-  const existing = await runCommand('openclaw', ['cron', 'list']).catch(() => null);
-  if (existing && existing.stdout.includes(options.name) && !options.force) {
+  let existing: CommandResult;
+  try {
+    existing = await runCommand('openclaw', ['cron', 'list']);
+  } catch (err) {
+    throw new CronBackendUnavailableError(`Could not list native OpenClaw cron jobs. Is OpenClaw installed and available on PATH? ${(err as Error).message}`);
+  }
+  if (nativeCronListHasExactName(existing.stdout, options.name) && !options.force) {
     return {
       name: options.name,
       schedule,
@@ -255,6 +263,40 @@ async function installOpenClawNativeThreatFeedCron(
     backend: 'openclaw',
     command,
   };
+}
+
+class CronBackendUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CronBackendUnavailableError';
+  }
+}
+
+function nativeCronListHasExactName(stdout: string, name: string): boolean {
+  const jsonJobs = extractOpenClawCronJobs(parseJsonOrNull(stdout));
+  if (jsonJobs.some((job) => job.name === name)) return true;
+
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some((line) => nativeCronListLineHasExactName(line, name));
+}
+
+function nativeCronListLineHasExactName(line: string, name: string): boolean {
+  const quoted = line.match(/(["'])(.*?)\1/);
+  if (quoted?.[2] === name) return true;
+
+  const cells = line.split(/\s{2,}|\t+/).map((cell) => cell.trim()).filter(Boolean);
+  return cells.includes(name);
+}
+
+function parseJsonOrNull(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 async function installHermesNativeThreatFeedCron(

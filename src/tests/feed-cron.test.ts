@@ -146,6 +146,86 @@ describe('feed/cron', () => {
     assert.ok(calls[1].args.includes('300'));
   });
 
+  it('does not treat native OpenClaw cron name substrings as existing jobs', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return { stdout: 'agentguard-threat-feed-extra    0 * * * *\n', stderr: '' };
+      }
+      return { stdout: 'created', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron add']);
+  });
+
+  it('leaves exact native OpenClaw cron names untouched unless force is set', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      return {
+        stdout: JSON.stringify({ jobs: [{ name: 'agentguard-threat-feed' }] }),
+        stderr: '',
+      };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '0 * * * *',
+        quiet: false,
+        force: false,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, false);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list']);
+  });
+
+  it('does not fall back to OpenClaw Gateway when native OpenClaw cron add fails', async () => {
+    const gateway = fakeGateway();
+    const runner: CommandRunner = async (_command, args) => {
+      if (args.join(' ') === 'cron list') return { stdout: '', stderr: '' };
+      throw new Error('invalid native OpenClaw cron arguments');
+    };
+
+    await assert.rejects(
+      () =>
+        installThreatFeedCron(
+          {
+            name: 'agentguard-threat-feed',
+            cronExpression: '0 * * * *',
+            quiet: false,
+            force: false,
+            backend: 'auto',
+            agentHost: 'openclaw',
+            timezone: 'UTC',
+          },
+          { runCommand: runner, gateway: { request: gateway.request } }
+        ),
+      /invalid native OpenClaw cron arguments/
+    );
+    assert.deepEqual(gateway.calls, []);
+  });
+
   it('auto-installs QClaw Gateway cron jobs for QClaw agents', async () => {
     const gateway = fakeGateway();
     const runner: CommandRunner = async () => {
