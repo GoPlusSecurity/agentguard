@@ -2,7 +2,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export type CronBackend = 'auto' | 'openclaw' | 'qclaw' | 'hermes' | 'system';
 export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'qclaw-gateway' | 'hermes' | 'system';
@@ -332,11 +332,17 @@ async function installSystemThreatFeedCron(
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
   const command = threatFeedCommand(options.quiet);
-  const home = options.agentGuardHome ?? join(homedir(), '.agentguard');
-  const begin = `# AgentGuard begin ${options.name}`;
-  const end = `# AgentGuard end ${options.name}`;
-  const pathPrefix = process.env.PATH ? `PATH="${process.env.PATH}" ` : '';
-  const line = `${schedule} ${pathPrefix}AGENTGUARD_HOME="${home}" ${command} >> "${join(home, 'feed-cron.log')}" 2>&1`;
+  const home = validateCronFilesystemPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
+  const jobId = sanitizeCronJobId(options.name);
+  const begin = `# AgentGuard begin ${jobId}`;
+  const end = `# AgentGuard end ${jobId}`;
+  const script = await writeSystemThreatFeedScript({
+    name: options.name,
+    quiet: options.quiet,
+    agentGuardHome: home,
+  });
+  const logPath = validateCronFilesystemPath(join(home, 'feed-cron.log'), 'system cron log path');
+  const line = `${schedule} ${shellQuote(script)} >> ${shellQuote(logPath)} 2>&1`;
   const existing = await runCommand('crontab', ['-l']).then((result) => result.stdout, () => '');
   const hasExisting = existing.includes(begin);
   if (hasExisting && !options.force) {
@@ -347,10 +353,11 @@ async function installSystemThreatFeedCron(
       created: false,
       backend: 'system',
       command,
+      script,
     };
   }
 
-  const withoutExisting = removeAgentGuardCronBlock(existing, options.name).trimEnd();
+  const withoutExisting = removeAgentGuardCronBlock(existing, jobId).trimEnd();
   const next = `${withoutExisting}${withoutExisting ? '\n' : ''}${begin}\n${line}\n${end}\n`;
   await runCommand('crontab', ['-'], next);
   return {
@@ -360,6 +367,7 @@ async function installSystemThreatFeedCron(
     created: true,
     backend: 'system',
     command,
+    script,
   };
 }
 
@@ -397,6 +405,42 @@ async function writeHermesThreatFeedScript(options: {
   await writeFile(scriptPath, lines.join('\n'), { mode: 0o700 });
   await chmod(scriptPath, 0o700).catch(() => undefined);
   return scriptName;
+}
+
+async function writeSystemThreatFeedScript(options: {
+  name: string;
+  quiet: boolean;
+  agentGuardHome: string;
+}): Promise<string> {
+  const scriptsDir = join(options.agentGuardHome, 'scripts');
+  await mkdir(scriptsDir, { recursive: true });
+  const scriptPath = validateCronFilesystemPath(join(scriptsDir, `${sanitizeCronJobId(options.name)}.sh`), 'system cron script path');
+  const lines = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `export AGENTGUARD_HOME=${shellQuote(options.agentGuardHome)}`,
+    process.env.PATH ? `export PATH=${shellQuote(process.env.PATH)}` : '',
+    `exec ${threatFeedCommand(options.quiet)}`,
+    '',
+  ].filter(Boolean);
+  await writeFile(scriptPath, lines.join('\n'), { mode: 0o700 });
+  await chmod(scriptPath, 0o700).catch(() => undefined);
+  return scriptPath;
+}
+
+function validateCronFilesystemPath(value: string, label: string): string {
+  if (!isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute path for system cron installation.`);
+  }
+  if (/[\0\r\n'"]/.test(value)) {
+    throw new Error(`${label} must not contain quotes or newlines for system cron installation.`);
+  }
+  return value;
+}
+
+function sanitizeCronJobId(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || 'agentguard-threat-feed';
 }
 
 function sanitizeHermesScriptName(value: string): string {

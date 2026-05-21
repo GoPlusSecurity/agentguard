@@ -66,6 +66,7 @@ describe('feed/cron', () => {
 
   it('auto-installs system crontab jobs for Codex and Claude Code agents', async () => {
     const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-system-'));
     const runner: CommandRunner = async (command, args, input) => {
       calls.push({ command, args, input });
       if (command === 'crontab' && args[0] === '-l') {
@@ -82,7 +83,7 @@ describe('feed/cron', () => {
         force: false,
         backend: 'auto',
         agentHost: 'codex',
-        agentGuardHome: '/tmp/ag-home',
+        agentGuardHome: home,
         timezone: 'UTC',
       },
       { runCommand: runner }
@@ -95,8 +96,27 @@ describe('feed/cron', () => {
     assert.equal(calls[1].command, 'crontab');
     assert.deepEqual(calls[1].args, ['-']);
     assert.match(calls[1].input ?? '', /# AgentGuard begin agentguard-threat-feed/);
-    assert.match(calls[1].input ?? '', /agentguard subscribe --quiet --json --cron-run/);
-    assert.match(calls[1].input ?? '', /AGENTGUARD_HOME="\/tmp\/ag-home"/);
+    assert.match(calls[1].input ?? '', /agentguard-system-.*\/scripts\/agentguard-threat-feed\.sh/);
+    assert.doesNotMatch(calls[1].input ?? '', /AGENTGUARD_HOME=/);
+    const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
+    assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
+    assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+  });
+
+  it('rejects unsafe AgentGuard home paths for system crontab jobs', async () => {
+    await assert.rejects(
+      () =>
+        installThreatFeedCron({
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'system',
+          agentGuardHome: '/tmp/ag-home"; touch /tmp/pwned #',
+          timezone: 'UTC',
+        }),
+      /must not contain quotes or newlines/
+    );
   });
 
   it('uses native OpenClaw cron command before Gateway fallback for OpenClaw agents', async () => {
