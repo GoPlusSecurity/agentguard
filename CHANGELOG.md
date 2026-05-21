@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.12] - 2026-05-21
+## [1.1.13] - 2026-05-21
 
 ### Added
 - Added `agentguard init --agent auto` to detect installed agent directories and initialize each supported agent in order while continuing after per-agent failures.
