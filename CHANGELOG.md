@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Feed subscription state now stores newest-first pull records with per-run `newSeenIds` and `foundIds` instead of a single object snapshot.
+
+### Fixed
+- `agentguard checkup` now excludes the managed GoPlus AgentGuard skill from third-party skill scans so the guard does not report its own hook/checkup scripts as user risk.
+- `agentguard init --agent hermes` now recursively enables AgentGuard hooks in Hermes profile `config.yaml` files, including configs with empty `hooks: {}` blocks or duplicate top-level `hooks` keys.
+- Fixed OpenClaw/QClaw Gateway threat-feed cron installation to send only fields accepted by OpenClaw's `agentTurn` cron payload schema.
+
 ## [1.1.13] - 2026-05-21
 
 ### Added
@@ -14,8 +24,6 @@
 
 ### Fixed
 - `agentguard init --agent` now normalizes agent names before validation, so mixed-case values such as `Hermes` initialize correctly.
-- `agentguard checkup` now excludes the managed GoPlus AgentGuard skill from third-party skill scans so the guard does not report its own hook/checkup scripts as user risk.
-- `agentguard init --agent hermes` now recursively enables AgentGuard hooks in Hermes profile `config.yaml` files, including configs with empty `hooks: {}` blocks or duplicate top-level `hooks` keys.
 - Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
 - `agentguard subscribe --cron` OpenClaw/QClaw jobs now use host `announce` delivery to the last chat route with an internal `--cron-notify-run` command that prints either the notification body or `NO_REPLY`, avoiding missing Telegram `chatId` errors while keeping no-op ticks silent.
 - `agentguard subscribe --cron` Gateway installation now preserves legacy HTTP Gateway compatibility, falls back to OpenClaw-compatible WebSocket RPC when needed, sends QClaw the `cron.add` object payload expected by the Gateway schema, and handles fragmented WebSocket responses.
