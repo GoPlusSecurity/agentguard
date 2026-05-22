@@ -20,7 +20,10 @@ export function loadFeedState(): FeedState {
   try {
     const raw = readFileSync(file, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) {
+      const migrated = normalizeLegacyState(parsed);
+      return migrated ? [migrated] : [];
+    }
     return parsed
       .map(normalizeEntry)
       .filter((entry): entry is FeedStateEntry => Boolean(entry));
@@ -58,6 +61,25 @@ function normalizeEntry(value: unknown): FeedStateEntry | null {
     pulledAt: entry.pulledAt,
     newSeenIds: uniqueStrings(entry.newSeenIds),
     foundIds: uniqueStrings(entry.foundIds),
+  };
+}
+
+function normalizeLegacyState(value: unknown): FeedStateEntry | null {
+  if (!value || typeof value !== 'object') return null;
+  const legacy = value as {
+    lastPulledAt?: unknown;
+    seenAdvisoryIds?: unknown;
+    foundIds?: unknown;
+  };
+  const newSeenIds = uniqueStrings(legacy.seenAdvisoryIds);
+  if (newSeenIds.length === 0) return null;
+  const pulledAt = typeof legacy.lastPulledAt === 'string' && legacy.lastPulledAt.length > 0
+    ? legacy.lastPulledAt
+    : new Date(0).toISOString();
+  return {
+    pulledAt,
+    newSeenIds,
+    foundIds: uniqueStrings(legacy.foundIds),
   };
 }
 

@@ -65,13 +65,17 @@ describe('feed/state', () => {
     }]);
   });
 
-  it('does not migrate the old object state format', () => {
+  it('migrates the old object state format', () => {
     isolateHome();
     writeFileSync(join(process.env.AGENTGUARD_HOME!, 'feed-state.json'), JSON.stringify({
       lastPulledAt: '2026-05-13T00:00:00Z',
       seenAdvisoryIds: ['AGS-2026-1'],
     }));
 
-    assert.deepEqual(loadFeedState(), []);
+    assert.deepEqual(loadFeedState(), [{
+      pulledAt: '2026-05-13T00:00:00Z',
+      newSeenIds: ['AGS-2026-1'],
+      foundIds: [],
+    }]);
   });
 });
