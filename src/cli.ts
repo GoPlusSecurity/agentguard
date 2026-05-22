@@ -773,10 +773,34 @@ function discoverSkillDirs(roots: string[]): string[] {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const dir = join(root, entry.name);
-      if (existsSync(join(dir, 'SKILL.md'))) dirs.push(dir);
+      if (!existsSync(join(dir, 'SKILL.md'))) continue;
+      if (isManagedAgentGuardSkillDir(dir)) continue;
+      dirs.push(dir);
     }
   }
   return dirs;
+}
+
+function isManagedAgentGuardSkillDir(dir: string): boolean {
+  if (!/[/\\]agentguard$/i.test(dir)) return false;
+  const manifest = join(dir, 'SKILL.md');
+  let body = '';
+  try {
+    body = readFileSync(manifest, 'utf8').slice(0, 16 * 1024);
+  } catch {
+    return false;
+  }
+  const hasAgentGuardIdentity = /^name:\s*agentguard\s*$/im.test(body) &&
+    /GoPlus AgentGuard|GoPlusSecurity/i.test(body);
+  if (!hasAgentGuardIdentity) return false;
+  const expectedScripts = [
+    join(dir, 'scripts', 'guard-hook.js'),
+    join(dir, 'scripts', 'hermes-hook.js'),
+    join(dir, 'scripts', 'checkup-report.js'),
+  ];
+  if (!expectedScripts.every((path) => existsSync(path))) return false;
+
+  return true;
 }
 
 function checkCredentialSafety(skillDirs: string[]): CheckupDimension {

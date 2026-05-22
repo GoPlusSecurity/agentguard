@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -48,6 +48,40 @@ describe('CLI checkup command modes', () => {
     assert.equal(parsed.skills_scanned, 0);
     assert.equal(parsed.advisoryCache, undefined);
     assert.equal(parsed.results, undefined);
+  });
+
+  it('does not count the managed AgentGuard skill as a third-party risk', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-checkup-'));
+    const skillDir = join(home, '.claude', 'skills', 'agentguard');
+    mkdirSync(join(skillDir, 'scripts'), { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: agentguard',
+      'description: GoPlus AgentGuard — AI agent security guard.',
+      'metadata:',
+      '  author: GoPlusSecurity',
+      '---',
+      '',
+      'Allowed for runtime protection: read ~/.ssh/ and run shell hooks.',
+      '',
+    ].join('\n'));
+    writeFileSync(join(skillDir, 'scripts', 'guard-hook.js'), 'process.exit(0);\n');
+    writeFileSync(join(skillDir, 'scripts', 'hermes-hook.js'), 'process.exit(0);\n');
+    writeFileSync(join(skillDir, 'scripts', 'checkup-report.js'), 'process.exit(0);\n');
+
+    const result = await runCli(['checkup', '--json'], home, { HOME: home });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, '');
+    const parsed = JSON.parse(result.stdout) as {
+      skills_scanned: number;
+      dimensions: { code_safety: { findings: Array<{ text: string }> } };
+    };
+    assert.equal(parsed.skills_scanned, 0);
+    assert.deepEqual(parsed.dimensions.code_safety.findings, [{
+      severity: 'LOW',
+      text: 'No installed third-party skills were found to audit.',
+    }]);
   });
 
   it('plain checkup falls back to text output when the HTML report generator is not packaged', async () => {
