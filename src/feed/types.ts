@@ -89,16 +89,21 @@ export interface Advisory {
   };
 }
 
+/** One local feed-subscription pull record. Newest records are stored first. */
+export interface FeedStateEntry {
+  /** ISO-8601 timestamp for when this subscribe run pulled the feed. */
+  pulledAt: string;
+  /** Stable IDs of advisories newly processed in this pull. */
+  newSeenIds: string[];
+  /** Advisory IDs whose self-check found local matches in this pull. */
+  foundIds: string[];
+}
+
 /**
  * Local feed-subscription state. Persisted between `subscribe` runs so the
  * client doesn't re-process advisories it has already seen.
  */
-export interface FeedState {
-  /** ISO-8601 timestamp of the latest advisory `publishedAt` we've processed. */
-  lastPulledAt?: string;
-  /** Stable IDs of advisories already evaluated; bounded LRU. */
-  seenAdvisoryIds?: string[];
-}
+export type FeedState = FeedStateEntry[];
 
 /**
  * Result of running a single advisory's checks against the local environment.

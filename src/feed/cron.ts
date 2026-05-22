@@ -152,7 +152,6 @@ export async function installOpenClawThreatFeedCron(
     };
   }
 
-  const mode = options.quiet ? 'quiet' : 'manual';
   const description = `AgentGuard Cloud threat feed subscription (${schedule})`;
   const message = openClawCronMessage(options.quiet);
 
@@ -175,10 +174,6 @@ export async function installOpenClawThreatFeedCron(
         kind: 'agentTurn',
         message,
         timeoutSeconds: 300,
-        agentguard: {
-          mode,
-          command,
-        },
       },
       delivery: {
         mode: 'announce',

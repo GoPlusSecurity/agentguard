@@ -1,9 +1,9 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadFeedState, markAdvisorySeen, saveFeedState } from '../feed/state.js';
+import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from '../feed/state.js';
 
 const originalAgentGuardHome = process.env.AGENTGUARD_HOME;
 
@@ -20,24 +20,62 @@ describe('feed/state', () => {
     }
   });
 
-  it('persists pull cursor and seen advisory ids', () => {
+  it('persists newest-first pull records', () => {
     isolateHome();
-    saveFeedState({
-      lastPulledAt: '2026-05-13T00:00:00Z',
-      seenAdvisoryIds: ['AGS-2026-1'],
-    });
+    saveFeedState([
+      {
+        pulledAt: '2026-05-13T00:00:00Z',
+        newSeenIds: ['AGS-2026-2'],
+        foundIds: ['AGS-2026-2'],
+      },
+      {
+        pulledAt: '2026-05-12T00:00:00Z',
+        newSeenIds: ['AGS-2026-1'],
+        foundIds: [],
+      },
+    ]);
 
     const state = loadFeedState();
-    assert.equal(state.lastPulledAt, '2026-05-13T00:00:00Z');
-    assert.deepEqual(state.seenAdvisoryIds, ['AGS-2026-1']);
+    assert.deepEqual(state, [
+      {
+        pulledAt: '2026-05-13T00:00:00Z',
+        newSeenIds: ['AGS-2026-2'],
+        foundIds: ['AGS-2026-2'],
+      },
+      {
+        pulledAt: '2026-05-12T00:00:00Z',
+        newSeenIds: ['AGS-2026-1'],
+        foundIds: [],
+      },
+    ]);
+    assert.deepEqual(getSeenAdvisoryIds(state), ['AGS-2026-2', 'AGS-2026-1']);
   });
 
-  it('marks advisory ids as seen without duplicating them', () => {
-    const state = markAdvisorySeen(
-      { seenAdvisoryIds: ['AGS-2026-1'] },
-      'AGS-2026-1'
-    );
+  it('prepends normalized records without duplicating ids inside a record', () => {
+    const state = prependFeedStateEntry([], {
+      pulledAt: '2026-05-13T00:00:00Z',
+      newSeenIds: ['AGS-2026-1', 'AGS-2026-1'],
+      foundIds: ['AGS-2026-1', 'AGS-2026-1'],
+    });
 
-    assert.deepEqual(state.seenAdvisoryIds, ['AGS-2026-1']);
+    assert.deepEqual(state, [{
+      pulledAt: '2026-05-13T00:00:00Z',
+      newSeenIds: ['AGS-2026-1'],
+      foundIds: ['AGS-2026-1'],
+    }]);
+  });
+
+  it('migrates the old object state format', () => {
+    isolateHome();
+    writeFileSync(join(process.env.AGENTGUARD_HOME!, 'feed-state.json'), JSON.stringify({
+      lastPulledAt: '2026-05-13T00:00:00Z',
+      seenAdvisoryIds: ['AGS-2026-1'],
+    }));
+
+    assert.deepEqual(loadFeedState(), [{
+      pulledAt: '2026-05-13T00:00:00Z',
+      newSeenIds: ['AGS-2026-1'],
+      foundIds: [],
+    }]);
   });
 });

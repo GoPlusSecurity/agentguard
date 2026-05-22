@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -51,13 +51,16 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
 }
 
 function installHermes(root: string, force: boolean): InstallResult {
-  const skillDir = join(root, '.hermes', 'skills', 'agentguard');
-  const configExamplePath = join(root, '.hermes', 'agentguard-hooks.example.yaml');
-  const configPath = join(root, '.hermes', 'config.yaml');
+  const hermesRoot = join(root, '.hermes');
+  const skillDir = join(hermesRoot, 'skills', 'agentguard');
+  const configExamplePath = join(hermesRoot, 'agentguard-hooks.example.yaml');
   copyBundledSkill(skillDir, force);
   writeIfAllowed(configExamplePath, hermesHooksTemplate(skillDir), force);
-  enableHermesHooks(configPath, skillDir, force);
-  return { agent: 'hermes', files: [skillDir, configExamplePath, configPath] };
+  const configPaths = findHermesConfigPaths(hermesRoot);
+  for (const configPath of configPaths) {
+    enableHermesHooks(configPath, skillDir);
+  }
+  return { agent: 'hermes', files: [skillDir, configExamplePath, ...configPaths] };
 }
 
 function installQClaw(root: string, force: boolean): InstallResult {
@@ -311,13 +314,10 @@ function enableClawPlugin(configPath: string, pluginDir: string): void {
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 }
 
-function enableHermesHooks(configPath: string, skillDir: string, force: boolean): void {
-  if (existsSync(configPath) && !force && readFileSync(configPath, 'utf8').includes(`${skillDir}/scripts/hermes-hook.js`)) {
-    return;
-  }
-
+function enableHermesHooks(configPath: string, skillDir: string): void {
   const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
   const next = mergeHermesHooks(existing, skillDir);
+  if (next === existing) return;
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, next);
 }
@@ -325,24 +325,61 @@ function enableHermesHooks(configPath: string, skillDir: string, force: boolean)
 function mergeHermesHooks(existing: string, skillDir: string): string {
   const lines = existing.replace(/\s+$/g, '').split(/\r?\n/).filter((line, index, arr) => !(arr.length === 1 && index === 0 && line === ''));
   const hooksBlock = hermesHookEventBlock(skillDir).split('\n').filter(Boolean);
-  const hooksIndex = lines.findIndex((line) => /^hooks:\s*(?:#.*)?$/.test(line));
+  const merged: string[] = [];
+  let sawHooks = false;
 
-  if (hooksIndex === -1) {
-    const prefix = lines.length ? `${lines.join('\n')}\n\n` : '';
-    return `${prefix}hooks:\n${hooksBlock.join('\n')}\n\n${hermesAutoAcceptLine(lines)}\n`;
+  for (let index = 0; index < lines.length;) {
+    if (isTopLevelHermesHooksLine(lines[index])) {
+      sawHooks = true;
+      const hooksEnd = findNextTopLevelIndex(lines, index + 1);
+      merged.push('hooks:');
+      merged.push(...removeHermesManagedEvents(lines.slice(index + 1, hooksEnd)));
+      merged.push(...hooksBlock);
+      index = hooksEnd;
+      continue;
+    }
+    merged.push(lines[index]);
+    index += 1;
   }
 
-  const hooksEnd = findNextTopLevelIndex(lines, hooksIndex + 1);
-  const before = lines.slice(0, hooksIndex + 1);
-  const body = removeHermesManagedEvents(lines.slice(hooksIndex + 1, hooksEnd));
-  const after = lines.slice(hooksEnd);
-  const merged = [...before, ...body, ...hooksBlock, ...after];
+  if (!sawHooks) {
+    if (merged.length > 0) merged.push('');
+    merged.push('hooks:', ...hooksBlock);
+  }
 
   if (!merged.some((line) => /^hooks_auto_accept:\s*/.test(line))) {
     merged.push('', 'hooks_auto_accept: false');
   }
 
   return `${merged.join('\n').replace(/\s+$/g, '')}\n`;
+}
+
+function isTopLevelHermesHooksLine(line: string): boolean {
+  return /^hooks:\s*(?:\{\}\s*)?(?:#.*)?$/.test(line);
+}
+
+function findHermesConfigPaths(hermesRoot: string): string[] {
+  const primary = join(hermesRoot, 'config.yaml');
+  const found = new Set<string>([primary]);
+  if (!existsSync(hermesRoot)) return [...found];
+
+  const visit = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        visit(path);
+        continue;
+      }
+      if (stat.isFile() && name === 'config.yaml') {
+        found.add(path);
+      }
+    }
+  };
+
+  visit(hermesRoot);
+  return [...found];
 }
 
 function hermesHookEventBlock(skillDir: string): string {

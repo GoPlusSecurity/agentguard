@@ -24,7 +24,7 @@ import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller, type InstallResult } from './installers.js';
 import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
-import { loadFeedState, markAdvisorySeen, saveFeedState } from './feed/state.js';
+import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import {
   installThreatFeedCron,
@@ -325,7 +325,7 @@ async function main() {
       const config = ensureConfig();
       const client = new AgentGuardCloudClient(config);
       const state = loadFeedState();
-      const since = (options.since as string | undefined) ?? state.lastPulledAt;
+      const since = options.since as string | undefined;
       const quiet = Boolean(options.quiet);
       const cronNotifyRun = Boolean(options.cronNotifyRun);
       const cronTarget = validateCronTarget(options.cronTarget);
@@ -358,16 +358,17 @@ async function main() {
         return;
       }
 
-      const seen = new Set(state.seenAdvisoryIds ?? []);
-      // Process oldest-first so the cursor can advance monotonically and we
-      // never skip over an advisory that failed mid-batch.
+      const seen = new Set(getSeenAdvisoryIds(state));
+      // Process oldest-first so output stays deterministic when Cloud returns
+      // multiple fresh advisories.
       const fresh = advisories
         .filter((a) => !seen.has(a.id))
         .sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : 1));
       const results: SelfCheckResult[] = [];
-      let cursorOk = true; // stops advancing on the first hard failure
-      let latestPublishedAt = state.lastPulledAt;
       let hardFailures = 0;
+      const newSeenIds: string[] = [];
+      const foundIds: string[] = [];
+      const pulledAt = new Date().toISOString();
 
       if (quiet) {
         for (const advisory of fresh) {
@@ -380,7 +381,6 @@ async function main() {
             // not been evaluated — don't mark it seen and don't advance.
             console.error(`! Self-check threw for ${advisory.id}: ${(err as Error).message}`);
             hardFailures += 1;
-            cursorOk = false;
             continue;
           }
           results.push(result);
@@ -402,27 +402,28 @@ async function main() {
           }
 
           if (processed) {
-            Object.assign(state, markAdvisorySeen(state, advisory.id));
-            if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
-              latestPublishedAt = advisory.publishedAt;
+            newSeenIds.push(advisory.id);
+            if (result.matchedArtifacts.length > 0) {
+              foundIds.push(advisory.id);
             }
           } else {
-            // From this point we no longer advance the pull cursor — the
-            // failed advisory must be re-pulled on the next run.
-            cursorOk = false;
+            // Failed advisories are left out of newSeenIds, so the ID-based
+            // state will re-process them on the next subscribe run.
           }
         }
       } else {
         for (const advisory of fresh) {
-          Object.assign(state, markAdvisorySeen(state, advisory.id));
-          if (cursorOk && (!latestPublishedAt || advisory.publishedAt > latestPublishedAt)) {
-            latestPublishedAt = advisory.publishedAt;
-          }
+          newSeenIds.push(advisory.id);
         }
       }
 
-      state.lastPulledAt = latestPublishedAt;
-      saveFeedState(state);
+      if (newSeenIds.length > 0 || foundIds.length > 0) {
+        saveFeedState(prependFeedStateEntry(state, {
+          pulledAt,
+          newSeenIds,
+          foundIds,
+        }));
+      }
 
       const totalMatches = results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
       const summary = buildSubscribeSummary({
@@ -498,7 +499,7 @@ async function main() {
       }
 
       // Exit codes: 2 = matches found, 1 = at least one advisory failed
-      // to evaluate or report (cursor was held back), 0 = clean.
+      // to evaluate or report, 0 = clean.
       if (hardFailures > 0) {
         console.error(`! ${hardFailures} advisory record(s) failed to process and will be re-pulled next run.`);
         process.exitCode = 1;
@@ -772,10 +773,34 @@ function discoverSkillDirs(roots: string[]): string[] {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const dir = join(root, entry.name);
-      if (existsSync(join(dir, 'SKILL.md'))) dirs.push(dir);
+      if (!existsSync(join(dir, 'SKILL.md'))) continue;
+      if (isManagedAgentGuardSkillDir(dir)) continue;
+      dirs.push(dir);
     }
   }
   return dirs;
+}
+
+function isManagedAgentGuardSkillDir(dir: string): boolean {
+  if (!/[/\\]agentguard$/i.test(dir)) return false;
+  const manifest = join(dir, 'SKILL.md');
+  let body = '';
+  try {
+    body = readFileSync(manifest, 'utf8').slice(0, 16 * 1024);
+  } catch {
+    return false;
+  }
+  const hasAgentGuardIdentity = /^name:\s*agentguard\s*$/im.test(body) &&
+    /GoPlus AgentGuard|GoPlusSecurity/i.test(body);
+  if (!hasAgentGuardIdentity) return false;
+  const expectedScripts = [
+    join(dir, 'scripts', 'guard-hook.js'),
+    join(dir, 'scripts', 'hermes-hook.js'),
+    join(dir, 'scripts', 'checkup-report.js'),
+  ];
+  if (!expectedScripts.every((path) => existsSync(path))) return false;
+
+  return true;
 }
 
 function checkCredentialSafety(skillDirs: string[]): CheckupDimension {

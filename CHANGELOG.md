@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Feed subscription state now stores newest-first pull records with per-run `newSeenIds` and `foundIds` instead of a single object snapshot.
+
+### Fixed
+- `agentguard checkup` now excludes the managed GoPlus AgentGuard skill from third-party skill scans so the guard does not report its own hook/checkup scripts as user risk.
+- `agentguard init --agent hermes` now recursively enables AgentGuard hooks in Hermes profile `config.yaml` files, including configs with empty `hooks: {}` blocks or duplicate top-level `hooks` keys.
+- Fixed OpenClaw/QClaw Gateway threat-feed cron installation to send only fields accepted by OpenClaw's `agentTurn` cron payload schema.
+
 ## [1.1.13] - 2026-05-21
 
 ### Added

@@ -112,10 +112,7 @@ describe('feed/cron', () => {
     assert.deepEqual(job.delivery, { mode: 'announce', channel: 'last' });
     assert.equal(job.sessionTarget, 'isolated');
     assert.equal(job.payload.kind, 'agentTurn');
-    assert.deepEqual(job.payload.agentguard, {
-      mode: 'manual',
-      command: 'agentguard subscribe --cron-notify-run',
-    });
+    assert.equal('agentguard' in job.payload, false);
     assert.match(job.payload.message, /Mode: manual/);
     assert.match(job.payload.message, /Command: `agentguard subscribe --cron-notify-run`/);
     assert.match(job.payload.message, /agentguard subscribe --cron-notify-run/);
@@ -344,7 +341,8 @@ describe('feed/cron', () => {
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'UTC' });
     assert.deepEqual(job.delivery, { mode: 'announce', channel: 'last' });
-    assert.equal(job.payload.agentguard.command, 'agentguard subscribe --cron-notify-run');
+    assert.equal('agentguard' in job.payload, false);
+    assert.match(job.payload.message, /Command: `agentguard subscribe --cron-notify-run`/);
   });
 
   it('auto-installs native Hermes cron jobs for Hermes agents', async () => {
@@ -491,10 +489,7 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove', 'cron.add']);
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
     assert.deepEqual(gateway.calls[2].params.schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
-    assert.deepEqual(gateway.calls[2].params.payload.agentguard, {
-      mode: 'quiet',
-      command: 'agentguard subscribe --quiet --cron-notify-run',
-    });
+    assert.equal('agentguard' in gateway.calls[2].params.payload, false);
     assert.match(gateway.calls[2].params.payload.message, /Mode: quiet/);
     assert.deepEqual(gateway.calls[2].params.delivery, { mode: 'announce', channel: 'last' });
     assert.match(gateway.calls[2].params.payload.message, /Command: `agentguard subscribe --quiet --cron-notify-run`/);

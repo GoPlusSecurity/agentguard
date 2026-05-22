@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installAgentTemplates } from '../installers.js';
 
@@ -49,6 +49,48 @@ describe('Agent template installers', () => {
     assert.ok(config.includes('custom_event:'));
     assert.ok(config.includes('pre_tool_call:'));
     assert.ok(config.includes('hermes-hook.js'));
+  });
+
+  it('enables Hermes hooks in profile configs under ~/.hermes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-profiles-'));
+    const rootConfigPath = join(dir, '.hermes', 'config.yaml');
+    const profileConfigPath = join(dir, '.hermes', 'profiles', 'agent2', 'config.yaml');
+    mkdirSync(dirname(profileConfigPath), { recursive: true });
+    mkdirSync(dirname(rootConfigPath), { recursive: true });
+    writeFileSync(rootConfigPath, 'theme: dark\n');
+    writeFileSync(profileConfigPath, 'profile: agent2\nhooks: {}\n');
+
+    const result = installAgentTemplates('hermes', { cwd: dir });
+
+    const rootConfig = readFileSync(rootConfigPath, 'utf8');
+    const profileConfig = readFileSync(profileConfigPath, 'utf8');
+    assert.ok(result.files.includes(profileConfigPath));
+    assert.ok(rootConfig.includes('hermes-hook.js'));
+    assert.ok(profileConfig.includes('profile: agent2'));
+    assert.ok(profileConfig.includes('pre_tool_call:'));
+    assert.ok(profileConfig.includes('hermes-hook.js'));
+  });
+
+  it('updates every top-level Hermes hooks section when duplicate keys exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-duplicate-hooks-'));
+    const configPath = join(dir, '.hermes', 'config.yaml');
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, [
+      'theme: dark',
+      'hooks:',
+      '  custom_event:',
+      '    - command: "echo keep"',
+      'model: local',
+      'hooks: {}',
+      '',
+    ].join('\n'));
+
+    installAgentTemplates('hermes', { cwd: dir });
+
+    const config = readFileSync(configPath, 'utf8');
+    assert.equal((config.match(/^hooks:$/gm) ?? []).length, 2);
+    assert.equal((config.match(/^  pre_tool_call:$/gm) ?? []).length, 2);
+    assert.ok(config.includes('custom_event:'));
   });
 
   it('writes QClaw skill template and enables plugin', () => {
