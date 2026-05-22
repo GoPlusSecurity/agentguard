@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.14] - 2026-05-22
 
 ### Changed
 - Feed subscription state now stores newest-first pull records with per-run `newSeenIds` and `foundIds` instead of a single object snapshot.
