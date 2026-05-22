@@ -1,19 +1,14 @@
 /**
  * Local feed-subscription state I/O.
  *
- * Persisted at `~/.agentguard/feed-state.json` so the `subscribe` command
- * doesn't re-process the same advisory across invocations / cron ticks.
- *
- * Kept tiny (single JSON object) on purpose — bigger ledgers go through the
- * audit log path, not here.
+ * Persisted at `~/.agentguard/feed-state.json` as newest-first pull records so
+ * subscribe runs are easy to inspect when debugging feed behavior.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getAgentGuardPaths } from '../config.js';
-import type { FeedState } from './types.js';
-
-const SEEN_ID_LIMIT = 1000;
+import type { FeedState, FeedStateEntry } from './types.js';
 
 function statePath(): string {
   return join(getAgentGuardPaths().home, 'feed-state.json');
@@ -21,36 +16,54 @@ function statePath(): string {
 
 export function loadFeedState(): FeedState {
   const file = statePath();
-  if (!existsSync(file)) return {};
+  if (!existsSync(file)) return [];
   try {
     const raw = readFileSync(file, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<FeedState>;
-    return {
-      lastPulledAt: parsed.lastPulledAt,
-      seenAdvisoryIds: parsed.seenAdvisoryIds ?? [],
-    };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(normalizeEntry)
+      .filter((entry): entry is FeedStateEntry => Boolean(entry));
   } catch {
     // Corrupt state file: pretend it's empty rather than crash. The next
     // successful subscribe will overwrite it.
-    return {};
+    return [];
   }
 }
 
 export function saveFeedState(state: FeedState): void {
   const file = statePath();
   mkdirSync(dirname(file), { recursive: true });
-  const trimmed: FeedState = {
-    lastPulledAt: state.lastPulledAt,
-    seenAdvisoryIds: (state.seenAdvisoryIds ?? []).slice(-SEEN_ID_LIMIT),
-  };
-  writeFileSync(file, `${JSON.stringify(trimmed, null, 2)}\n`, { mode: 0o600 });
+  const normalized = state.map(normalizeEntry).filter(Boolean);
+  writeFileSync(file, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
 }
 
-export function markAdvisorySeen(state: FeedState, advisoryId: string): FeedState {
-  const set = new Set(state.seenAdvisoryIds ?? []);
-  set.add(advisoryId);
+export function getSeenAdvisoryIds(state: FeedState): string[] {
+  return [...new Set(state.flatMap((entry) => entry.newSeenIds))];
+}
+
+export function prependFeedStateEntry(
+  state: FeedState,
+  entry: FeedStateEntry
+): FeedState {
+  const normalized = normalizeEntry(entry);
+  return normalized ? [normalized, ...state] : state;
+}
+
+function normalizeEntry(value: unknown): FeedStateEntry | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as Partial<FeedStateEntry>;
+  if (typeof entry.pulledAt !== 'string' || entry.pulledAt.length === 0) return null;
   return {
-    ...state,
-    seenAdvisoryIds: [...set],
+    pulledAt: entry.pulledAt,
+    newSeenIds: uniqueStrings(entry.newSeenIds),
+    foundIds: uniqueStrings(entry.foundIds),
   };
+}
+
+function uniqueStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(value.filter((item): item is string => typeof item === 'string' && item.length > 0)),
+  ];
 }

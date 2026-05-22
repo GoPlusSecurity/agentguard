@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -128,6 +128,26 @@ describe('CLI subscribe command modes', () => {
       assert.match(result.stdout, /Self-check found 1 match/);
       assert.equal(reports.length, 1);
       assert.deepEqual((reports[0] as { advisoryId: string }).advisoryId, 'AGS-2026-subscribe');
+    });
+  });
+
+  it('persists subscribe state as newest-first pull records', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-'));
+      installMatchingSkill(home);
+
+      const result = await runCli(['subscribe', '--quiet', '--no-report'], home, cloudUrl);
+
+      assert.equal(result.exitCode, 2);
+      const state = JSON.parse(readFileSync(join(home, 'feed-state.json'), 'utf8')) as Array<{
+        pulledAt: string;
+        newSeenIds: string[];
+        foundIds: string[];
+      }>;
+      assert.equal(state.length, 1);
+      assert.match(state[0].pulledAt, /^\d{4}-\d{2}-\d{2}T/);
+      assert.deepEqual(state[0].newSeenIds, ['AGS-2026-subscribe']);
+      assert.deepEqual(state[0].foundIds, ['AGS-2026-subscribe']);
     });
   });
 
