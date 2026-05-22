@@ -14,6 +14,7 @@
 
 ### Fixed
 - `agentguard init --agent` now normalizes agent names before validation, so mixed-case values such as `Hermes` initialize correctly.
+- `agentguard init --agent hermes` now recursively enables AgentGuard hooks in Hermes profile `config.yaml` files, including configs with empty `hooks: {}` blocks or duplicate top-level `hooks` keys.
 - Hermes hook runtime decisions now use the shared AgentGuard Cloud sync path and emit a more broadly compatible block response for `pre_tool_call`.
 - `agentguard subscribe --cron` OpenClaw/QClaw jobs now use host `announce` delivery to the last chat route with an internal `--cron-notify-run` command that prints either the notification body or `NO_REPLY`, avoiding missing Telegram `chatId` errors while keeping no-op ticks silent.
 - `agentguard subscribe --cron` Gateway installation now preserves legacy HTTP Gateway compatibility, falls back to OpenClaw-compatible WebSocket RPC when needed, sends QClaw the `cron.add` object payload expected by the Gateway schema, and handles fragmented WebSocket responses.
