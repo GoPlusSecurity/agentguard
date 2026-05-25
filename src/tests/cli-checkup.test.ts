@@ -107,6 +107,6 @@ describe('CLI checkup command modes', () => {
     assert.equal(result.stderr, '');
     const parsed = JSON.parse(result.stdout) as { success: boolean; error: string };
     assert.equal(parsed.success, false);
-    assert.match(parsed.error, /agentguard connect --key <key>/);
+    assert.match(parsed.error, /agentguard connect/);
   });
 });

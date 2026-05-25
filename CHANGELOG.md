@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Added Agent JWT registration for OpenClaw-backed installs, allowing `agentguard connect` and `agentguard subscribe` to register a local agent, store `agentId`/JWT credentials, and present an activation URL when no API key is provided.
+- Added AgentGuard Cloud feed subscription support through `POST /api/v1/feed/subscribe`, with default advisory ecosystems for skills, plugins, MCP servers, supply-chain, URL, and prompt-injection advisories.
+- Added OpenClaw delivery of AgentGuard Cloud activation links to the last reachable OpenClaw channel when agent registration is required.
+- `agentguard status` now shows Agent ID, Agent JWT presence, and the saved agent activation URL.
+
+### Changed
+- AgentGuard Cloud requests now authenticate with Agent JWT bearer tokens when available, while retaining API key support.
+- Cloud-facing CLI flows now retry Agent JWT registration on unauthorized responses for policy pulls, advisory fetches, feed subscribe runs, and self-check reports.
+- Manual threat-feed notifications now include advisory remediation guidance when provided by Cloud.
+- OpenClaw manual threat-feed cron prompts now instruct the agent to summarize advisories, preserve IDs and severity labels, and avoid claiming local matches unless the command output explicitly reports them.
+- `agentguard disconnect` now clears Agent JWT registration details in addition to API keys, pending event spools, and cached Cloud policy.
+- API-key based `agentguard connect` now clears any previously stored Agent JWT credentials.
+
+### Fixed
+- Fixed runtime decision compatibility with Cloud responses that use the `require_approve` alias by normalizing it to `require_approval` before enforcing OpenClaw and local runtime decisions.
+- Improved disconnected Cloud guidance so commands direct users to `agentguard connect`, or to OpenClaw Agent JWT registration when available.
+- Strengthened test coverage for Agent JWT connect/reauth flows, OpenClaw registration notifications, feed subscriptions, runtime Cloud auth, policy handling, and cron/manual advisory notifications.
+
 ## [1.1.14] - 2026-05-22
 
 ### Changed

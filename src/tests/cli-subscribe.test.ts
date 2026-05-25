@@ -13,6 +13,10 @@ const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 
 function runCli(args: string[], home: string, cloudUrl: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   writeConfig(home, cloudUrl);
+  return runCliNoConfigWrite(args, home);
+}
+
+function runCliNoConfigWrite(args: string[], home: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
     const child = spawn('node', [CLI_PATH, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -97,6 +101,10 @@ const advisory: Advisory = {
   detailsMd: 'Demo advisory',
   affected: [{ namePattern: 'malicious-*' }],
   publishedAt: '2026-05-20T00:00:00.000Z',
+  selfCheck: {
+    matchers: [],
+    remediationMd: 'Quarantine the malicious demo skill and rotate any exposed API keys.',
+  },
 };
 
 describe('CLI subscribe command modes', () => {
@@ -109,8 +117,12 @@ describe('CLI subscribe command modes', () => {
 
       assert.equal(result.exitCode, 0);
       assert.equal(result.stderr, '');
-      assert.match(result.stdout, /New threat-feed advisories found/);
+      assert.match(result.stdout, /Pulled 1 advisory record\(s\); 1 new\./);
+      assert.match(result.stdout, /AgentGuard found new threat-feed advisories that need manual review:/);
       assert.match(result.stdout, /AGS-2026-subscribe/);
+      assert.match(result.stdout, /Remediation guidance:/);
+      assert.match(result.stdout, /Quarantine the malicious demo skill/);
+      assert.doesNotMatch(result.stdout, /agentguard subscribe --quiet/);
       assert.doesNotMatch(result.stdout, /Self-check found/);
       assert.equal(reports.length, 0);
     });
@@ -161,6 +173,9 @@ describe('CLI subscribe command modes', () => {
       assert.equal(result.stderr, '');
       assert.match(result.stdout, /^AgentGuard found new threat-feed advisories/m);
       assert.match(result.stdout, /AGS-2026-subscribe/);
+      assert.match(result.stdout, /Remediation guidance:/);
+      assert.match(result.stdout, /Quarantine the malicious demo skill/);
+      assert.doesNotMatch(result.stdout, /agentguard subscribe --quiet/);
       assert.doesNotMatch(result.stdout, /Pulled \d+ advisory/);
     });
   });
@@ -191,5 +206,78 @@ describe('CLI subscribe command modes', () => {
       assert.doesNotMatch(result.stdout, /Self-check found/);
       assert.equal(reports.length, 1);
     });
+  });
+
+  it('re-registers the local agent and retries once when Agent JWT auth returns 401', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-reauth-'));
+    const authHeaders: Array<string | undefined> = [];
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/api/agent/register') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          success: true,
+          data: {
+            agentId: 'agt_new_subscribe',
+            jwt: 'agent.jwt.new',
+            registerUrl: 'https://agentguard.example/activate?token=new-subscribe',
+          },
+        }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+        authHeaders.push(req.headers.authorization);
+        res.setHeader('content-type', 'application/json');
+        if (req.headers.authorization === 'Bearer agent.jwt.old') {
+          res.statusCode = 401;
+          res.end(JSON.stringify({ success: false, error: { message: 'expired agent jwt' } }));
+          return;
+        }
+        res.end(JSON.stringify({ success: true, data: { id: 'sub_test', status: 'active' } }));
+        return;
+      }
+      if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
+        authHeaders.push(req.headers.authorization);
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: { advisories: [] } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_old_subscribe',
+        agentJwt: 'agent.jwt.old',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json'], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.deepEqual(authHeaders, ['Bearer agent.jwt.old', 'Bearer agent.jwt.new', 'Bearer agent.jwt.new']);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+        agentRegisterUrl?: string;
+      };
+      assert.equal(config.agentId, 'agt_new_subscribe');
+      assert.equal(config.agentJwt, 'agent.jwt.new');
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=new-subscribe');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
   });
 });

@@ -655,7 +655,7 @@ function runtimeResultToBeforeToolCallResult(
 ): OpenClawBeforeToolCallResult | undefined {
   if (!result) return undefined;
 
-  const decision = result.decision.decision;
+  const decision = normalizeRuntimePolicyDecision(result.decision.decision);
   if (decision !== 'block' && decision !== 'require_approval') {
     return undefined;
   }
@@ -703,6 +703,10 @@ function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
     result.decision.riskScore > 0 ||
     result.decision.reasons.length > 0
   );
+}
+
+function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
+  return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
