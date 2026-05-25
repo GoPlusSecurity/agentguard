@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -11,17 +11,27 @@ import type { Advisory } from '../feed/types.js';
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 
-function runCli(args: string[], home: string, cloudUrl: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runCli(
+  args: string[],
+  home: string,
+  cloudUrl: string,
+  extraEnv: Record<string, string> = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   writeConfig(home, cloudUrl);
-  return runCliNoConfigWrite(args, home);
+  return runCliNoConfigWrite(args, home, extraEnv);
 }
 
-function runCliNoConfigWrite(args: string[], home: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runCliNoConfigWrite(
+  args: string[],
+  home: string,
+  extraEnv: Record<string, string> = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
     const child = spawn('node', [CLI_PATH, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...extraEnv,
         AGENTGUARD_HOME: home,
         HOME: home,
       },
@@ -88,6 +98,56 @@ async function withFeedServer<T>(
   const url = `http://127.0.0.1:${port}`;
   try {
     return await fn(url, reports);
+  } finally {
+    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+  }
+}
+
+async function withOpenClawGateway<T>(
+  fn: (env: Record<string, string>, calls: Array<{ method: string; params: any }>) => Promise<T>
+): Promise<T> {
+  const calls: Array<{ method: string; params: any }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : {};
+      calls.push({ method: body.method, params: body.params });
+      if (body.method === 'sessions.list') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            sessions: [{
+              key: 'sess-1',
+              lastChannel: 'telegram',
+              lastTo: '123456',
+              lastAccountId: 'default',
+              lastThreadId: '42',
+            }],
+          },
+        }));
+        return;
+      }
+      if (body.method === 'send') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { ok: true } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { message: 'not found' } }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const env = { AGENTGUARD_OPENCLAW_GATEWAY_PORT: String((address as AddressInfo).port) };
+  try {
+    return await fn(env, calls);
   } finally {
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   }
@@ -205,6 +265,105 @@ describe('CLI subscribe command modes', () => {
       assert.match(result.stdout, /AGS-2026-subscribe: 1 match/);
       assert.doesNotMatch(result.stdout, /Self-check found/);
       assert.equal(reports.length, 1);
+    });
+  });
+
+  it('--cron-run sends the manual notification to the latest OpenClaw session when the saved agent host is openclaw', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      await withOpenClawGateway(async (env, calls) => {
+        const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-send-'));
+        writeFileSync(join(home, 'config.json'), JSON.stringify({
+          version: 1,
+          level: 'balanced',
+          cloudUrl,
+          apiKey: 'ag_live_test_key_123456',
+          agentHost: 'openclaw',
+          agentHosts: ['openclaw'],
+          policyCachePath: join(home, 'policy-cache.json'),
+          auditPath: join(home, 'audit.jsonl'),
+          eventSpoolPath: join(home, 'events-spool.jsonl'),
+        }));
+
+        const result = await runCliNoConfigWrite(['subscribe', '--cron-run'], home, env);
+
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.stderr, '');
+        assert.equal(result.stdout, 'NO_REPLY\n');
+        assert.deepEqual(calls.map((call) => call.method), ['sessions.list', 'send']);
+        assert.deepEqual(calls[1]?.params, {
+          channel: 'telegram',
+          to: '123456',
+          accountId: 'default',
+          threadId: '42',
+          sessionKey: 'sess-1',
+          message: calls[1]?.params.message,
+          idempotencyKey: calls[1]?.params.idempotencyKey,
+        });
+        assert.match(calls[1]?.params.message ?? '', /^AgentGuard found new threat-feed advisories/m);
+        const state = JSON.parse(readFileSync(join(home, 'feed-state.json'), 'utf8')) as Array<{
+          newSeenIds: string[];
+        }>;
+        assert.deepEqual(state[0]?.newSeenIds, ['AGS-2026-subscribe']);
+      });
+    });
+  });
+
+  it('--cron-run exits non-zero and does not save state when OpenClaw send fails', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const calls: Array<{ method: string; params: any }> = [];
+      const server = http.createServer((req, res) => {
+        let raw = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          raw += chunk;
+        });
+        req.on('end', () => {
+          const body = raw ? JSON.parse(raw) : {};
+          calls.push({ method: body.method, params: body.params });
+          res.setHeader('content-type', 'application/json');
+          if (body.method === 'sessions.list') {
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              id: body.id,
+              result: { sessions: [{ key: 'sess-1', lastChannel: 'telegram', lastTo: '123456' }] },
+            }));
+            return;
+          }
+          if (body.method === 'send') {
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { message: 'send failed' } }));
+            return;
+          }
+          res.statusCode = 404;
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { message: 'not found' } }));
+        });
+      });
+      await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+      try {
+        const address = server.address();
+        assert.ok(address && typeof address === 'object');
+        const env = { AGENTGUARD_OPENCLAW_GATEWAY_PORT: String((address as AddressInfo).port) };
+        const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-send-fail-'));
+        writeFileSync(join(home, 'config.json'), JSON.stringify({
+          version: 1,
+          level: 'balanced',
+          cloudUrl,
+          apiKey: 'ag_live_test_key_123456',
+          agentHost: 'openclaw',
+          agentHosts: ['openclaw'],
+          policyCachePath: join(home, 'policy-cache.json'),
+          auditPath: join(home, 'audit.jsonl'),
+          eventSpoolPath: join(home, 'events-spool.jsonl'),
+        }));
+
+        const result = await runCliNoConfigWrite(['subscribe', '--cron-run'], home, env);
+
+        assert.equal(result.exitCode, 1);
+        assert.match(result.stderr, /Could not send OpenClaw cron notification: OpenClaw Gateway send failed: send failed/);
+        assert.deepEqual(calls.map((call) => call.method), ['sessions.list', 'send']);
+        assert.equal(existsSync(join(home, 'feed-state.json')), false);
+      } finally {
+        await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+      }
     });
   });
 

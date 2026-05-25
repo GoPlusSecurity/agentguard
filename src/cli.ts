@@ -29,12 +29,13 @@ import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import { CloudRequestError } from './cloud/client.js';
-import { notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
+import { notifyOpenClawMessage, notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
 import {
   installThreatFeedCron,
   validateCronExpression,
   type OpenClawCronInstallResult,
   type CronBackend,
+  type OpenClawGatewayOptions,
 } from './feed/cron.js';
 
 const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'];
@@ -383,11 +384,13 @@ async function main() {
     .action(async (options) => {
       let config = ensureConfig();
       let client = new AgentGuardCloudClient(config);
+      const cronAgentHost = resolveCronAgentHost(config);
       const state = loadFeedState();
       const since = options.since as string | undefined;
       const quiet = Boolean(options.quiet);
       const cronNotifyRun = Boolean(options.cronNotifyRun);
       const cronTarget = validateCronTarget(options.cronTarget);
+      const cronRunSendsToOpenClaw = Boolean(options.cronRun) && cronAgentHost === 'openclaw';
       const cronExpression = options.cron && !options.cronRun
         ? validateCronExpression(options.cron as string)
         : undefined;
@@ -592,13 +595,13 @@ async function main() {
         }
       }
 
-      if (newSeenIds.length > 0 || foundIds.length > 0) {
-        saveFeedState(prependFeedStateEntry(state, {
-          pulledAt,
-          newSeenIds,
-          foundIds,
-        }));
-      }
+      const pendingStateEntry = newSeenIds.length > 0 || foundIds.length > 0
+        ? {
+            pulledAt,
+            newSeenIds,
+            foundIds,
+          }
+        : null;
 
       const totalMatches = results.reduce((acc, r) => acc + r.matchedArtifacts.length, 0);
       const summary = buildSubscribeSummary({
@@ -628,6 +631,35 @@ async function main() {
           summary.cron.error = (err as Error).message;
           throw err;
         }
+      }
+
+      if (cronRunSendsToOpenClaw) {
+        if (summary.shouldNotify && summary.hardFailures === 0) {
+          const body = summary.notification?.body;
+          if (!body) {
+            console.error('! OpenClaw cron notification was requested, but no notification body was generated.');
+            process.exitCode = 1;
+            return;
+          }
+          const notification = await notifyOpenClawMessage(body, resolveOpenClawGatewayOptionsFromEnv(), {
+            idempotencyKeyPrefix: 'agentguard-subscribe',
+          });
+          if (!notification.notified) {
+            console.error(`! Could not send OpenClaw cron notification: ${notification.reason ?? 'Unknown error'}`);
+            process.exitCode = 1;
+            return;
+          }
+        }
+        if (pendingStateEntry) {
+          saveFeedState(prependFeedStateEntry(state, pendingStateEntry));
+        }
+        console.log('NO_REPLY');
+        process.exitCode = hardFailures > 0 ? 1 : 0;
+        return;
+      }
+
+      if (pendingStateEntry) {
+        saveFeedState(prependFeedStateEntry(state, pendingStateEntry));
       }
 
       if (cronNotifyRun) {
@@ -1227,7 +1259,7 @@ async function registerAgentCredential(options: {
   });
   const nextClient = new AgentGuardCloudClient(config);
   const openClawNotification = options.notifyOpenClaw
-    ? await notifyOpenClawRegistrationLink(registration.registerUrl)
+    ? await notifyOpenClawRegistrationLink(registration.registerUrl, resolveOpenClawGatewayOptionsFromEnv())
     : { notified: false, reason: 'OpenClaw notification was not requested.' };
   return {
     config,
@@ -1260,6 +1292,21 @@ function printAgentActivationRequired(
 
 function isOpenClawAgentConfigured(config: AgentGuardConfig): boolean {
   return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true;
+}
+
+function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
+  const url = process.env.AGENTGUARD_OPENCLAW_GATEWAY_URL?.trim();
+  const host = process.env.AGENTGUARD_OPENCLAW_GATEWAY_HOST?.trim();
+  const portRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_PORT?.trim();
+  const timeoutRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS?.trim();
+  const port = portRaw ? Number(portRaw) : undefined;
+  const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+  return {
+    ...(url ? { url } : {}),
+    ...(host ? { host } : {}),
+    ...(Number.isFinite(port) ? { port } : {}),
+    ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
+  };
 }
 
 function calculateCompositeScore(dimensions: HealthCheckupReport['dimensions']): number {

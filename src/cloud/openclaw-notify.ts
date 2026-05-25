@@ -6,7 +6,7 @@ export interface OpenClawRegistrationNotificationResult {
   reason?: string;
 }
 
-interface OpenClawSessionRow {
+export interface OpenClawSessionRow {
   key?: string;
   lastChannel?: string;
   lastTo?: string;
@@ -14,20 +14,27 @@ interface OpenClawSessionRow {
   lastThreadId?: string | number;
 }
 
-export async function notifyOpenClawRegistrationLink(
-  registerUrl: string,
+export async function findLatestDeliverableOpenClawSession(
   gateway: OpenClawGatewayOptions = {}
+): Promise<OpenClawSessionRow | undefined> {
+  const listed = await openClawGatewayRequest(
+    'sessions.list',
+    { limit: 20, configuredAgentsOnly: false },
+    gateway
+  );
+  return extractOpenClawSessionRows(listed).find(
+    (row) => typeof row.lastChannel === 'string' && row.lastChannel.trim() &&
+      typeof row.lastTo === 'string' && row.lastTo.trim()
+  );
+}
+
+export async function notifyOpenClawMessage(
+  message: string,
+  gateway: OpenClawGatewayOptions = {},
+  options: { idempotencyKeyPrefix?: string } = {}
 ): Promise<OpenClawRegistrationNotificationResult> {
   try {
-    const listed = await openClawGatewayRequest(
-      'sessions.list',
-      { limit: 20, configuredAgentsOnly: false },
-      gateway
-    );
-    const session = extractOpenClawSessionRows(listed).find(
-      (row) => typeof row.lastChannel === 'string' && row.lastChannel.trim() &&
-        typeof row.lastTo === 'string' && row.lastTo.trim()
-    );
+    const session = await findLatestDeliverableOpenClawSession(gateway);
     if (!session?.lastChannel || !session.lastTo) {
       return { notified: false, reason: 'No OpenClaw session with a deliverable last channel was found.' };
     }
@@ -40,13 +47,8 @@ export async function notifyOpenClawRegistrationLink(
         ...(session.lastAccountId ? { accountId: session.lastAccountId } : {}),
         ...(session.lastThreadId ? { threadId: String(session.lastThreadId) } : {}),
         ...(session.key ? { sessionKey: session.key } : {}),
-        message: [
-          'AgentGuard Cloud activation is ready.',
-          '',
-          'Open this link to bind this agent to your account:',
-          registerUrl,
-        ].join('\n'),
-        idempotencyKey: `agentguard-register-${randomUUID()}`,
+        message,
+        idempotencyKey: `${options.idempotencyKeyPrefix ?? 'agentguard-send'}-${randomUUID()}`,
       },
       gateway
     );
@@ -57,6 +59,22 @@ export async function notifyOpenClawRegistrationLink(
       reason: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export async function notifyOpenClawRegistrationLink(
+  registerUrl: string,
+  gateway: OpenClawGatewayOptions = {}
+): Promise<OpenClawRegistrationNotificationResult> {
+  return notifyOpenClawMessage(
+    [
+      'AgentGuard Cloud activation is ready.',
+      '',
+      'Open this link to bind this agent to your account:',
+      registerUrl,
+    ].join('\n'),
+    gateway,
+    { idempotencyKeyPrefix: 'agentguard-register' }
+  );
 }
 
 function extractOpenClawSessionRows(value: unknown): OpenClawSessionRow[] {
