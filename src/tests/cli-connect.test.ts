@@ -6,6 +6,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
@@ -90,6 +91,124 @@ describe('CLI connect Agent JWT mode', () => {
       assert.equal(config.agentId, 'agt_cli_test');
       assert.equal(config.agentJwt, 'agent.jwt.cli-test');
       assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=cli-test');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('reuses an active saved Agent JWT instead of registering again', async () => {
+    const requests: Array<{ url?: string; method?: string; authorization?: string }> = [];
+    const server = http.createServer((req, res) => {
+      requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization });
+      if (req.method === 'GET' && req.url === '/api/v1/policies/effective') {
+        assert.equal(req.headers.authorization, 'Bearer agent.jwt.active');
+        const policy = getDefaultEffectiveRuntimePolicy();
+        policy.policyVersion = 'active-jwt-policy';
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: policy }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/agent/register') {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-existing-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_existing',
+        agentJwt: 'agent.jwt.active',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=old',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['connect', '--url', cloudUrl], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Agent JWT is active for local agent agt_existing/);
+      assert.equal(requests.filter((request) => request.url === '/api/agent/register').length, 0);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+      };
+      assert.equal(config.agentId, 'agt_existing');
+      assert.equal(config.agentJwt, 'agent.jwt.active');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('re-registers a saved Agent JWT only after Cloud rejects it with 401', async () => {
+    const requests: Array<{ url?: string; method?: string; authorization?: string }> = [];
+    const server = http.createServer((req, res) => {
+      requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization });
+      if (req.method === 'GET' && req.url === '/api/v1/policies/effective') {
+        res.statusCode = 401;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: false, error: { message: 'inactive agent jwt' } }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/agent/register') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          success: true,
+          data: {
+            agentId: 'agt_reissued',
+            jwt: 'agent.jwt.reissued',
+            registerUrl: 'https://agentguard.example/activate?token=reissued',
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-reauth-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_old',
+        agentJwt: 'agent.jwt.old',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['connect', '--url', cloudUrl], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Registered local AgentGuard agent \(agt_reissued\)/);
+      assert.equal(requests.filter((request) => request.url === '/api/agent/register').length, 1);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+      };
+      assert.equal(config.agentId, 'agt_reissued');
+      assert.equal(config.agentJwt, 'agent.jwt.reissued');
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }

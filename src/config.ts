@@ -110,6 +110,10 @@ export function connectCloud(options: { apiKey: string; cloudUrl?: string }): Ag
     apiKey: options.apiKey,
     connectedAt: new Date().toISOString(),
   };
+  delete next.agentId;
+  delete next.agentJwt;
+  delete next.agentRegisterUrl;
+  delete next.agentRegisteredAt;
   saveConfig(next);
   return next;
 }

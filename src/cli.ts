@@ -63,7 +63,7 @@ async function main() {
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--force', 'Overwrite existing hook/template files')
     .action((options) => {
-      const config = ensureConfig();
+      let config = ensureConfig();
       if (options.level) {
         if (!['strict', 'balanced', 'permissive'].includes(options.level)) {
           throw new Error('Invalid level. Use strict, balanced, or permissive.');
@@ -123,10 +123,36 @@ async function main() {
         if (!isOpenClawAgentConfigured(config)) {
           throw new Error('Missing API key. Pass --key, --api-key, set AGENTGUARD_API_KEY, or run `agentguard init --agent openclaw` before using Agent JWT registration.');
         }
+        const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
+        if (config.agentId && config.agentJwt) {
+          const existingConfig = { ...config, cloudUrl };
+          const client = new AgentGuardCloudClient(existingConfig);
+          try {
+            const policy = await client.fetchEffectivePolicy();
+            const savedConfig = connectAgentJwt({
+              agentId: config.agentId,
+              agentJwt: config.agentJwt,
+              agentRegisterUrl: config.agentRegisterUrl,
+              cloudUrl,
+            });
+            saveCachedPolicy(savedConfig.policyCachePath, policy);
+            console.log(`Connected to AgentGuard Cloud (${savedConfig.cloudUrl}).`);
+            console.log(`Agent JWT is active for local agent ${savedConfig.agentId}.`);
+            console.log(`Cached policy ${policy.policyVersion} at ${savedConfig.policyCachePath}.`);
+            return;
+          } catch (err) {
+            if (!(err instanceof CloudRequestError && err.status === 401)) {
+              console.log(`Agent JWT is configured for ${cloudUrl}.`);
+              console.log(`Could not verify it right now; local protection still works offline. ${err instanceof Error ? err.message : ''}`.trim());
+              return;
+            }
+          }
+        }
         const registration = await registerAgentCredential({
-          cloudUrl: options.cloud || options.url,
+          cloudUrl,
           reason: 'connect',
           notifyOpenClaw: true,
+          resetExistingJwt: true,
         });
         console.log(`Registered local AgentGuard agent (${registration.config.agentId}).`);
         console.log('Open this link to bind AgentGuard Cloud to your email:');
@@ -190,8 +216,8 @@ async function main() {
     .description('Pull the latest effective runtime policy from AgentGuard Cloud into the local cache')
     .option('--json', 'Print JSON output')
     .action(async (options) => {
-      const config = ensureConfig();
-      const client = new AgentGuardCloudClient(config);
+      let config = ensureConfig();
+      let client = new AgentGuardCloudClient(config);
       if (!client.connected) {
         const message = 'AgentGuard Cloud is not connected. Run `agentguard connect` first.';
         if (options.json) {
@@ -204,7 +230,16 @@ async function main() {
       }
 
       try {
-        const pulledPolicy = await client.fetchEffectivePolicy();
+        const result = await runCloudRequestWithAgentJwtReauth({
+          config,
+          client,
+          reason: 'reauth',
+          notifyOpenClaw: true,
+          operation: (activeClient) => activeClient.fetchEffectivePolicy(),
+        });
+        config = result.config;
+        client = result.client;
+        const pulledPolicy = result.value;
         saveCachedPolicy(config.policyCachePath, pulledPolicy);
         if (options.json) {
           console.log(JSON.stringify({
@@ -275,8 +310,8 @@ async function main() {
       console.log(`✓ Home: ${paths.home}`);
       console.log(`✓ Config: ${paths.configPath}`);
       console.log(`✓ Node: ${process.version}`);
-      if (config.apiKey) {
-        const client = new AgentGuardCloudClient(config);
+      const client = new AgentGuardCloudClient(config);
+      if (client.connected) {
         try {
           const status = await client.status();
           const label = status.status || (status.ok ? 'ok' : status.service || 'reachable');
@@ -521,10 +556,19 @@ async function main() {
             // match, we must NOT mark the advisory seen, otherwise a
             // transient network blip silently buries a real hit.
             try {
-              await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
-                elapsedMs: result.elapsedMs,
-                warnings: result.warnings,
+              const reportResult = await runCloudRequestWithAgentJwtReauth({
+                config,
+                client,
+                reason: 'reauth',
+                notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+                operation: (activeClient) => activeClient.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+                  elapsedMs: result.elapsedMs,
+                  warnings: result.warnings,
+                }),
               });
+              config = reportResult.config;
+              client = reportResult.client;
+              if (reportResult.registration) registration = reportResult.registration;
             } catch (err) {
               console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
               processed = false;
@@ -644,7 +688,7 @@ async function main() {
     .option('--against-advisory <id>', 'Restrict the check to a single advisory id (fetches it from Cloud if needed)')
     .option('--json', 'Emit machine-readable result')
     .action(async (options) => {
-      const config = ensureConfig();
+      let config = ensureConfig();
       const advisoryId = options.againstAdvisory as string | undefined;
 
       if (!advisoryId) {
@@ -664,7 +708,7 @@ async function main() {
         return;
       }
 
-      const client = new AgentGuardCloudClient(config);
+      let client = new AgentGuardCloudClient(config);
       if (!client.connected) {
         const message = 'AgentGuard Cloud is not connected. Run `agentguard connect` first.';
         if (options.json) {
@@ -678,9 +722,23 @@ async function main() {
 
       let advisory: Advisory | null = null;
       try {
-        advisory = await client.getAdvisory(advisoryId);
+        const result = await runCloudRequestWithAgentJwtReauth({
+          config,
+          client,
+          reason: 'reauth',
+          notifyOpenClaw: true,
+          operation: (activeClient) => activeClient.getAdvisory(advisoryId),
+        });
+        config = result.config;
+        client = result.client;
+        advisory = result.value;
       } catch (err) {
-        console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
+        const message = `Could not reach AgentGuard Cloud: ${(err as Error).message}`;
+        if (options.json) {
+          console.log(JSON.stringify({ success: false, error: message }, null, 2));
+        } else {
+          console.error(`! ${message}`);
+        }
         process.exitCode = 1;
         return;
       }
@@ -1093,6 +1151,50 @@ interface AgentCredentialRegistration {
     notified: boolean;
     reason?: string;
   };
+}
+
+interface AgentJwtReauthResult<T> {
+  value: T;
+  config: AgentGuardConfig;
+  client: AgentGuardCloudClient;
+  registration: AgentCredentialRegistration | null;
+}
+
+async function runCloudRequestWithAgentJwtReauth<T>(options: {
+  config: AgentGuardConfig;
+  client: AgentGuardCloudClient;
+  reason: 'reauth';
+  notifyOpenClaw: boolean;
+  operation: (client: AgentGuardCloudClient) => Promise<T>;
+}): Promise<AgentJwtReauthResult<T>> {
+  try {
+    return {
+      value: await options.operation(options.client),
+      config: options.config,
+      client: options.client,
+      registration: null,
+    };
+  } catch (err) {
+    if (
+      !(err instanceof CloudRequestError && err.status === 401) ||
+      !options.config.agentJwt ||
+      !isOpenClawAgentConfigured(options.config)
+    ) {
+      throw err;
+    }
+    const registration = await registerAgentCredential({
+      cloudUrl: options.config.cloudUrl,
+      reason: options.reason,
+      notifyOpenClaw: options.notifyOpenClaw,
+      resetExistingJwt: true,
+    });
+    return {
+      value: await options.operation(registration.client),
+      config: registration.config,
+      client: registration.client,
+      registration,
+    };
+  }
 }
 
 async function registerAgentCredential(options: {

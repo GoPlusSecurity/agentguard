@@ -103,6 +103,33 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('clears Agent JWT credentials when connecting with an explicit API key', () => {
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-connect-key-'));
+    try {
+      connectAgentJwt({
+        agentId: 'agt_key_shadow_test',
+        agentJwt: 'agent.jwt.shadow',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=shadow',
+        cloudUrl: 'https://agentguard.example',
+      });
+
+      const config = connectCloud({
+        apiKey: 'ag_live_test_key_123456',
+        cloudUrl: 'https://agentguard.example',
+      });
+
+      assert.equal(config.apiKey, 'ag_live_test_key_123456');
+      assert.equal(config.agentId, undefined);
+      assert.equal(config.agentJwt, undefined);
+      assert.equal(config.agentRegisterUrl, undefined);
+      assert.equal(config.agentRegisteredAt, undefined);
+    } finally {
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
+  });
+
   it('evaluates local action with cached Cloud policy shape', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     policy.policyVersion = 'runtime-test';

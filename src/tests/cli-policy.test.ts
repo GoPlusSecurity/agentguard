@@ -124,4 +124,83 @@ describe('policy CLI', () => {
       });
     }
   });
+
+  it('re-registers an OpenClaw Agent JWT on policy pull 401 and retries once', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-reauth-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.policyVersion = 'runtime-agent-jwt-retry';
+
+    const requests: Array<{ url?: string; method?: string; authorization?: string }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization });
+      if (req.url === '/api/v1/policies/effective' && req.headers.authorization === 'Bearer agent.jwt.old') {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: { message: 'stale jwt' } }));
+        return;
+      }
+      if (req.url === '/api/agent/register' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          data: {
+            agentId: 'agt_policy_retry',
+            jwt: 'agent.jwt.new',
+            registerUrl: 'https://agentguard.example/activate?token=policy',
+          },
+        }));
+        return;
+      }
+      if (req.url === '/api/v1/policies/effective' && req.headers.authorization === 'Bearer agent.jwt.new') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: policy }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: { message: 'not found' } }));
+    });
+
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${address.port}`;
+      const cachePath = join(home, 'policy-cache.json');
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_policy_old',
+        agentJwt: 'agent.jwt.old',
+        policyCachePath: cachePath,
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const cliPath = resolve('dist/cli.js');
+      const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'pull', '--json'], {
+        env: { ...process.env, AGENTGUARD_HOME: home },
+      });
+
+      const result = JSON.parse(stdout) as { success: boolean; policyVersion: string };
+      assert.equal(result.success, true);
+      assert.equal(result.policyVersion, 'runtime-agent-jwt-retry');
+      assert.deepEqual(requests.map((request) => request.url), [
+        '/api/v1/policies/effective',
+        '/api/agent/register',
+        '/api/v1/policies/effective',
+      ]);
+      const savedConfig = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+      };
+      assert.equal(savedConfig.agentId, 'agt_policy_retry');
+      assert.equal(savedConfig.agentJwt, 'agent.jwt.new');
+    } finally {
+      await new Promise<void>((resolvePromise, reject) => {
+        server.close((err) => err ? reject(err) : resolvePromise());
+      });
+    }
+  });
 });
