@@ -94,7 +94,7 @@ describe('feed/cron', () => {
     assert.throws(() => validateCronExpression('0 * * * * *'), /Invalid --cron/);
   });
 
-  it('adds an OpenClaw cron job with announce-last delivery and cron schedule', async () => {
+  it('adds an OpenClaw cron job with no-delivery fallback and cron schedule', async () => {
     const gateway = fakeGateway();
 
     const result = await installOpenClawThreatFeedCron(
@@ -109,15 +109,14 @@ describe('feed/cron', () => {
     const job = gateway.calls[1].params;
     assert.equal(job.name, 'agentguard-threat-feed');
     assert.deepEqual(job.schedule, { kind: 'cron', expr: '0 * * * *', tz: 'Asia/Shanghai' });
-    assert.deepEqual(job.delivery, { mode: 'announce', channel: 'last' });
+    assert.deepEqual(job.delivery, { mode: 'none' });
     assert.equal(job.sessionTarget, 'isolated');
     assert.equal(job.payload.kind, 'agentTurn');
     assert.equal('agentguard' in job.payload, false);
     assert.match(job.payload.message, /Mode: manual/);
-    assert.match(job.payload.message, /Command: `agentguard subscribe --cron-notify-run`/);
-    assert.match(job.payload.message, /agentguard subscribe --cron-notify-run/);
-    assert.match(job.payload.message, /remediation guidance/);
-    assert.match(job.payload.message, /manual response steps/);
+    assert.match(job.payload.message, /Command: `agentguard subscribe --json --cron-run`/);
+    assert.match(job.payload.message, /agentguard subscribe --json --cron-run/);
+    assert.match(job.payload.message, /handles its own OpenClaw notification delivery/);
     assert.match(job.payload.message, /NO_REPLY/);
   });
 
@@ -233,9 +232,8 @@ describe('feed/cron', () => {
     assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron add']);
     assert.ok(calls[1].args.includes('--timeout-seconds'));
     assert.ok(calls[1].args.includes('300'));
-    assert.ok(calls[1].args.includes('--announce'));
-    assert.ok(calls[1].args.includes('--channel'));
-    assert.ok(calls[1].args.includes('last'));
+    assert.ok(calls[1].args.includes('--no-deliver'));
+    assert.ok(!calls[1].args.includes('--announce'));
   });
 
   it('does not treat native OpenClaw cron name substrings as existing jobs', async () => {
@@ -453,6 +451,22 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.add']);
   });
 
+  it('rejects an explicit OpenClaw cron target when the saved agent host is different', async () => {
+    await assert.rejects(
+      () =>
+        installThreatFeedCron({
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: false,
+          force: false,
+          backend: 'openclaw',
+          agentHost: 'codex',
+          timezone: 'UTC',
+        }),
+      /Cron target openclaw conflicts with saved agent host "codex"/
+    );
+  });
+
   it('fails fast when OpenClaw Gateway cron.list is unavailable', async () => {
     await assert.rejects(
       () =>
@@ -495,9 +509,9 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls[2].params.schedule, { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' });
     assert.equal('agentguard' in gateway.calls[2].params.payload, false);
     assert.match(gateway.calls[2].params.payload.message, /Mode: quiet/);
-    assert.deepEqual(gateway.calls[2].params.delivery, { mode: 'announce', channel: 'last' });
-    assert.match(gateway.calls[2].params.payload.message, /Command: `agentguard subscribe --quiet --cron-notify-run`/);
-    assert.match(gateway.calls[2].params.payload.message, /agentguard subscribe --quiet --cron-notify-run/);
+    assert.deepEqual(gateway.calls[2].params.delivery, { mode: 'none' });
+    assert.match(gateway.calls[2].params.payload.message, /Command: `agentguard subscribe --quiet --json --cron-run`/);
+    assert.match(gateway.calls[2].params.payload.message, /agentguard subscribe --quiet --json --cron-run/);
   });
 
   it('does not add a replacement if force removal fails', async () => {

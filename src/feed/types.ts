@@ -23,9 +23,10 @@ export type AdvisoryEcosystem =
 export type AdvisorySeverity = 'low' | 'medium' | 'high' | 'critical';
 
 /**
- * One matcher inside `Advisory.affected[]`. A local artifact matches the
- * advisory if ANY matcher matches. A matcher matches if ALL of its fields
- * that are set match the artifact (so name + hash narrows the match).
+ * One matcher used by Cloud-published advisories and local OSS guard
+ * self-checks. A local artifact matches the advisory if ANY matcher matches.
+ * A matcher matches if ALL of its populated fields match the same local
+ * artifact (so name + version narrows the hit).
  */
 export interface AdvisoryAffected {
   /**
@@ -41,9 +42,7 @@ export interface AdvisoryAffected {
    */
   sha256?: string;
   /**
-   * Optional semver range. Reserved for future use — current matchers
-   * ignore version unless explicitly set. Tools should treat unknown ranges
-   * as "match any version" rather than fail closed.
+   * Optional semver range used for plugin/package matching.
    */
   versionRange?: string;
   /**
@@ -83,7 +82,7 @@ export interface Advisory {
   references?: string[];
   selfCheck?: {
     inspectPaths?: string[];
-    matchers: unknown[];
+    matchers: AdvisoryAffected[];
     remediationAction?: 'quarantine' | 'uninstall' | 'block_url' | 'revoke_token' | 'notify_only';
     remediationMd?: string;
   };
@@ -123,7 +122,7 @@ export interface SelfCheckMatch {
    *  caller's responsibility before reporting upstream. */
   path: string;
   /** Which matcher hit. Useful for explaining "why" to the user. */
-  matchedBy: 'namePattern' | 'sha256' | 'bodyRegex' | 'urlPattern' | 'domainExact';
+  matchedBy: 'namePattern' | 'sha256' | 'versionRange' | 'bodyRegex' | 'urlPattern' | 'domainExact';
   /** When matched by hash, this is the local hash that equalled the advisory's. */
   hash?: string;
 }

@@ -82,6 +82,12 @@ export async function installThreatFeedCron(
       'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system`.'
     );
   }
+  if (backend === 'openclaw' && options.agentHost && options.agentHost !== 'openclaw') {
+    throw new Error(
+      `Cron target openclaw conflicts with saved agent host "${options.agentHost}". ` +
+      'Run `agentguard init --agent openclaw` first, omit `--cron-target` to use auto, or choose a different cron target.'
+    );
+  }
   if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw' && options.agentHost !== 'qclaw' && options.agentHost !== 'hermes')) {
     return installSystemThreatFeedCron(options, adapters.runCommand);
   }
@@ -116,7 +122,7 @@ export async function installThreatFeedCron(
   }
 
   if (backend === 'qclaw' || (backend === 'auto' && options.agentHost === 'qclaw')) {
-    const result = await installOpenClawThreatFeedCron(
+    const result = await installQClawThreatFeedCron(
       options,
       qclawGatewayOptions(adapters.gateway)
     );
@@ -139,7 +145,7 @@ export async function installOpenClawThreatFeedCron(
 ): Promise<OpenClawCronInstallResult> {
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
-  const command = threatFeedCommand(options.quiet, { notifyRun: true });
+  const command = threatFeedCommand(options.quiet);
   const existing = await findOpenClawCronJobsByName(options.name, gateway);
   if (existing.length > 0 && !options.force) {
     return {
@@ -176,6 +182,71 @@ export async function installOpenClawThreatFeedCron(
         timeoutSeconds: 300,
       },
       delivery: {
+        mode: 'none',
+      },
+    },
+    gateway
+  );
+
+  return {
+    name: options.name,
+    schedule,
+    timezone,
+    created: true,
+    backend: 'openclaw-gateway',
+    command,
+  };
+}
+
+async function installQClawThreatFeedCron(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    timezone?: string;
+  },
+  gateway: OpenClawGatewayOptions = {}
+): Promise<OpenClawCronInstallResult> {
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
+  const command = threatFeedCommand(options.quiet, { notifyRun: true });
+  const existing = await findOpenClawCronJobsByName(options.name, gateway);
+  if (existing.length > 0 && !options.force) {
+    return {
+      name: options.name,
+      schedule,
+      timezone,
+      created: false,
+      backend: 'qclaw-gateway',
+      command,
+    };
+  }
+
+  const description = `AgentGuard Cloud threat feed subscription (${schedule})`;
+  const message = qclawCronMessage(options.quiet);
+
+  if (existing.length > 0) {
+    await removeOpenClawCronJobs(existing, gateway);
+  }
+  await openClawGatewayRequest(
+    'cron.add',
+    {
+      name: options.name,
+      description,
+      enabled: true,
+      schedule: {
+        kind: 'cron',
+        expr: schedule,
+        tz: timezone,
+      },
+      sessionTarget: 'isolated',
+      payload: {
+        kind: 'agentTurn',
+        message,
+        timeoutSeconds: 300,
+      },
+      delivery: {
         mode: 'announce',
         channel: 'last',
       },
@@ -188,7 +259,7 @@ export async function installOpenClawThreatFeedCron(
     schedule,
     timezone,
     created: true,
-    backend: 'openclaw-gateway',
+    backend: 'qclaw-gateway',
     command,
   };
 }
@@ -213,7 +284,7 @@ async function installOpenClawNativeThreatFeedCron(
 ): Promise<OpenClawCronInstallResult> {
   const schedule = validateCronExpression(options.cronExpression);
   const timezone = options.timezone ?? localTimeZone();
-  const command = threatFeedCommand(options.quiet, { notifyRun: true });
+  const command = threatFeedCommand(options.quiet);
   const message = openClawCronMessage(options.quiet);
   let existing: CommandResult;
   try {
@@ -249,9 +320,7 @@ async function installOpenClawNativeThreatFeedCron(
     message,
     '--timeout-seconds',
     '300',
-    '--announce',
-    '--channel',
-    'last',
+    '--no-deliver',
     '--thinking',
     'off',
   ];
@@ -415,7 +484,10 @@ async function installSystemThreatFeedCron(
   };
 }
 
-function threatFeedCommand(quiet: boolean, options: { notifyRun?: boolean } = {}): string {
+function threatFeedCommand(
+  quiet: boolean,
+  options: { notifyRun?: boolean } = {}
+): string {
   const modeFlag = options.notifyRun ? '--cron-notify-run' : '--json --cron-run';
   return `agentguard subscribe${quiet ? ' --quiet' : ''} ${modeFlag}`;
 }
@@ -498,6 +570,24 @@ function shellQuote(value: string): string {
 }
 
 function openClawCronMessage(quiet: boolean): string {
+  const mode = quiet ? 'quiet' : 'manual';
+  const command = threatFeedCommand(quiet);
+  return [
+    `Mode: ${mode}.`,
+    `Command: \`${command}\`.`,
+    `Run exactly the command above.`,
+    '',
+    'Rules:',
+    '- The command handles its own OpenClaw notification delivery.',
+    '- Do not send a separate chat reply, summary, or confirmation.',
+    '- Output the command stdout exactly as your final response.',
+    '- If the command fails or prints no stdout, output `NO_REPLY`.',
+    '',
+    'Follow these rules exactly.',
+  ].join('\n');
+}
+
+function qclawCronMessage(quiet: boolean): string {
   const mode = quiet ? 'quiet' : 'manual';
   const command = threatFeedCommand(quiet, { notifyRun: true });
   if (!quiet) {
