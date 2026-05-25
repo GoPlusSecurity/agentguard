@@ -1,5 +1,5 @@
-import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, appendFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync } from 'node:fs';
+import { join, resolve, normalize } from 'node:path';
 import { homedir } from 'node:os';
 import type { HookInput, HookOutput } from './types.js';
 
@@ -23,12 +23,54 @@ function ensureDir(): void {
 // Config
 // ---------------------------------------------------------------------------
 
+const VALID_LEVELS = new Set(['strict', 'balanced', 'permissive']);
+
 export function loadConfig(): { level: string } {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    const level = typeof parsed?.level === 'string' && VALID_LEVELS.has(parsed.level)
+      ? parsed.level
+      : 'balanced';
+    return { level };
   } catch {
     return { level: 'balanced' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Prototype pollution guard
+// ---------------------------------------------------------------------------
+
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Check whether an object (or any nested descendant) contains keys
+ * that could trigger prototype pollution when merged or spread.
+ */
+export function containsProtoKeys(obj: unknown): boolean {
+  if (obj === null || typeof obj !== 'object') return false;
+
+  if (Array.isArray(obj)) {
+    return obj.some(containsProtoKeys);
+  }
+
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    if (DANGEROUS_KEYS.has(key)) return true;
+    if (containsProtoKeys((obj as Record<string, unknown>)[key])) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Safe string extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Safely extract a string from unknown data.
+ */
+export function getString(obj: Record<string, unknown>, key: string): string {
+  const val = obj[key];
+  return typeof val === 'string' ? val : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -36,17 +78,35 @@ export function loadConfig(): { level: string } {
 // ---------------------------------------------------------------------------
 
 const SENSITIVE_PATHS = [
-  '.env', '.env.local', '.env.production',
-  '.ssh/', 'id_rsa', 'id_ed25519',
+  // Environment / dotenv
+  '.env', '.env.local', '.env.production', '.env.staging', '.env.development',
+  // SSH
+  '.ssh/', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa',
+  // AWS
   '.aws/credentials', '.aws/config',
-  '.npmrc', '.netrc',
+  // npm / package managers
+  '.npmrc', '.yarnrc',
+  // Network auth
+  '.netrc',
+  // GCP
   'credentials.json', 'serviceAccountKey.json',
+  // Kubernetes
   '.kube/config',
+  // GPG
+  '.gnupg/',
+  // Docker
+  '.docker/config.json',
+  // Git credentials
+  '.git-credentials',
+  // Wallet / crypto
+  '.bitcoin/wallet.dat',
+  'keystore/',
 ];
 
 export function isSensitivePath(filePath: string): boolean {
   if (!filePath) return false;
-  const normalized = filePath.replace(/\\/g, '/');
+  // Resolve to absolute and normalize to prevent traversal bypasses
+  const normalized = resolve(normalize(filePath)).replace(/\\/g, '/');
   return SENSITIVE_PATHS.some(
     (p) => normalized.includes(`/${p}`) || normalized.endsWith(p)
   );
@@ -106,6 +166,51 @@ export function shouldAskAtLevel(
 // Audit logging
 // ---------------------------------------------------------------------------
 
+const MAX_AUDIT_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_AUDIT_FILES = 3;
+
+function rotateAuditLogIfNeeded(): void {
+  try {
+    if (!existsSync(AUDIT_PATH)) return;
+    const stat = statSync(AUDIT_PATH);
+    if (stat.size < MAX_AUDIT_SIZE) return;
+
+    // Rotate: .3 -> delete, .2 -> .3, .1 -> .2, current -> .1
+    const oldest = `${AUDIT_PATH}.${MAX_AUDIT_FILES}`;
+    if (existsSync(oldest)) {
+      try { unlinkSync(oldest); } catch { /* ok */ }
+    }
+    for (let i = MAX_AUDIT_FILES - 1; i >= 1; i--) {
+      const from = `${AUDIT_PATH}.${i}`;
+      const to = `${AUDIT_PATH}.${i + 1}`;
+      if (existsSync(from)) {
+        try { renameSync(from, to); } catch { /* ok */ }
+      }
+    }
+    renameSync(AUDIT_PATH, `${AUDIT_PATH}.1`);
+  } catch {
+    // Non-critical -- rotation failure should not block logging
+  }
+}
+
+/**
+ * Redact common secret patterns from a string before logging.
+ */
+function redactSecrets(value: string): string {
+  return value
+    // Bearer / Authorization tokens
+    .replace(/Bearer\s+[A-Za-z0-9\-_.]+/gi, 'Bearer [REDACTED]')
+    // AWS keys
+    .replace(/(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g, '$1[REDACTED]')
+    // Generic key=value secrets
+    .replace(/(api[_-]?key|api[_-]?secret|secret[_-]?key|password|token|passwd|pwd)\s*[:=]\s*['"]?[^\s'"]{8,}/gi,
+      (match) => match.slice(0, match.indexOf('=') + 1 || match.indexOf(':') + 1) + '[REDACTED]')
+    // Hex private keys (64 chars)
+    .replace(/0x[a-fA-F0-9]{64}/g, '0x[REDACTED_KEY]')
+    // SSH keys
+    .replace(/-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----/g, '[REDACTED_SSH_KEY]');
+}
+
 export function writeAuditLog(
   input: HookInput,
   decision: { decision?: string; risk_level?: string; risk_tags?: string[] } | null,
@@ -113,6 +218,7 @@ export function writeAuditLog(
 ): void {
   try {
     ensureDir();
+    rotateAuditLogIfNeeded();
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
       tool_name: input.toolName,
@@ -124,7 +230,7 @@ export function writeAuditLog(
     if (initiatingSkill) {
       entry.initiating_skill = initiatingSkill;
     }
-    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch {
     // Non-critical
   }
@@ -134,15 +240,15 @@ function summarizeToolInput(input: HookInput): string {
   const toolInput = input.toolInput;
   if (typeof toolInput === 'object' && toolInput !== null) {
     const cmd = (toolInput as Record<string, unknown>).command;
-    if (typeof cmd === 'string') return cmd.slice(0, 200);
+    if (typeof cmd === 'string') return redactSecrets(cmd.slice(0, 200));
     const fp = (toolInput as Record<string, unknown>).file_path ||
-               (toolInput as Record<string, unknown>).path;
-    if (typeof fp === 'string') return fp;
+      (toolInput as Record<string, unknown>).path;
+    if (typeof fp === 'string') return fp.slice(0, 200);
     const url = (toolInput as Record<string, unknown>).url ||
-                (toolInput as Record<string, unknown>).query;
-    if (typeof url === 'string') return url;
+      (toolInput as Record<string, unknown>).query;
+    if (typeof url === 'string') return redactSecrets(url.slice(0, 200));
   }
-  return JSON.stringify(toolInput).slice(0, 200);
+  return redactSecrets(JSON.stringify(toolInput).slice(0, 200));
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +297,7 @@ export function isActionAllowedByCapabilities(
     case 'web3_sign':
       return capabilities.can_web3 !== false;
     default:
-      return true;
+      // Fail-closed: unknown action types are denied by default
+      return false;
   }
 }

@@ -8,6 +8,8 @@ import {
   shouldDenyAtLevel,
   shouldAskAtLevel,
   isActionAllowedByCapabilities,
+  containsProtoKeys,
+  getString,
 } from '../adapters/common.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,8 +80,11 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal(adapter.mapToolToActionType('WebSearch'), 'network_request');
     });
 
+    it('should map Read to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('Read'), 'read_file');
+    });
+
     it('should return null for unknown tools', () => {
-      assert.equal(adapter.mapToolToActionType('Read'), null);
       assert.equal(adapter.mapToolToActionType('UnknownTool'), null);
     });
   });
@@ -136,11 +141,23 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'test query');
     });
 
-    it('should return null for unmapped tools', () => {
+    it('should build read_file envelope from Read', () => {
       const input = adapter.parseInput({
         hook_event_name: 'PreToolUse',
         tool_name: 'Read',
         tool_input: { file_path: '/tmp/test.txt' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'read_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/test.txt');
+    });
+
+    it('should return null for unmapped tools', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'TodoWrite',
+        tool_input: {},
       });
       const envelope = adapter.buildEnvelope(input);
       assert.equal(envelope, null);
@@ -517,6 +534,23 @@ describe('Adapter Common Utilities', () => {
       assert.ok(isSensitivePath('/home/user/.kube/config'));
     });
 
+    it('should detect .docker/config.json', () => {
+      assert.ok(isSensitivePath('/home/user/.docker/config.json'));
+    });
+
+    it('should detect .git-credentials', () => {
+      assert.ok(isSensitivePath('/home/user/.git-credentials'));
+    });
+
+    it('should detect .gnupg directory', () => {
+      assert.ok(isSensitivePath('/home/user/.gnupg/secring.gpg'));
+    });
+
+    it('should detect .env.staging and .env.development', () => {
+      assert.ok(isSensitivePath('/project/.env.staging'));
+      assert.ok(isSensitivePath('/project/.env.development'));
+    });
+
     it('should allow normal paths', () => {
       assert.ok(!isSensitivePath('/project/src/index.ts'));
       assert.ok(!isSensitivePath('/project/package.json'));
@@ -623,8 +657,60 @@ describe('Adapter Common Utilities', () => {
       assert.ok(!isActionAllowedByCapabilities('web3_sign', { can_web3: false }));
     });
 
-    it('should allow unknown action types by default', () => {
-      assert.ok(isActionAllowedByCapabilities('unknown_action', {}));
+    it('should deny unknown action types (fail-closed)', () => {
+      assert.ok(!isActionAllowedByCapabilities('unknown_action', {}));
+    });
+  });
+
+  describe('containsProtoKeys', () => {
+    it('should detect __proto__ key', () => {
+      // Object literals with __proto__ set the prototype, so use JSON.parse
+      const obj = JSON.parse('{"__proto__": {"admin": true}}');
+      assert.ok(containsProtoKeys(obj));
+    });
+
+    it('should detect constructor key', () => {
+      assert.ok(containsProtoKeys({ 'constructor': { prototype: {} } }));
+    });
+
+    it('should detect prototype key', () => {
+      assert.ok(containsProtoKeys({ 'prototype': {} }));
+    });
+
+    it('should detect nested dangerous keys', () => {
+      const obj = { a: { b: JSON.parse('{"__proto__": {}}') } };
+      assert.ok(containsProtoKeys(obj));
+    });
+
+    it('should allow safe objects', () => {
+      assert.ok(!containsProtoKeys({ foo: 'bar', baz: 123 }));
+    });
+
+    it('should handle null and primitives', () => {
+      assert.ok(!containsProtoKeys(null));
+      assert.ok(!containsProtoKeys('string'));
+      assert.ok(!containsProtoKeys(42));
+    });
+
+    it('should detect in arrays', () => {
+      const obj = [JSON.parse('{"__proto__": {}}')];
+      assert.ok(containsProtoKeys(obj));
+    });
+  });
+
+  describe('getString', () => {
+    it('should extract string values', () => {
+      assert.equal(getString({ name: 'test' }, 'name'), 'test');
+    });
+
+    it('should return empty string for non-string values', () => {
+      assert.equal(getString({ count: 42 }, 'count'), '');
+      assert.equal(getString({ flag: true }, 'flag'), '');
+      assert.equal(getString({ data: null }, 'data'), '');
+    });
+
+    it('should return empty string for missing keys', () => {
+      assert.equal(getString({}, 'missing'), '');
     });
   });
 });

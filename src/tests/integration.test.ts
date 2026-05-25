@@ -77,14 +77,69 @@ describe('Integration: Claude Code evaluateHook', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('should ALLOW unmapped tool (Read)', async () => {
+  it('should evaluate Read tool through ActionScanner (not auto-allow)', async () => {
     ctx = createTestContext('balanced');
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Read',
       tool_input: { file_path: '/tmp/test.txt' },
     }, ctx.options);
+    // Read is now mapped to read_file and goes through ActionScanner
+    // ActionScanner may allow or deny based on path policy
+    assert.notEqual(result.decision, undefined, 'Should return a decision');
+    assert.ok(['allow', 'deny', 'ask'].includes(result.decision));
+  });
+
+  it('should ALLOW unmapped tool (TodoWrite)', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'TodoWrite',
+      tool_input: {},
+    }, ctx.options);
     assert.equal(result.decision, 'allow');
+  });
+
+  it('should DENY input with __proto__ (prototype pollution guard)', async () => {
+    ctx = createTestContext('balanced');
+    // Use JSON.parse to create an actual __proto__ own property
+    const malicious = JSON.parse('{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"},"__proto__":{"admin":true}}');
+    const result = await evaluateHook(ctx.claudeAdapter, malicious, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.reason?.includes('dangerous keys'));
+  });
+
+  it('should DENY on engine error (fail-closed)', async () => {
+    ctx = createTestContext('balanced');
+    // Replace actionScanner.decide to throw
+    const original = ctx.agentguard.actionScanner.decide;
+    ctx.agentguard.actionScanner.decide = async () => { throw new Error('test engine error'); };
+    try {
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hello' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+    } finally {
+      ctx.agentguard.actionScanner.decide = original;
+    }
+  });
+
+  it('should ASK on engine error in permissive mode', async () => {
+    ctx = createTestContext('permissive');
+    const original = ctx.agentguard.actionScanner.decide;
+    ctx.agentguard.actionScanner.decide = async () => { throw new Error('test engine error'); };
+    try {
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hello' },
+      }, ctx.options);
+      assert.equal(result.decision, 'ask');
+    } finally {
+      ctx.agentguard.actionScanner.decide = original;
+    }
   });
 });
 

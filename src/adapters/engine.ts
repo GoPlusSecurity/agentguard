@@ -6,6 +6,7 @@ import {
   writeAuditLog,
   getSkillTrustPolicy,
   isActionAllowedByCapabilities,
+  containsProtoKeys,
 } from './common.js';
 
 /**
@@ -19,9 +20,19 @@ export async function evaluateHook(
   rawInput: unknown,
   options: EngineOptions
 ): Promise<HookOutput> {
+  // Guard: reject null / non-object payloads
+  if (rawInput === null || typeof rawInput !== 'object') {
+    return { decision: 'deny', reason: 'GoPlus AgentGuard: invalid input (not an object)' };
+  }
+
+  // Guard: prototype pollution in raw input
+  if (containsProtoKeys(rawInput)) {
+    return { decision: 'deny', reason: 'GoPlus AgentGuard: input rejected — contains dangerous keys (__proto__ / constructor / prototype)' };
+  }
+
   const input = adapter.parseInput(rawInput);
 
-  // Post-tool events → audit only
+  // Post-tool events -> audit only
   if (input.eventType === 'post') {
     const skill = await adapter.inferInitiatingSkill(input);
     writeAuditLog(input, null, skill);
@@ -36,12 +47,12 @@ export async function evaluateHook(
     return { decision: 'allow' };
   }
 
-  // Fast check: sensitive file paths (Write/Edit)
+  // Fast check: sensitive file paths (Write/Edit/Read)
   const actionType = adapter.mapToolToActionType(input.toolName);
-  if (actionType === 'write_file') {
-    const filePath = (input.toolInput.file_path as string) ||
-                     (input.toolInput.path as string) || '';
-    if (isSensitivePath(filePath)) {
+  if (actionType === 'write_file' || actionType === 'read_file') {
+    const filePath = (typeof input.toolInput.file_path === 'string' ? input.toolInput.file_path : '') ||
+                     (typeof input.toolInput.path === 'string' ? input.toolInput.path : '');
+    if (actionType === 'write_file' && isSensitivePath(filePath)) {
       const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
       const reason = `GoPlus AgentGuard: blocked write to sensitive path "${filePath}"${skillTag}`;
       writeAuditLog(input, { decision: 'deny', risk_level: 'critical', risk_tags: ['SENSITIVE_PATH'] }, initiatingSkill);
@@ -110,9 +121,13 @@ export async function evaluateHook(
     }
 
     return { decision: 'allow', initiatingSkill };
-  } catch {
-    // Engine error → fail open
-    writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill);
-    return { decision: 'allow' };
+  } catch (err: unknown) {
+    // Engine error -> fail closed (security-critical: never allow on error)
+    const errMsg = err instanceof Error ? err.message : 'unknown error';
+    writeAuditLog(input, { decision: 'error', risk_level: 'high', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill);
+    if (options.config.level === 'permissive') {
+      return { decision: 'ask', reason: `GoPlus AgentGuard: internal error (${errMsg}) — please confirm action manually` };
+    }
+    return { decision: 'deny', reason: `GoPlus AgentGuard: internal error — action blocked for safety` };
   }
 }

@@ -1,10 +1,12 @@
-import type { ActionEnvelope } from '../types/action.js';
+import type { ActionEnvelope, ActionType, ActionContext } from '../types/action.js';
+import type { SkillIdentity } from '../types/skill.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { getString } from './common.js';
 
 /**
- * Tool name → action type mapping for OpenClaw
+ * Tool name -> action type mapping for OpenClaw
  */
-const TOOL_ACTION_MAP: Record<string, string> = {
+const TOOL_ACTION_MAP: Record<string, ActionType> = {
   exec: 'exec_command',
   write: 'write_file',
   read: 'read_file',
@@ -28,21 +30,24 @@ export class OpenClawAdapter implements HookAdapter {
   readonly name = 'openclaw';
 
   parseInput(raw: unknown): HookInput {
-    const event = raw as Record<string, unknown>;
+    const event = (raw !== null && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+    const toolInput = (event.params !== null && typeof event.params === 'object')
+      ? event.params as Record<string, unknown>
+      : {};
     return {
-      toolName: (event.toolName as string) || '',
-      toolInput: (event.params as Record<string, unknown>) || {},
+      toolName: getString(event, 'toolName'),
+      toolInput,
       eventType: 'pre', // before_tool_call = pre
       raw: event,
     };
   }
 
-  mapToolToActionType(toolName: string): string | null {
+  mapToolToActionType(toolName: string): ActionType | null {
     // Direct match
     if (TOOL_ACTION_MAP[toolName]) {
       return TOOL_ACTION_MAP[toolName];
     }
-    // Prefix match for tool families (e.g. "exec_python" → "exec_command")
+    // Prefix match for tool families (e.g. "exec_python" -> "exec_command")
     for (const [prefix, actionType] of Object.entries(TOOL_ACTION_MAP)) {
       if (toolName.startsWith(prefix)) {
         return actionType;
@@ -55,68 +60,82 @@ export class OpenClawAdapter implements HookAdapter {
     const actionType = this.mapToolToActionType(input.toolName);
     if (!actionType) return null;
 
-    const actor = {
-      skill: {
-        id: initiatingSkill || 'openclaw-session',
-        source: initiatingSkill || 'openclaw',
-        version_ref: '0.0.0',
-        artifact_hash: '',
-      },
+    const skill: SkillIdentity = {
+      id: initiatingSkill || 'openclaw-session',
+      source: initiatingSkill || 'openclaw',
+      version_ref: '0.0.0',
+      artifact_hash: '',
     };
 
-    const context = {
+    const context: ActionContext = {
       session_id: `openclaw-${Date.now()}`,
       user_present: true,
-      env: 'prod' as const,
+      env: 'prod',
       time: new Date().toISOString(),
       initiating_skill: initiatingSkill || undefined,
     };
 
-    let actionData: Record<string, unknown>;
+    const ti = input.toolInput as Record<string, unknown>;
 
     switch (actionType) {
       case 'exec_command':
-        actionData = {
-          command: (input.toolInput.command as string) || '',
-          args: [],
+        return {
+          actor: { skill },
+          action: {
+            type: actionType,
+            data: {
+              command: getString(ti, 'command'),
+              args: [],
+            },
+          },
+          context,
         };
-        break;
 
       case 'write_file':
-        actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+        return {
+          actor: { skill },
+          action: {
+            type: actionType,
+            data: {
+              path: getString(ti, 'path') || getString(ti, 'file_path'),
+            },
+          },
+          context,
         };
-        break;
 
       case 'read_file':
-        actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+        return {
+          actor: { skill },
+          action: {
+            type: actionType,
+            data: {
+              path: getString(ti, 'path') || getString(ti, 'file_path'),
+            },
+          },
+          context,
         };
-        break;
 
       case 'network_request':
-        actionData = {
-          method: (input.toolInput.method as string) || 'GET',
-          url: (input.toolInput.url as string) || '',
-          body_preview: input.toolInput.body as string | undefined,
+        return {
+          actor: { skill },
+          action: {
+            type: actionType,
+            data: {
+              method: (getString(ti, 'method') || 'GET') as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+              url: getString(ti, 'url'),
+              body_preview: getString(ti, 'body') || undefined,
+            },
+          },
+          context,
         };
-        break;
 
       default:
         return null;
     }
-
-    return {
-      actor,
-      action: { type: actionType, data: actionData },
-      context,
-    } as unknown as ActionEnvelope;
   }
 
   async inferInitiatingSkill(input: HookInput): Promise<string | null> {
-    // Try to get plugin ID from tool → plugin mapping
+    // Try to get plugin ID from tool -> plugin mapping
     try {
       const { getPluginIdFromTool } = await import('./openclaw-plugin.js');
       return getPluginIdFromTool(input.toolName);
