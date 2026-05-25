@@ -21,11 +21,26 @@ export interface StorageOptions {
 }
 
 /**
- * JSON-based storage for registry
+ * JSON-based storage for registry.
+ *
+ * Concurrency-safe for parallel multi-agent environments:
+ *  - Load coalescing: concurrent load() calls share a single file read.
+ *  - Write serialization: concurrent mutations queue behind the current
+ *    write to prevent interleaved save() calls from losing data.
+ *  - Record-key index: O(1) lookups by record_key instead of linear scan.
  */
 export class RegistryStorage {
   private filePath: string;
   private data: RegistryData | null = null;
+
+  /** Promise for the in-flight load — concurrent callers share this */
+  private loadPromise: Promise<RegistryData> | null = null;
+
+  /** Chain for serializing mutations (upsert / remove / save) */
+  private writeChain: Promise<void> = Promise.resolve();
+
+  /** Fast lookup index: record_key → array index */
+  private keyIndex: Map<string, number> | null = null;
 
   constructor(options: StorageOptions = {}) {
     this.filePath =
@@ -46,13 +61,41 @@ export class RegistryStorage {
   }
 
   /**
-   * Load registry data from file
+   * Rebuild the record_key → index mapping.
+   */
+  private rebuildIndex(): void {
+    this.keyIndex = new Map();
+    if (!this.data) return;
+    for (let i = 0; i < this.data.records.length; i++) {
+      this.keyIndex.set(this.data.records[i].record_key, i);
+    }
+  }
+
+  /**
+   * Load registry data from file.
+   *
+   * Concurrent callers share a single in-flight read to avoid redundant I/O.
    */
   async load(): Promise<RegistryData> {
     if (this.data) {
       return this.data;
     }
 
+    // Coalesce concurrent loads
+    if (this.loadPromise) {
+      return this.loadPromise;
+    }
+
+    this.loadPromise = this.loadFromDisk();
+
+    try {
+      return await this.loadPromise;
+    } finally {
+      this.loadPromise = null;
+    }
+  }
+
+  private async loadFromDisk(): Promise<RegistryData> {
     try {
       const content = await fs.readFile(this.filePath, 'utf-8');
       this.data = JSON.parse(content) as RegistryData;
@@ -62,11 +105,13 @@ export class RegistryStorage {
         console.warn(`Unknown registry version: ${this.data.version}`);
       }
 
+      this.rebuildIndex();
       return this.data;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         // File doesn't exist, create default
-        this.data = { ...DEFAULT_REGISTRY };
+        this.data = { ...DEFAULT_REGISTRY, records: [] };
+        this.rebuildIndex();
         await this.save();
         return this.data;
       }
@@ -75,22 +120,33 @@ export class RegistryStorage {
   }
 
   /**
-   * Save registry data to file
+   * Save registry data to file.
+   *
+   * Serialized: concurrent writes queue behind the current in-flight save.
    */
   async save(): Promise<void> {
     if (!this.data) {
       throw new Error('No data to save');
     }
 
-    await this.ensureDirectory();
+    // Serialize writes to prevent interleaving
+    const doSave = async (): Promise<void> => {
+      if (!this.data) return;
 
-    this.data.updated_at = new Date().toISOString();
+      await this.ensureDirectory();
 
-    await fs.writeFile(
-      this.filePath,
-      JSON.stringify(this.data, null, 2),
-      { encoding: 'utf-8', mode: 0o600 }
-    );
+      this.data.updated_at = new Date().toISOString();
+
+      await fs.writeFile(
+        this.filePath,
+        JSON.stringify(this.data, null, 2),
+        { encoding: 'utf-8', mode: 0o600 }
+      );
+    };
+
+    // Chain behind any pending write
+    this.writeChain = this.writeChain.then(doSave, doSave);
+    return this.writeChain;
   }
 
   /**
@@ -102,10 +158,14 @@ export class RegistryStorage {
   }
 
   /**
-   * Find record by key
+   * Find record by key (O(1) via index)
    */
   async findByKey(recordKey: string): Promise<TrustRecord | null> {
     const data = await this.load();
+    if (this.keyIndex) {
+      const idx = this.keyIndex.get(recordKey);
+      return idx !== undefined ? data.records[idx] : null;
+    }
     return data.records.find((r) => r.record_key === recordKey) || null;
   }
 
@@ -123,14 +183,24 @@ export class RegistryStorage {
   async upsert(record: TrustRecord): Promise<void> {
     const data = await this.load();
 
-    const existingIndex = data.records.findIndex(
-      (r) => r.record_key === record.record_key
-    );
-
-    if (existingIndex >= 0) {
-      data.records[existingIndex] = record;
+    if (this.keyIndex) {
+      const existingIdx = this.keyIndex.get(record.record_key);
+      if (existingIdx !== undefined) {
+        data.records[existingIdx] = record;
+      } else {
+        const newIdx = data.records.length;
+        data.records.push(record);
+        this.keyIndex.set(record.record_key, newIdx);
+      }
     } else {
-      data.records.push(record);
+      const existingIndex = data.records.findIndex(
+        (r) => r.record_key === record.record_key
+      );
+      if (existingIndex >= 0) {
+        data.records[existingIndex] = record;
+      } else {
+        data.records.push(record);
+      }
     }
 
     await this.save();
@@ -146,6 +216,8 @@ export class RegistryStorage {
     data.records = data.records.filter((r) => r.record_key !== recordKey);
 
     if (data.records.length < initialLength) {
+      // Rebuild index since indices shifted
+      this.rebuildIndex();
       await this.save();
       return true;
     }
@@ -202,9 +274,11 @@ export class RegistryStorage {
       }
 
       data.records = Array.from(recordMap.values());
+      this.rebuildIndex();
       await this.save();
     } else {
       this.data = importData;
+      this.rebuildIndex();
       await this.save();
     }
   }
@@ -213,7 +287,8 @@ export class RegistryStorage {
    * Clear all records
    */
   async clear(): Promise<void> {
-    this.data = { ...DEFAULT_REGISTRY };
+    this.data = { ...DEFAULT_REGISTRY, records: [] };
+    this.rebuildIndex();
     await this.save();
   }
 

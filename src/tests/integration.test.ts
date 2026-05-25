@@ -77,12 +77,23 @@ describe('Integration: Claude Code evaluateHook', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('should ALLOW unmapped tool (Read)', async () => {
+  it('should DENY read_file for non-allowlisted path via Read tool', async () => {
     ctx = createTestContext('balanced');
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Read',
       tool_input: { file_path: '/tmp/test.txt' },
+    }, ctx.options);
+    // Read is now mapped to read_file; ActionScanner denies paths not in allowlist
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('should ALLOW truly unmapped tool (Glob)', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Glob',
+      tool_input: { pattern: '*.ts' },
     }, ctx.options);
     assert.equal(result.decision, 'allow');
   });

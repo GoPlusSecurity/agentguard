@@ -496,9 +496,21 @@ export function registerOpenClawPlugin(
       }
 
       return undefined; // allow
-    } catch {
-      // Fail open
-      return undefined;
+    } catch (err) {
+      // Fail-closed: engine errors must not silently allow potentially dangerous actions.
+      // Consistent with evaluateHook() error handling in engine.ts.
+      const errMsg = err instanceof Error ? err.message : 'unknown error';
+      const level = config.level || 'balanced';
+      if (level === 'permissive') {
+        return {
+          block: true,
+          blockReason: `GoPlus AgentGuard: internal error (${errMsg}) — please confirm action manually`,
+        };
+      }
+      return {
+        block: true,
+        blockReason: `GoPlus AgentGuard: internal error — action blocked for safety`,
+      };
     }
   });
 

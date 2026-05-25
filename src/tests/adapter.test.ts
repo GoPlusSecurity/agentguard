@@ -78,8 +78,12 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal(adapter.mapToolToActionType('WebSearch'), 'network_request');
     });
 
+    it('should map Read to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('Read'), 'read_file');
+    });
+
     it('should return null for unknown tools', () => {
-      assert.equal(adapter.mapToolToActionType('Read'), null);
+      assert.equal(adapter.mapToolToActionType('Glob'), null);
       assert.equal(adapter.mapToolToActionType('UnknownTool'), null);
     });
   });
@@ -136,11 +140,23 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'test query');
     });
 
-    it('should return null for unmapped tools', () => {
+    it('should build read_file envelope for Read tool', () => {
       const input = adapter.parseInput({
         hook_event_name: 'PreToolUse',
         tool_name: 'Read',
         tool_input: { file_path: '/tmp/test.txt' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'read_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/test.txt');
+    });
+
+    it('should return null for unmapped tools', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Glob',
+        tool_input: { pattern: '*.ts' },
       });
       const envelope = adapter.buildEnvelope(input);
       assert.equal(envelope, null);
@@ -623,8 +639,8 @@ describe('Adapter Common Utilities', () => {
       assert.ok(!isActionAllowedByCapabilities('web3_sign', { can_web3: false }));
     });
 
-    it('should allow unknown action types by default', () => {
-      assert.ok(isActionAllowedByCapabilities('unknown_action', {}));
+    it('should deny unknown action types (fail-closed)', () => {
+      assert.ok(!isActionAllowedByCapabilities('unknown_action', {}));
     });
   });
 });
