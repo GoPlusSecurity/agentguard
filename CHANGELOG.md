@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `agentguard subscribe --cron` now installs OpenClaw jobs with `delivery.mode = none` / `--no-deliver`, then lets the normal internal `--cron-run` path auto-detect the saved OpenClaw host and send notifications directly to the latest deliverable session route instead of relying on `channel:last` announce fallback.
+- `agentguard subscribe --cron --cron-target openclaw` now rejects saved-host mismatches, so an existing non-OpenClaw `agentHost` can no longer install an OpenClaw cron job that would run without any working notification route.
+
 ## [1.1.15] - 2026-05-25
 
 ### Added
@@ -11,8 +17,6 @@
 - Cloud flows now prefer Agent JWT auth when available, with API key support preserved.
 - Threat-feed notifications now include Cloud remediation guidance when available.
 - Connect and disconnect flows now keep API key and Agent JWT credentials mutually clean.
-- `agentguard subscribe --cron` now installs OpenClaw jobs with `delivery.mode = none` / `--no-deliver`, then lets the normal internal `--cron-run` path auto-detect the saved OpenClaw host and send notifications directly to the latest deliverable session route instead of relying on `channel:last` announce fallback.
-- `agentguard subscribe --cron --cron-target openclaw` now rejects saved-host mismatches, so an existing non-OpenClaw `agentHost` can no longer install an OpenClaw cron job that would run without any working notification route.
 
 ### Fixed
 - Fixed Cloud runtime decisions that return `require_approve` instead of `require_approval`.
