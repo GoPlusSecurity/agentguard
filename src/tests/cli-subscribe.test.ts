@@ -97,6 +97,10 @@ const advisory: Advisory = {
   detailsMd: 'Demo advisory',
   affected: [{ namePattern: 'malicious-*' }],
   publishedAt: '2026-05-20T00:00:00.000Z',
+  selfCheck: {
+    matchers: [],
+    remediationMd: 'Quarantine the malicious demo skill and rotate any exposed API keys.',
+  },
 };
 
 describe('CLI subscribe command modes', () => {
@@ -109,8 +113,12 @@ describe('CLI subscribe command modes', () => {
 
       assert.equal(result.exitCode, 0);
       assert.equal(result.stderr, '');
-      assert.match(result.stdout, /New threat-feed advisories found/);
+      assert.match(result.stdout, /Pulled 1 advisory record\(s\); 1 new\./);
+      assert.match(result.stdout, /AgentGuard found new threat-feed advisories that need manual review:/);
       assert.match(result.stdout, /AGS-2026-subscribe/);
+      assert.match(result.stdout, /Remediation guidance:/);
+      assert.match(result.stdout, /Quarantine the malicious demo skill/);
+      assert.doesNotMatch(result.stdout, /agentguard subscribe --quiet/);
       assert.doesNotMatch(result.stdout, /Self-check found/);
       assert.equal(reports.length, 0);
     });
@@ -161,6 +169,9 @@ describe('CLI subscribe command modes', () => {
       assert.equal(result.stderr, '');
       assert.match(result.stdout, /^AgentGuard found new threat-feed advisories/m);
       assert.match(result.stdout, /AGS-2026-subscribe/);
+      assert.match(result.stdout, /Remediation guidance:/);
+      assert.match(result.stdout, /Quarantine the malicious demo skill/);
+      assert.doesNotMatch(result.stdout, /agentguard subscribe --quiet/);
       assert.doesNotMatch(result.stdout, /Pulled \d+ advisory/);
     });
   });

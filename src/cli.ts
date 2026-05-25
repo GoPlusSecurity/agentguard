@@ -473,10 +473,7 @@ async function main() {
 
       console.log(`Pulled ${advisories.length} advisory record(s); ${fresh.length} new.`);
       if (!quiet && fresh.length > 0) {
-        console.log('New threat-feed advisories found. Review and handle them manually:');
-        for (const advisory of fresh) {
-          console.log(`  - ${advisory.id} [${advisory.severity}] ${advisory.summary}`);
-        }
+        console.log(summary.notification?.body ?? formatNewAdvisoryNotification(fresh));
       } else if (quiet && fresh.length > 0) {
         console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
         for (const r of results) {
@@ -1120,12 +1117,29 @@ function formatNewAdvisoryNotification(advisories: Advisory[]): string {
   const lines = ['AgentGuard found new threat-feed advisories that need manual review:'];
   for (const advisory of advisories.slice(0, 10)) {
     lines.push(`- ${advisory.id} [${advisory.severity}] ${advisory.summary}`);
+    const remediation = formatAdvisoryRemediation(advisory);
+    if (remediation) {
+      lines.push('  Remediation guidance:');
+      for (const line of remediation.split('\n')) {
+        lines.push(`  ${line}`);
+      }
+    }
   }
   if (advisories.length > 10) {
     lines.push(`- ... ${advisories.length - 10} more`);
   }
-  lines.push('Run `agentguard subscribe --quiet` to execute the local self-check and report matches automatically.');
   return lines.join('\n');
+}
+
+function formatAdvisoryRemediation(advisory: Advisory): string | null {
+  const remediation = advisory.selfCheck?.remediationMd?.trim();
+  if (!remediation) return null;
+  const compact = remediation
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const maxLen = 1200;
+  return compact.length > maxLen ? `${compact.slice(0, maxLen).trimEnd()}\n...` : compact;
 }
 
 function formatThreatFeedNotification(results: SelfCheckResult[]): string {

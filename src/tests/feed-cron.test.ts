@@ -116,6 +116,8 @@ describe('feed/cron', () => {
     assert.match(job.payload.message, /Mode: manual/);
     assert.match(job.payload.message, /Command: `agentguard subscribe --cron-notify-run`/);
     assert.match(job.payload.message, /agentguard subscribe --cron-notify-run/);
+    assert.match(job.payload.message, /remediation guidance/);
+    assert.match(job.payload.message, /manual response steps/);
     assert.match(job.payload.message, /NO_REPLY/);
   });
 
@@ -343,6 +345,8 @@ describe('feed/cron', () => {
     assert.deepEqual(job.delivery, { mode: 'announce', channel: 'last' });
     assert.equal('agentguard' in job.payload, false);
     assert.match(job.payload.message, /Command: `agentguard subscribe --cron-notify-run`/);
+    assert.match(job.payload.message, /remediation guidance/);
+    assert.match(job.payload.message, /manual response steps/);
   });
 
   it('auto-installs native Hermes cron jobs for Hermes agents', async () => {

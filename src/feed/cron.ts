@@ -500,6 +500,23 @@ function shellQuote(value: string): string {
 function openClawCronMessage(quiet: boolean): string {
   const mode = quiet ? 'quiet' : 'manual';
   const command = threatFeedCommand(quiet, { notifyRun: true });
+  if (!quiet) {
+    return [
+      `Mode: ${mode}.`,
+      `Command: \`${command}\`.`,
+      `Run exactly the command above.`,
+      '',
+      'Rules:',
+      '- If the command fails, prints no stdout, or prints only `NO_REPLY`, output `NO_REPLY`.',
+      '- If the command prints threat-feed advisories, read the full output, including any remediation guidance.',
+      '- Respond in the same language as the user would naturally use for this chat.',
+      '- Summarize the new threat(s), identify the likely local impact, and give concise manual response steps.',
+      '- Preserve advisory IDs and severity labels.',
+      '- Do not claim a local match was found unless the command output explicitly says so.',
+      '',
+      'Follow these rules exactly.',
+    ].join('\n');
+  }
   return [
     `Mode: ${mode}.`,
     `Command: \`${command}\`.`,
