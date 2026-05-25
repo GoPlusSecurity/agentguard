@@ -102,7 +102,7 @@ const advisory: Advisory = {
   affected: [{ namePattern: 'malicious-*' }],
   publishedAt: '2026-05-20T00:00:00.000Z',
   selfCheck: {
-    matchers: [],
+    matchers: [{ namePattern: 'malicious-*' }],
     remediationMd: 'Quarantine the malicious demo skill and rotate any exposed API keys.',
   },
 };
