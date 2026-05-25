@@ -19,7 +19,7 @@ function startServer(handler: Handler): Promise<{ url: string; server: Server }>
 describe('cloud client — feed methods', () => {
   let baseUrl: string;
   let server: Server;
-  let lastRequest: { url: string; method: string; body?: unknown } | null = null;
+  let lastRequest: { url: string; method: string; headers: Record<string, string | string[] | undefined>; body?: unknown } | null = null;
   let nextResponse: { status: number; body: unknown } = { status: 200, body: {} };
 
   before(async () => {
@@ -27,7 +27,7 @@ describe('cloud client — feed methods', () => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
       const raw = Buffer.concat(chunks).toString('utf8');
-      lastRequest = { url: req.url, method: req.method, body: raw ? JSON.parse(raw) : undefined };
+      lastRequest = { url: req.url, method: req.method, headers: req.headers, body: raw ? JSON.parse(raw) : undefined };
       res.statusCode = nextResponse.status;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify(nextResponse.body));
@@ -82,6 +82,52 @@ describe('cloud client — feed methods', () => {
     assert.equal(result?.length, 1);
     assert.equal(result?.[0].id, 'AGS-2026-1');
     assert.match(lastRequest!.url, /\/api\/v1\/feed\/advisories\?since=/);
+    assert.equal(lastRequest!.headers['x-api-key'], 'ag_live_x');
+  });
+
+  it('uses Agent JWT bearer auth before legacy API keys', async () => {
+    nextResponse = {
+      status: 200,
+      body: {
+        success: true,
+        data: {
+          advisories: [],
+        },
+      },
+    };
+    const client = new AgentGuardCloudClient({
+      cloudUrl: baseUrl,
+      apiKey: 'ag_live_x',
+      agentJwt: 'agent.jwt.test',
+    });
+    const result = await client.pullAdvisories();
+    assert.deepEqual(result, []);
+    assert.equal(lastRequest!.headers.authorization, 'Bearer agent.jwt.test');
+    assert.equal(lastRequest!.headers['x-api-key'], undefined);
+  });
+
+  it('registerAgent POSTs metadata and returns the activation payload', async () => {
+    nextResponse = {
+      status: 200,
+      body: {
+        success: true,
+        data: {
+          agentId: 'agt_test',
+          jwt: 'agent.jwt.created',
+          registerUrl: 'https://agentguard.example/activate?token=test',
+        },
+      },
+    };
+    const client = new AgentGuardCloudClient({ cloudUrl: baseUrl });
+    const result = await client.registerAgent({ metadata: { agentHost: 'openclaw' } });
+    assert.equal(lastRequest!.method, 'POST');
+    assert.match(lastRequest!.url, /\/api\/agent\/register$/);
+    assert.deepEqual(lastRequest!.body, { metadata: { agentHost: 'openclaw' } });
+    assert.deepEqual(result, {
+      agentId: 'agt_test',
+      jwt: 'agent.jwt.created',
+      registerUrl: 'https://agentguard.example/activate?token=test',
+    });
   });
 
   it('pullAdvisories returns null on 404 (older Cloud)', async () => {

@@ -33,14 +33,16 @@ interface ApiMeta {
 export class AgentGuardCloudClient {
   private readonly cloudUrl: string;
   private readonly apiKey?: string;
+  private readonly agentJwt?: string;
 
-  constructor(config: Pick<AgentGuardConfig, 'cloudUrl' | 'apiKey'>) {
+  constructor(config: Pick<AgentGuardConfig, 'cloudUrl' | 'apiKey' | 'agentJwt'>) {
     this.cloudUrl = normalizeCloudUrl(config.cloudUrl || 'https://agentguard.gopluslabs.io');
     this.apiKey = config.apiKey;
+    this.agentJwt = config.agentJwt;
   }
 
   get connected(): boolean {
-    return Boolean(this.apiKey);
+    return Boolean(this.agentJwt || this.apiKey);
   }
 
   async status(): Promise<{ ok?: boolean; service?: string; status?: string; version?: string; detectors?: number }> {
@@ -48,13 +50,13 @@ export class AgentGuardCloudClient {
   }
 
   async fetchEffectivePolicy(): Promise<EffectiveRuntimePolicy> {
-    this.requireApiKey();
+    this.requireCredential();
     const body = await this.request<EffectiveRuntimePolicy>('/api/v1/policies/effective');
     return body.data;
   }
 
   async evaluateAction(action: RuntimeAction): Promise<RuntimeDecision> {
-    this.requireApiKey();
+    this.requireCredential();
     const body = await this.request<RuntimeDecision>('/api/v1/actions/evaluate', {
       method: 'POST',
       body: JSON.stringify(sanitizeActionRequest(action)),
@@ -63,7 +65,7 @@ export class AgentGuardCloudClient {
   }
 
   async ingestEvents(events: RuntimeAuditEvent[]): Promise<void> {
-    this.requireApiKey();
+    this.requireCredential();
     await this.request('/api/v1/events/ingest', {
       method: 'POST',
       body: JSON.stringify({
@@ -115,7 +117,7 @@ export class AgentGuardCloudClient {
     matches: SelfCheckMatch[],
     options: { elapsedMs?: number; warnings?: string[] } = {}
   ): Promise<void> {
-    this.requireApiKey();
+    this.requireCredential();
     try {
       await this.request('/api/v1/feed/self-check-report', {
         method: 'POST',
@@ -129,6 +131,53 @@ export class AgentGuardCloudClient {
     } catch (err) {
       if (err instanceof CloudRequestError && err.status === 404) {
         return;
+      }
+      throw err;
+    }
+  }
+
+  async registerAgent(options: {
+    email?: string;
+    metadata?: Record<string, unknown>;
+  } = {}): Promise<{ agentId: string; jwt: string; registerUrl: string }> {
+    const body = await this.request<{
+      agentId: string;
+      jwt: string;
+      registerUrl: string;
+    }>('/api/agent/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(options.email ? { email: options.email } : {}),
+        ...(options.metadata ? { metadata: options.metadata } : {}),
+      }),
+    });
+    return body.data;
+  }
+
+  async subscribeFeed(options: {
+    ecosystems?: string[];
+    webhookUrl?: string | null;
+  } = {}): Promise<unknown | null> {
+    this.requireCredential();
+    try {
+      const body = await this.request('/api/v1/feed/subscribe', {
+        method: 'POST',
+        body: JSON.stringify({
+          ecosystems: options.ecosystems ?? [
+            'skill',
+            'plugin',
+            'mcp_server',
+            'supply_chain',
+            'url',
+            'prompt_injection',
+          ],
+          webhookUrl: options.webhookUrl ?? null,
+        }),
+      });
+      return body.data;
+    } catch (err) {
+      if (err instanceof CloudRequestError && err.status === 404) {
+        return null;
       }
       throw err;
     }
@@ -156,7 +205,7 @@ export class AgentGuardCloudClient {
       ...init,
       headers: {
         'content-type': 'application/json',
-        ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
+        ...this.authHeaders(),
         ...(init.headers || {}),
       },
       signal: AbortSignal.timeout(5000),
@@ -168,9 +217,19 @@ export class AgentGuardCloudClient {
     return body;
   }
 
-  private requireApiKey(): void {
-    if (!this.apiKey) {
-      throw new Error('AgentGuard Cloud API key is not configured.');
+  private authHeaders(): Record<string, string> {
+    if (this.agentJwt) {
+      return { Authorization: `Bearer ${this.agentJwt}` };
+    }
+    if (this.apiKey) {
+      return { 'x-api-key': this.apiKey };
+    }
+    return {};
+  }
+
+  private requireCredential(): void {
+    if (!this.agentJwt && !this.apiKey) {
+      throw new Error('AgentGuard Cloud credential is not configured.');
     }
   }
 }

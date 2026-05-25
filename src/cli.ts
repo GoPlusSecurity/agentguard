@@ -8,6 +8,8 @@ import { Command } from 'commander';
 import { AgentGuardCloudClient } from './cloud/client.js';
 import {
   connectCloud,
+  connectAgentJwt,
+  clearAgentJwt,
   disconnectCloud,
   ensureConfig,
   getAgentGuardPaths,
@@ -26,6 +28,8 @@ import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
+import { CloudRequestError } from './cloud/client.js';
+import { notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
 import {
   installThreatFeedCron,
   validateCronExpression,
@@ -115,7 +119,24 @@ async function main() {
     .action(async (options) => {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
       if (!apiKey) {
-        throw new Error('Missing API key. Pass --key, --api-key, or set AGENTGUARD_API_KEY.');
+        const config = ensureConfig();
+        if (!isOpenClawAgentConfigured(config)) {
+          throw new Error('Missing API key. Pass --key, --api-key, set AGENTGUARD_API_KEY, or run `agentguard init --agent openclaw` before using Agent JWT registration.');
+        }
+        const registration = await registerAgentCredential({
+          cloudUrl: options.cloud || options.url,
+          reason: 'connect',
+          notifyOpenClaw: true,
+        });
+        console.log(`Registered local AgentGuard agent (${registration.config.agentId}).`);
+        console.log('Open this link to bind AgentGuard Cloud to your email:');
+        console.log(registration.registerUrl);
+        if (registration.openClawNotification.notified) {
+          console.log('Sent the activation link to the last OpenClaw channel.');
+        } else if (registration.openClawNotification.reason) {
+          console.log(`OpenClaw notification skipped: ${registration.openClawNotification.reason}`);
+        }
+        return;
       }
       const config = connectCloud({ apiKey, cloudUrl: options.cloud || options.url });
       const client = new AgentGuardCloudClient(config);
@@ -136,7 +157,7 @@ async function main() {
     .action(() => {
       const config = disconnectCloud();
       console.log('Disconnected from AgentGuard Cloud.');
-      console.log('Removed local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy.');
+      console.log('Removed local Cloud API key, Agent JWT, connection timestamp, pending event spool, and cached Cloud policy.');
       console.log(`Local protection remains active using the built-in policy. Audit log: ${config.auditPath}`);
     });
 
@@ -150,6 +171,9 @@ async function main() {
       console.log(`Protection level: ${config.level}`);
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
       console.log(`API key: ${maskApiKey(config.apiKey)}`);
+      console.log(`Agent ID: ${config.agentId || 'not configured'}`);
+      console.log(`Agent JWT: ${config.agentJwt ? 'configured' : 'not configured'}`);
+      console.log(`Agent activation URL: ${config.agentRegisterUrl || 'not configured'}`);
       console.log(`Agent host: ${config.agentHost || 'not configured'}`);
       console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
@@ -169,7 +193,7 @@ async function main() {
       const config = ensureConfig();
       const client = new AgentGuardCloudClient(config);
       if (!client.connected) {
-        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first.';
+        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect` first.';
         if (options.json) {
           console.log(JSON.stringify({ success: false, error: message }, null, 2));
         } else {
@@ -322,8 +346,8 @@ async function main() {
     .option('--cron-run', 'Internal: run from the OpenClaw cron prompt without trying to install cron again')
     .option('--cron-notify-run', 'Internal: run from an OpenClaw cron prompt and print only the notification body or NO_REPLY')
     .action(async (options) => {
-      const config = ensureConfig();
-      const client = new AgentGuardCloudClient(config);
+      let config = ensureConfig();
+      let client = new AgentGuardCloudClient(config);
       const state = loadFeedState();
       const since = options.since as string | undefined;
       const quiet = Boolean(options.quiet);
@@ -333,18 +357,125 @@ async function main() {
         ? validateCronExpression(options.cron as string)
         : undefined;
 
+      let registration: AgentCredentialRegistration | null = null;
+      if (!client.connected) {
+        if (!isOpenClawAgentConfigured(config)) {
+          const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first, or run `agentguard init --agent openclaw` to use Agent JWT registration.';
+          if (cronNotifyRun) {
+            console.log('NO_REPLY');
+          } else if (options.json) {
+            console.log(JSON.stringify({ success: false, error: message }, null, 2));
+          } else {
+            console.error(message);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        try {
+          registration = await registerAgentCredential({
+            cloudUrl: config.cloudUrl,
+            reason: 'subscribe',
+            notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+          });
+          config = registration.config;
+          client = registration.client;
+        } catch (err) {
+          if (cronNotifyRun) {
+            console.log('NO_REPLY');
+            process.exitCode = 0;
+            return;
+          }
+          console.error(`! Could not register AgentGuard agent: ${(err as Error).message}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      try {
+        await client.subscribeFeed();
+      } catch (err) {
+        if (err instanceof CloudRequestError && err.status === 401) {
+          if (!isOpenClawAgentConfigured(config)) {
+            console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
+            process.exitCode = 1;
+            return;
+          }
+          try {
+            registration = await registerAgentCredential({
+              cloudUrl: config.cloudUrl,
+              reason: 'subscribe',
+              notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+              resetExistingJwt: true,
+            });
+            config = registration.config;
+            client = registration.client;
+            await client.subscribeFeed();
+          } catch (retryErr) {
+            if (cronNotifyRun) {
+              console.log('NO_REPLY');
+              process.exitCode = 0;
+              return;
+            }
+            printAgentActivationRequired(registration, retryErr);
+            process.exitCode = 1;
+            return;
+          }
+        } else {
+          if (cronNotifyRun) {
+            console.log('NO_REPLY');
+            process.exitCode = 0;
+            return;
+          }
+          console.error(`! Could not subscribe to AgentGuard Cloud feed: ${(err as Error).message}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      if (registration && !cronNotifyRun && !quiet && !options.json) {
+        printAgentRegistrationNotice(registration);
+      }
+
       let advisories: Advisory[] | null;
       try {
         advisories = await client.pullAdvisories(since);
       } catch (err) {
-        if (cronNotifyRun) {
-          console.log('NO_REPLY');
-          process.exitCode = 0;
+        if (err instanceof CloudRequestError && err.status === 401) {
+          if (!isOpenClawAgentConfigured(config)) {
+            console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
+            process.exitCode = 1;
+            return;
+          }
+          try {
+            registration = await registerAgentCredential({
+              cloudUrl: config.cloudUrl,
+              reason: 'subscribe',
+              notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+              resetExistingJwt: true,
+            });
+            config = registration.config;
+            client = registration.client;
+            advisories = await client.pullAdvisories(since);
+          } catch (retryErr) {
+            if (cronNotifyRun) {
+              console.log('NO_REPLY');
+              process.exitCode = 0;
+              return;
+            }
+            printAgentActivationRequired(registration, retryErr);
+            process.exitCode = 1;
+            return;
+          }
+        } else {
+          if (cronNotifyRun) {
+            console.log('NO_REPLY');
+            process.exitCode = 0;
+            return;
+          }
+          console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
+          process.exitCode = 1;
           return;
         }
-        console.error(`! Could not reach AgentGuard Cloud: ${(err as Error).message}`);
-        process.exitCode = 1;
-        return;
       }
       if (advisories === null) {
         // 404 — older Cloud build without the feed endpoint. Not an error.
@@ -535,7 +666,7 @@ async function main() {
 
       const client = new AgentGuardCloudClient(config);
       if (!client.connected) {
-        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first.';
+        const message = 'AgentGuard Cloud is not connected. Run `agentguard connect` first.';
         if (options.json) {
           console.log(JSON.stringify({ success: false, error: message }, null, 2));
         } else {
@@ -952,6 +1083,81 @@ function runCommandText(command: string, args: string[]): Promise<string> {
       resolvePromise('');
     }
   });
+}
+
+interface AgentCredentialRegistration {
+  config: AgentGuardConfig;
+  client: AgentGuardCloudClient;
+  registerUrl: string;
+  openClawNotification: {
+    notified: boolean;
+    reason?: string;
+  };
+}
+
+async function registerAgentCredential(options: {
+  cloudUrl?: string;
+  reason: 'connect' | 'subscribe' | 'reauth';
+  notifyOpenClaw: boolean;
+  resetExistingJwt?: boolean;
+}): Promise<AgentCredentialRegistration> {
+  if (options.resetExistingJwt) {
+    clearAgentJwt();
+  }
+  const baseConfig = ensureConfig();
+  const cloudUrl = normalizeCloudUrl(options.cloudUrl || baseConfig.cloudUrl || 'https://agentguard.gopluslabs.io');
+  const client = new AgentGuardCloudClient({ ...baseConfig, cloudUrl });
+  const registration = await client.registerAgent({
+    metadata: {
+      agentHost: baseConfig.agentHost,
+      agentHosts: baseConfig.agentHosts,
+      agentVersion: packageVersion,
+      platform: process.platform,
+      arch: process.arch,
+      reason: options.reason,
+    },
+  });
+  const config = connectAgentJwt({
+    agentId: registration.agentId,
+    agentJwt: registration.jwt,
+    agentRegisterUrl: registration.registerUrl,
+    cloudUrl,
+  });
+  const nextClient = new AgentGuardCloudClient(config);
+  const openClawNotification = options.notifyOpenClaw
+    ? await notifyOpenClawRegistrationLink(registration.registerUrl)
+    : { notified: false, reason: 'OpenClaw notification was not requested.' };
+  return {
+    config,
+    client: nextClient,
+    registerUrl: registration.registerUrl,
+    openClawNotification,
+  };
+}
+
+function printAgentRegistrationNotice(registration: AgentCredentialRegistration): void {
+  console.log('AgentGuard Cloud activation is ready:');
+  console.log(registration.registerUrl);
+  if (registration.openClawNotification.notified) {
+    console.log('Sent the activation link to the last OpenClaw channel.');
+  }
+}
+
+function printAgentActivationRequired(
+  registration: AgentCredentialRegistration | null,
+  err: unknown
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`! AgentGuard Cloud authorization is not active yet. ${message}`);
+  const registerUrl = registration?.registerUrl || ensureConfig().agentRegisterUrl;
+  if (registerUrl) {
+    console.error('Open this link to bind this agent to your email, then rerun the command:');
+    console.error(registerUrl);
+  }
+}
+
+function isOpenClawAgentConfigured(config: AgentGuardConfig): boolean {
+  return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true;
 }
 
 function calculateCompositeScore(dimensions: HealthCheckupReport['dimensions']): number {

@@ -64,6 +64,8 @@ export {
   loadConfig as loadAgentGuardConfig,
   saveConfig as saveAgentGuardConfig,
   connectCloud,
+  connectAgentJwt,
+  clearAgentJwt,
   disconnectCloud,
   getAgentGuardPaths,
   type AgentGuardConfig,

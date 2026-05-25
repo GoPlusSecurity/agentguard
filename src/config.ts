@@ -11,6 +11,10 @@ export interface AgentGuardConfig {
   agentHosts?: AgentGuardAgentHost[];
   cloudUrl?: string;
   apiKey?: string;
+  agentId?: string;
+  agentJwt?: string;
+  agentRegisterUrl?: string;
+  agentRegisteredAt?: string;
   connectedAt?: string;
   policyCachePath: string;
   auditPath: string;
@@ -110,10 +114,52 @@ export function connectCloud(options: { apiKey: string; cloudUrl?: string }): Ag
   return next;
 }
 
+export function connectAgentJwt(options: {
+  agentId: string;
+  agentJwt: string;
+  agentRegisterUrl?: string;
+  cloudUrl?: string;
+}): AgentGuardConfig {
+  const current = ensureConfig();
+  const agentId = options.agentId.trim();
+  const agentJwt = options.agentJwt.trim();
+  if (!agentId) {
+    throw new Error('Invalid Agent registration response: missing agentId.');
+  }
+  if (!agentJwt) {
+    throw new Error('Invalid Agent registration response: missing jwt.');
+  }
+  const next: AgentGuardConfig = {
+    ...current,
+    cloudUrl: normalizeCloudUrl(options.cloudUrl || current.cloudUrl || DEFAULT_CLOUD_URL),
+    agentId,
+    agentJwt,
+    agentRegisterUrl: options.agentRegisterUrl?.trim() || current.agentRegisterUrl,
+    agentRegisteredAt: new Date().toISOString(),
+    connectedAt: new Date().toISOString(),
+  };
+  saveConfig(next);
+  return next;
+}
+
+export function clearAgentJwt(config: AgentGuardConfig = ensureConfig()): AgentGuardConfig {
+  const next: AgentGuardConfig = { ...config };
+  delete next.agentId;
+  delete next.agentJwt;
+  delete next.agentRegisterUrl;
+  delete next.agentRegisteredAt;
+  saveConfig(next);
+  return next;
+}
+
 export function disconnectCloud(): AgentGuardConfig {
   const current = ensureConfig();
   const next: AgentGuardConfig = { ...current };
   delete next.apiKey;
+  delete next.agentId;
+  delete next.agentJwt;
+  delete next.agentRegisterUrl;
+  delete next.agentRegisteredAt;
   delete next.connectedAt;
   rmSync(current.eventSpoolPath, { force: true });
   rmSync(current.policyCachePath, { force: true });

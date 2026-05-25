@@ -9,7 +9,7 @@ import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { ProtectResult } from '../runtime/protect.js';
-import { connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
+import { connectAgentJwt, connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
@@ -69,6 +69,12 @@ describe('Runtime Cloud bridge', () => {
         apiKey: 'ag_live_test_key_123456',
         cloudUrl: 'https://agentguard.example',
       });
+      connectAgentJwt({
+        agentId: 'agt_disconnect_test',
+        agentJwt: 'agent.jwt.disconnect',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=test',
+        cloudUrl: 'https://agentguard.example',
+      });
       writeFileSync(config.eventSpoolPath, `${JSON.stringify(sampleEvent())}\n`);
       writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
       writeFileSync(config.auditPath, `${JSON.stringify(sampleEvent())}\n`);
@@ -77,9 +83,15 @@ describe('Runtime Cloud bridge', () => {
       const saved = JSON.parse(readFileSync(getAgentGuardPaths().configPath, 'utf8')) as AgentGuardConfig;
 
       assert.equal(disconnected.apiKey, undefined);
+      assert.equal(disconnected.agentId, undefined);
+      assert.equal(disconnected.agentJwt, undefined);
+      assert.equal(disconnected.agentRegisterUrl, undefined);
       assert.equal(disconnected.connectedAt, undefined);
       assert.equal(disconnected.cloudUrl, 'https://agentguard.example');
       assert.equal(saved.apiKey, undefined);
+      assert.equal(saved.agentId, undefined);
+      assert.equal(saved.agentJwt, undefined);
+      assert.equal(saved.agentRegisterUrl, undefined);
       assert.equal(saved.connectedAt, undefined);
       assert.equal(saved.cloudUrl, 'https://agentguard.example');
       assert.equal(existsSync(config.eventSpoolPath), false);
