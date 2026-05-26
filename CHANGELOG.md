@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.16] - 2026-05-25
+## [1.1.17] - 2026-05-26
 
 ### Added
 - Added Agent JWT registration and activation links for OpenClaw-backed Cloud connections.
