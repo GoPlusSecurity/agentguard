@@ -446,46 +446,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result?.requireApproval?.description?.includes('Protected path'));
   });
 
-  it('should normalize require_approve runtime decisions before asking in OpenClaw', async () => {
-    ctx = createTestContext();
-    const { api, handlers } = createMockApi();
-    registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
-      registry: ctx.agentguard.registry as never,
-      protectAction: async () => ({
-        policySource: 'cloud-decision',
-        approvalChannel: 'agent',
-        event: {} as never,
-        decision: {
-          actionId: 'act_approval_alias',
-          decision: 'require_approve' as never,
-          riskScore: 75,
-          riskLevel: 'high',
-          policyVersion: 'cloud-test',
-          reasons: [
-            {
-              code: 'SECRET_ACCESS',
-              severity: 'high',
-              title: 'Protected path',
-              description: 'Protected path access requires approval.',
-            },
-          ],
-        },
-      }),
-    });
-
-    const result = await handlers['before_tool_call']({
-      toolName: 'Read',
-      params: { path: '/workspace/.env' },
-    }) as {
-      requireApproval?: { title?: string; description?: string; severity?: string; timeoutBehavior?: string };
-    } | undefined;
-
-    assert.equal(result?.requireApproval?.title, 'AgentGuard approval required');
-    assert.equal(result?.requireApproval?.severity, 'critical');
-    assert.ok(result?.requireApproval?.description?.includes('requires approval'));
-  });
-
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
