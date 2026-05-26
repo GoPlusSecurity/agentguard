@@ -693,8 +693,11 @@ async function main() {
       }
       if (summary.cron.result) {
         const label = summary.cron.result.backend ?? 'cron';
-        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists`;
+        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists and was left unchanged`;
         console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}, ${summary.cron.result.timezone}).`);
+        if (!summary.cron.result.created) {
+          console.log('Existing cron jobs are not reconfigured unless --force is passed; rerun with --force to apply the requested quiet/manual mode and schedule.');
+        }
         if (summary.cron.result.backend === 'system') {
           console.log(`System cron output: ${join(getAgentGuardPaths().home, 'feed-cron.log')}`);
         } else {
