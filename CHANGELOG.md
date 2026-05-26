@@ -15,7 +15,6 @@
 - `agentguard subscribe --cron --cron-target openclaw` now rejects saved-host mismatches, so an existing non-OpenClaw `agentHost` can no longer install an OpenClaw cron job that would run without any working notification route.
 
 ### Fixed
-- Fixed Cloud runtime decisions that return `require_approve` instead of `require_approval`.
 - Improved disconnected Cloud guidance and Agent JWT reauth handling.
 
 ## [1.1.14] - 2026-05-22

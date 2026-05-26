@@ -36,14 +36,14 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   let decision: RuntimeDecision;
   let policySource: ProtectResult['policySource'];
   if (options.decisionMode === 'cloud' && client.connected) {
-    decision = normalizeRuntimeDecision(await client.evaluateAction(action));
+    decision = await client.evaluateAction(action);
     policySource = 'cloud-decision';
   } else {
     const { policy, source } = await resolveRuntimePolicy({
       cachePath: options.config.policyCachePath,
       fetchPolicy: client.connected ? () => client.fetchEffectivePolicy() : undefined,
     });
-    decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
+    decision = await evaluateLocalAction(policy, action);
     policySource = source;
   }
 
@@ -77,14 +77,6 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
 
   return { decision, event, approvalChannel, policySource };
-}
-
-function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
-  const rawDecision = (decision as unknown as { decision?: string }).decision;
-  if (rawDecision === 'require_approve') {
-    return { ...decision, decision: 'require_approval' };
-  }
-  return decision;
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {
