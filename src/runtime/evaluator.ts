@@ -1,4 +1,5 @@
 import { ActionScanner } from '../action/index.js';
+import { homedir } from 'node:os';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
 import type { ActionData, ActionEvidence, ActionType } from '../types/action.js';
 import type {
@@ -66,6 +67,17 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
           'Custom blocked command',
           'The action matched a command pattern configured in runtime policy.',
           pattern
+        ));
+      }
+    }
+    for (const pathPattern of policy.protectedPaths) {
+      if (matchesPath(input, pathPattern)) {
+        reasons.push(reason(
+          'SECRET_ACCESS',
+          'high',
+          'Protected path access',
+          'The agent attempted to access a path protected by runtime policy.',
+          pathPattern
         ));
       }
     }
@@ -238,7 +250,45 @@ function matchesPattern(input: string, pattern: string): boolean {
 
 function matchesPath(input: string, pattern: string): boolean {
   if (!pattern) return false;
-  const normalizedInput = input.replace(/\\/g, '/');
-  const needle = pattern.replace(/\\/g, '/').replace(/\*\*/g, '').replace(/\*/g, '');
-  return Boolean(needle) && normalizedInput.includes(needle);
+  const normalizedInput = normalizePathLike(input);
+  return expandHomePattern(pattern).map(normalizePathLike).some((candidate) => {
+    if (!candidate) return false;
+    if (!candidate.includes('*')) {
+      return normalizedInput.includes(candidate);
+    }
+    return new RegExp(globToRegexSource(candidate)).test(normalizedInput);
+  });
+}
+
+function normalizePathLike(value: string): string {
+  return value.replace(/\\/g, '/');
+}
+
+function expandHomePattern(pattern: string): string[] {
+  if (!pattern.startsWith('~/')) {
+    return [pattern];
+  }
+  return [pattern, `${homedir().replace(/\\/g, '/')}/${pattern.slice(2)}`];
+}
+
+function globToRegexSource(pattern: string): string {
+  let source = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        source += '.*';
+        index += 1;
+      } else {
+        source += '[^/\\s\'"]*';
+      }
+      continue;
+    }
+    source += escapeRegex(char);
+  }
+  return source;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
 }

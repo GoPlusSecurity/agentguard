@@ -674,27 +674,13 @@ function runtimeResultToBeforeToolCallResult(
     ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
     (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
-  if (decision === 'require_approval' && result.approvalChannel === 'agent') {
-    return {
-      requireApproval: {
-        title: 'AgentGuard approval required',
-        description: reason,
-        severity: openClawApprovalSeverity(result.decision.riskLevel),
-        timeoutMs: 60_000,
-        timeoutBehavior: 'deny',
-      },
-    };
+  if (decision === 'require_approval') {
+    return { block: true, blockReason: reason };
   }
   return {
     block: true,
     blockReason: reason,
   };
-}
-
-function openClawApprovalSeverity(riskLevel: ProtectResult['decision']['riskLevel']): 'info' | 'warning' | 'critical' {
-  if (riskLevel === 'critical' || riskLevel === 'high') return 'critical';
-  if (riskLevel === 'medium') return 'warning';
-  return 'info';
 }
 
 function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {

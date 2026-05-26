@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { createHash, createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,8 @@ import {
 } from '../feed/cron.js';
 
 type RpcCall = { method: string; params: any };
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 async function closeServer(server: http.Server | net.Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -84,6 +86,45 @@ function fakeGateway(jobs: Array<{ id: string; name: string }> = []): {
       return { ok: true };
     },
   };
+}
+
+function base64UrlEncode(value: Buffer): string {
+  return value.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string): Buffer {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, 'base64');
+}
+
+function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
+  const publicKey = createPublicKey(publicKeyPem);
+  const spki = publicKey.export({ type: 'spki', format: 'der' }) as Buffer;
+  const raw = spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+    ? spki.subarray(ED25519_SPKI_PREFIX.length)
+    : spki;
+  return base64UrlEncode(raw);
+}
+
+function writeOpenClawIdentity(stateDir: string): { deviceId: string; publicKeyPem: string; privateKeyPem: string } {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const deviceId = createHash('sha256')
+    .update(base64UrlDecode(publicKeyRawBase64UrlFromPem(publicKeyPem)))
+    .digest('hex');
+  const identityDir = join(stateDir, 'identity');
+  mkdirSync(identityDir, { recursive: true });
+  writeFileSync(join(identityDir, 'device.json'), JSON.stringify({
+    version: 1,
+    deviceId,
+    publicKeyPem,
+    privateKeyPem,
+    createdAtMs: Date.now(),
+  }));
+  return { deviceId, publicKeyPem, privateKeyPem };
 }
 
 describe('feed/cron', () => {
@@ -546,6 +587,34 @@ describe('feed/cron', () => {
     );
   });
 
+  it('prefers the OpenClaw CLI Gateway call for default local OpenClaw requests', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = await openClawGatewayRequest('sessions.list', { limit: 1 }, {
+      timeoutMs: 1234,
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        return {
+          stdout: JSON.stringify({ sessions: [{ key: 'session-1' }] }),
+          stderr: '',
+        };
+      },
+    });
+
+    assert.deepEqual(result, { sessions: [{ key: 'session-1' }] });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.command, 'openclaw');
+    assert.deepEqual(calls[0]!.args, [
+      'gateway',
+      'call',
+      'sessions.list',
+      '--params',
+      '{"limit":1}',
+      '--timeout',
+      '1234',
+      '--json',
+    ]);
+  });
+
   it('keeps the default HTTP JSON-RPC Gateway path and legacy cron.add params', async () => {
     let requestBody: any;
     const server = http.createServer((req, res) => {
@@ -568,6 +637,9 @@ describe('feed/cron', () => {
         host: '127.0.0.1',
         port: serverPort(server),
         timeoutMs: 100,
+        runCommand: async () => {
+          throw new Error('explicit host/port should skip OpenClaw CLI');
+        },
       });
 
       assert.deepEqual(result, { ok: true });
@@ -639,6 +711,194 @@ describe('feed/cron', () => {
 
       assert.deepEqual(result, { jobs: [{ id: 'job-1', name: 'agentguard-threat-feed' }] });
     } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('sends signed device identity during the WebSocket connect handshake when OpenClaw identity exists', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-state-'));
+    const identity = writeOpenClawIdentity(stateDir);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    let connectParams: any;
+
+    const server = net.createServer((socket) => {
+      let handshakeComplete = false;
+      let buffer = Buffer.alloc(0);
+      let clientRequests = 0;
+
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        if (!handshakeComplete) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;
+          const header = buffer.subarray(0, headerEnd + 4).toString('utf8');
+          const key = /^Sec-WebSocket-Key:\s*(.+)$/im.exec(header)?.[1]?.trim();
+          assert.ok(key);
+          const accept = createHash('sha1')
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+          socket.write([
+            'HTTP/1.1 101 Switching Protocols',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Accept: ${accept}`,
+            '',
+            '',
+          ].join('\r\n'));
+          handshakeComplete = true;
+          buffer = buffer.subarray(headerEnd + 4);
+          socket.write(encodeServerWebSocketFrame(JSON.stringify({
+            type: 'event',
+            event: 'connect.challenge',
+            payload: { nonce: 'nonce-1' },
+          })));
+        }
+
+        while (true) {
+          const parsed = readClientWebSocketFrame(buffer);
+          if (!parsed) break;
+          buffer = parsed.rest;
+          clientRequests += 1;
+          const frame = JSON.parse(parsed.payload);
+          if (clientRequests === 1) {
+            connectParams = frame.params;
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: {} })));
+          } else {
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: { jobs: [] },
+            })));
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await openClawGatewayRequest('cron.list', {}, {
+        url: `ws://127.0.0.1:${serverPort(server)}`,
+        timeoutMs: 500,
+      });
+
+      assert.deepEqual(result, { jobs: [] });
+      assert.equal(connectParams.minProtocol, 3);
+      assert.equal(connectParams.maxProtocol, 4);
+      assert.equal(connectParams.client.id, 'cli');
+      assert.equal(connectParams.device.id, identity.deviceId);
+      assert.equal(connectParams.device.publicKey, publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+      assert.equal(connectParams.device.nonce, 'nonce-1');
+      assert.equal(typeof connectParams.device.signedAt, 'number');
+      const signedPayload = [
+        'v3',
+        identity.deviceId,
+        'cli',
+        'cli',
+        'operator',
+        'operator.admin,operator.read,operator.write,operator.approvals,operator.pairing,operator.talk.secrets',
+        String(connectParams.device.signedAt),
+        '',
+        'nonce-1',
+        process.platform,
+        '',
+      ].join('|');
+      assert.equal(
+        verify(
+          null,
+          Buffer.from(signedPayload, 'utf8'),
+          createPublicKey(identity.publicKeyPem),
+          base64UrlDecode(connectParams.device.signature),
+        ),
+        true,
+      );
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      await closeServer(server);
+    }
+  });
+
+  it('omits device auth instead of failing when OpenClaw identity keys are invalid', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-bad-state-'));
+    const identityDir = join(stateDir, 'identity');
+    mkdirSync(identityDir, { recursive: true });
+    writeFileSync(join(identityDir, 'device.json'), JSON.stringify({
+      version: 1,
+      deviceId: 'bad-device',
+      publicKeyPem: 'not a public key',
+      privateKeyPem: 'not a private key',
+    }));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    let connectParams: any;
+
+    const server = net.createServer((socket) => {
+      let handshakeComplete = false;
+      let buffer = Buffer.alloc(0);
+      let clientRequests = 0;
+
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        if (!handshakeComplete) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;
+          const header = buffer.subarray(0, headerEnd + 4).toString('utf8');
+          const key = /^Sec-WebSocket-Key:\s*(.+)$/im.exec(header)?.[1]?.trim();
+          assert.ok(key);
+          const accept = createHash('sha1')
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+          socket.write([
+            'HTTP/1.1 101 Switching Protocols',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Accept: ${accept}`,
+            '',
+            '',
+          ].join('\r\n'));
+          handshakeComplete = true;
+          buffer = buffer.subarray(headerEnd + 4);
+          socket.write(encodeServerWebSocketFrame(JSON.stringify({
+            type: 'event',
+            event: 'connect.challenge',
+            payload: { nonce: 'nonce-bad-identity' },
+          })));
+        }
+
+        while (true) {
+          const parsed = readClientWebSocketFrame(buffer);
+          if (!parsed) break;
+          buffer = parsed.rest;
+          clientRequests += 1;
+          const frame = JSON.parse(parsed.payload);
+          if (clientRequests === 1) {
+            connectParams = frame.params;
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: {} })));
+          } else {
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: { jobs: [] },
+            })));
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await openClawGatewayRequest('cron.list', {}, {
+        url: `ws://127.0.0.1:${serverPort(server)}`,
+        timeoutMs: 500,
+      });
+
+      assert.deepEqual(result, { jobs: [] });
+      assert.equal(connectParams.client.id, 'cli');
+      assert.equal(connectParams.device, undefined);
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
       await closeServer(server);
     }
   });

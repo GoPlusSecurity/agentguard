@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign as signPayload } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
@@ -26,6 +27,7 @@ export interface OpenClawGatewayOptions {
   url?: string;
   label?: string;
   timeoutMs?: number;
+  runCommand?: CommandRunner;
   request?: (method: string, params: unknown) => Promise<unknown>;
 }
 
@@ -41,7 +43,21 @@ interface OpenClawCronJob {
   name?: string;
 }
 
+interface OpenClawDeviceIdentity {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+}
+
 class GatewayHttpFallbackError extends Error {}
+
+const OPENCLAW_STATE_DIRNAME = '.openclaw';
+const OPENCLAW_LEGACY_STATE_DIRNAME = '.clawdbot';
+const OPENCLAW_IDENTITY_PATH = ['identity', 'device.json'] as const;
+const OPENCLAW_GATEWAY_MIN_PROTOCOL = 3;
+const OPENCLAW_GATEWAY_MAX_PROTOCOL = 4;
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 export function validateCronExpression(value: string): string {
   const expr = value.trim();
@@ -718,16 +734,90 @@ export function openClawGatewayRequest(
   const port = options.port ?? 18789;
   const label = options.label ?? 'OpenClaw Gateway';
   const timeoutMs = options.timeoutMs ?? 5000;
-  if (options.url) {
-    return openClawGatewayWebSocketRequest({ url: options.url, method, params, label, timeoutMs });
+  if (shouldUseOpenClawGatewayCli(options)) {
+    return openClawGatewayCliRequest({
+      method,
+      params,
+      label,
+      timeoutMs,
+      runCommand: options.runCommand ?? execCommand,
+    }).catch(() => openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url }));
   }
 
-  return openClawGatewayHttpRequest({ host, port, method, params, label, timeoutMs }).catch((err) => {
+  return openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url });
+}
+
+function openClawGatewayNetworkRequest(options: {
+  host: string;
+  port: number;
+  method: string;
+  params: unknown;
+  label: string;
+  timeoutMs: number;
+  url?: string;
+}): Promise<unknown> {
+  if (options.url) {
+    return openClawGatewayWebSocketRequest({
+      url: options.url,
+      method: options.method,
+      params: options.params,
+      label: options.label,
+      timeoutMs: options.timeoutMs,
+    });
+  }
+
+  return openClawGatewayHttpRequest({
+    host: options.host,
+    port: options.port,
+    method: options.method,
+    params: options.params,
+    label: options.label,
+    timeoutMs: options.timeoutMs,
+  }).catch((err) => {
     if (err instanceof GatewayHttpFallbackError) {
-      return openClawGatewayWebSocketRequest({ url: `ws://${host}:${port}`, method, params, label, timeoutMs });
+      return openClawGatewayWebSocketRequest({
+        url: `ws://${options.host}:${options.port}`,
+        method: options.method,
+        params: options.params,
+        label: options.label,
+        timeoutMs: options.timeoutMs,
+      });
     }
     throw err;
   });
+}
+
+function shouldUseOpenClawGatewayCli(options: OpenClawGatewayOptions): boolean {
+  if (options.url || options.host || options.port) return false;
+  return !options.label || options.label === 'OpenClaw Gateway';
+}
+
+async function openClawGatewayCliRequest(options: {
+  method: string;
+  params: unknown;
+  label: string;
+  timeoutMs: number;
+  runCommand: CommandRunner;
+}): Promise<unknown> {
+  const result = await options.runCommand('openclaw', [
+    'gateway',
+    'call',
+    options.method,
+    '--params',
+    JSON.stringify(options.params ?? {}),
+    '--timeout',
+    String(options.timeoutMs),
+    '--json',
+  ]);
+  const trimmed = result.stdout.trim();
+  if (!trimmed) {
+    throw new Error(`${options.label} ${options.method} command returned no JSON output.`);
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw new Error(`${options.label} ${options.method} command returned non-JSON output: ${trimmed}`);
+  }
 }
 
 function openClawGatewayHttpRequest(options: {
@@ -931,11 +1021,12 @@ function openClawGatewayWebSocketRequest(options: {
         return;
       }
       if (frame?.type === 'event' && frame.event === 'connect.challenge') {
+        const nonce = extractOpenClawConnectNonce(frame);
         socket.write(encodeWebSocketFrame(JSON.stringify({
           type: 'req',
           id: connectRequestId,
           method: 'connect',
-          params: openClawConnectParams(),
+          params: openClawConnectParams(nonce),
         })));
         return;
       }
@@ -1082,10 +1173,10 @@ function encodeWebSocketFrame(text: string, opcode = 0x1): Buffer {
   return Buffer.concat([header, mask, masked]);
 }
 
-function openClawConnectParams(): unknown {
+function openClawConnectParams(connectNonce?: string): unknown {
   return {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: OPENCLAW_GATEWAY_MIN_PROTOCOL,
+    maxProtocol: OPENCLAW_GATEWAY_MAX_PROTOCOL,
     client: {
       id: 'cli',
       version: 'agentguard',
@@ -1102,9 +1193,170 @@ function openClawConnectParams(): unknown {
       'operator.pairing',
       'operator.talk.secrets',
     ],
+    ...(buildOpenClawGatewayDeviceAuth(connectNonce) ?? {}),
   };
 }
 
 function gatewayFrameErrorMessage(frame: any): string {
   return frame?.error?.message ?? JSON.stringify(frame?.error ?? frame);
+}
+
+function extractOpenClawConnectNonce(frame: unknown): string | undefined {
+  if (!frame || typeof frame !== 'object') return undefined;
+  const payload = (frame as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== 'object') return undefined;
+  const nonce = (payload as { nonce?: unknown }).nonce;
+  return typeof nonce === 'string' && nonce.trim() ? nonce : undefined;
+}
+
+function buildOpenClawGatewayDeviceAuth(connectNonce?: string): { device: Record<string, unknown> } | undefined {
+  if (!connectNonce?.trim()) return undefined;
+  const identity = loadOpenClawDeviceIdentity();
+  if (!identity) return undefined;
+  try {
+    const signedAtMs = Date.now();
+    const payload = buildOpenClawDeviceAuthPayload({
+      deviceId: identity.deviceId,
+      clientId: 'cli',
+      clientMode: 'cli',
+      role: 'operator',
+      scopes: [
+        'operator.admin',
+        'operator.read',
+        'operator.write',
+        'operator.approvals',
+        'operator.pairing',
+        'operator.talk.secrets',
+      ],
+      signedAtMs,
+      nonce: connectNonce,
+      platform: process.platform,
+    });
+    return {
+      device: {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signOpenClawDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce: connectNonce,
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildOpenClawDeviceAuthPayload(params: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  nonce: string;
+  platform?: string;
+  deviceFamily?: string;
+  token?: string | null;
+}): string {
+  return [
+    'v3',
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    params.scopes.join(','),
+    String(params.signedAtMs),
+    params.token ?? '',
+    params.nonce,
+    normalizeDeviceMetadataForAuth(params.platform),
+    normalizeDeviceMetadataForAuth(params.deviceFamily),
+  ].join('|');
+}
+
+function normalizeDeviceMetadataForAuth(value: string | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function loadOpenClawDeviceIdentity(): OpenClawDeviceIdentity | null {
+  try {
+    const raw = readFileSync(resolveOpenClawDeviceIdentityPath(), 'utf8');
+    return normalizeOpenClawDeviceIdentity(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function resolveOpenClawDeviceIdentityPath(): string {
+  return join(resolveOpenClawStateDir(), ...OPENCLAW_IDENTITY_PATH);
+}
+
+function resolveOpenClawStateDir(): string {
+  const override = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (override) return override;
+  const current = join(homedir(), OPENCLAW_STATE_DIRNAME);
+  if (existsSync(current)) return current;
+  const legacy = join(homedir(), OPENCLAW_LEGACY_STATE_DIRNAME);
+  if (existsSync(legacy)) return legacy;
+  return current;
+}
+
+function normalizeOpenClawDeviceIdentity(value: unknown): OpenClawDeviceIdentity | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (
+    record.version === 1 &&
+    typeof record.deviceId === 'string' &&
+    typeof record.publicKeyPem === 'string' &&
+    typeof record.privateKeyPem === 'string'
+  ) {
+    return {
+      deviceId: record.deviceId,
+      publicKeyPem: record.publicKeyPem,
+      privateKeyPem: record.privateKeyPem,
+    };
+  }
+  if (
+    typeof record.deviceId === 'string' &&
+    typeof record.publicKey === 'string' &&
+    typeof record.privateKey === 'string'
+  ) {
+    const publicKeyRaw = base64UrlDecode(record.publicKey);
+    const privateKeyRaw = base64UrlDecode(record.privateKey);
+    if (publicKeyRaw.length !== 32 || privateKeyRaw.length !== 32) return null;
+    return {
+      deviceId: record.deviceId,
+      publicKeyPem: pemEncode('PUBLIC KEY', Buffer.concat([ED25519_SPKI_PREFIX, publicKeyRaw])),
+      privateKeyPem: pemEncode('PRIVATE KEY', Buffer.concat([ED25519_PKCS8_PRIVATE_PREFIX, privateKeyRaw])),
+    };
+  }
+  return null;
+}
+
+function signOpenClawDevicePayload(privateKeyPem: string, payload: string): string {
+  return base64UrlEncode(signPayload(null, Buffer.from(payload, 'utf8'), createPrivateKey(privateKeyPem)));
+}
+
+function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
+  const publicKey = createPublicKey(publicKeyPem);
+  const spki = publicKey.export({ type: 'spki', format: 'der' }) as Buffer;
+  const raw = spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+    ? spki.subarray(ED25519_SPKI_PREFIX.length)
+    : spki;
+  return base64UrlEncode(raw);
+}
+
+function base64UrlEncode(value: Buffer): string {
+  return value.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string): Buffer {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, 'base64');
+}
+
+function pemEncode(label: 'PUBLIC KEY' | 'PRIVATE KEY', der: Buffer): string {
+  const body = der.toString('base64').match(/.{1,64}/g)?.join('\n') ?? '';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
 }

@@ -63,7 +63,9 @@ async function main() {
     .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--force', 'Overwrite existing hook/template files')
+    .option('--no-force', 'Do not overwrite existing hook/template files')
     .action((options) => {
+      const forceTemplates = options.force !== false;
       let config = ensureConfig();
       if (options.level) {
         if (!['strict', 'balanced', 'permissive'].includes(options.level)) {
@@ -82,7 +84,7 @@ async function main() {
       if (options.agent) {
         const normalizedAgent = String(options.agent).trim().toLowerCase();
         if (normalizedAgent === 'auto') {
-          const results = initAutoAgents(config, Boolean(options.force));
+          const results = initAutoAgents(config, forceTemplates);
           if (results.detected.length === 0) {
             console.log('No supported agent directories found. Looked for .claude, .openclaw, .hermes, .qclaw, and .codex.');
           } else if (results.installed.length === 0) {
@@ -104,7 +106,7 @@ async function main() {
         config.agentHost = agent;
         config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
-        const result = installAgentTemplates(agent, { force: options.force });
+        const result = installAgentTemplates(agent, { force: forceTemplates });
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
       }
@@ -693,8 +695,11 @@ async function main() {
       }
       if (summary.cron.result) {
         const label = summary.cron.result.backend ?? 'cron';
-        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists`;
+        const action = summary.cron.result.created ? `Installed ${label} cron job` : `${label} cron job already exists and was left unchanged`;
         console.log(`${action} "${summary.cron.result.name}" (${summary.cron.result.schedule}, ${summary.cron.result.timezone}).`);
+        if (!summary.cron.result.created) {
+          console.log('Existing cron jobs are not reconfigured unless --force is passed; rerun with --force to apply the requested quiet/manual mode and schedule.');
+        }
         if (summary.cron.result.backend === 'system') {
           console.log(`System cron output: ${join(getAgentGuardPaths().home, 'feed-cron.log')}`);
         } else {
