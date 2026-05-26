@@ -655,7 +655,7 @@ function runtimeResultToBeforeToolCallResult(
 ): OpenClawBeforeToolCallResult | undefined {
   if (!result) return undefined;
 
-  const decision = result.decision.decision;
+  const decision = normalizeRuntimePolicyDecision(result.decision.decision);
   if (decision !== 'block' && decision !== 'require_approval') {
     return undefined;
   }
@@ -674,27 +674,13 @@ function runtimeResultToBeforeToolCallResult(
     ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
     (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
-  if (decision === 'require_approval' && result.approvalChannel === 'agent') {
-    return {
-      requireApproval: {
-        title: 'AgentGuard approval required',
-        description: reason,
-        severity: openClawApprovalSeverity(result.decision.riskLevel),
-        timeoutMs: 60_000,
-        timeoutBehavior: 'deny',
-      },
-    };
+  if (decision === 'require_approval') {
+    return { block: true, blockReason: reason };
   }
   return {
     block: true,
     blockReason: reason,
   };
-}
-
-function openClawApprovalSeverity(riskLevel: ProtectResult['decision']['riskLevel']): 'info' | 'warning' | 'critical' {
-  if (riskLevel === 'critical' || riskLevel === 'high') return 'critical';
-  if (riskLevel === 'medium') return 'warning';
-  return 'info';
 }
 
 function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
@@ -703,6 +689,10 @@ function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
     result.decision.riskScore > 0 ||
     result.decision.reasons.length > 0
   );
+}
+
+function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
+  return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
@@ -25,6 +25,36 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!redacted.includes('sk-test-secret-value'));
     assert.ok(!redacted.includes('secret-value'));
     assert.ok(!redacted.includes('abc123'));
+  });
+
+  it('requires approval for shell commands reading SSH keys by absolute home path', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const sshPublicKeyPath = `${homedir()}/.ssh/id_ed25519.pub`;
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: `cat ${sshPublicKeyPath}`,
+    });
+
+    assert.equal(decision.decision, 'require_approval');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
+  });
+
+  it('matches protected paths against absolute home paths for file reads', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const sshPublicKeyPath = `${homedir()}/.ssh/id_ed25519.pub`;
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'file_read',
+      toolName: 'read',
+      input: sshPublicKeyPath,
+    });
+
+    assert.equal(decision.decision, 'require_approval');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
   });
 
   it('rejects malformed keys and non-HTTPS Cloud URLs', () => {

@@ -27,6 +27,7 @@ export interface OpenClawGatewayOptions {
   url?: string;
   label?: string;
   timeoutMs?: number;
+  runCommand?: CommandRunner;
   request?: (method: string, params: unknown) => Promise<unknown>;
 }
 
@@ -53,6 +54,8 @@ class GatewayHttpFallbackError extends Error {}
 const OPENCLAW_STATE_DIRNAME = '.openclaw';
 const OPENCLAW_LEGACY_STATE_DIRNAME = '.clawdbot';
 const OPENCLAW_IDENTITY_PATH = ['identity', 'device.json'] as const;
+const OPENCLAW_GATEWAY_MIN_PROTOCOL = 3;
+const OPENCLAW_GATEWAY_MAX_PROTOCOL = 4;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
@@ -731,16 +734,90 @@ export function openClawGatewayRequest(
   const port = options.port ?? 18789;
   const label = options.label ?? 'OpenClaw Gateway';
   const timeoutMs = options.timeoutMs ?? 5000;
-  if (options.url) {
-    return openClawGatewayWebSocketRequest({ url: options.url, method, params, label, timeoutMs });
+  if (shouldUseOpenClawGatewayCli(options)) {
+    return openClawGatewayCliRequest({
+      method,
+      params,
+      label,
+      timeoutMs,
+      runCommand: options.runCommand ?? execCommand,
+    }).catch(() => openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url }));
   }
 
-  return openClawGatewayHttpRequest({ host, port, method, params, label, timeoutMs }).catch((err) => {
+  return openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url });
+}
+
+function openClawGatewayNetworkRequest(options: {
+  host: string;
+  port: number;
+  method: string;
+  params: unknown;
+  label: string;
+  timeoutMs: number;
+  url?: string;
+}): Promise<unknown> {
+  if (options.url) {
+    return openClawGatewayWebSocketRequest({
+      url: options.url,
+      method: options.method,
+      params: options.params,
+      label: options.label,
+      timeoutMs: options.timeoutMs,
+    });
+  }
+
+  return openClawGatewayHttpRequest({
+    host: options.host,
+    port: options.port,
+    method: options.method,
+    params: options.params,
+    label: options.label,
+    timeoutMs: options.timeoutMs,
+  }).catch((err) => {
     if (err instanceof GatewayHttpFallbackError) {
-      return openClawGatewayWebSocketRequest({ url: `ws://${host}:${port}`, method, params, label, timeoutMs });
+      return openClawGatewayWebSocketRequest({
+        url: `ws://${options.host}:${options.port}`,
+        method: options.method,
+        params: options.params,
+        label: options.label,
+        timeoutMs: options.timeoutMs,
+      });
     }
     throw err;
   });
+}
+
+function shouldUseOpenClawGatewayCli(options: OpenClawGatewayOptions): boolean {
+  if (options.url || options.host || options.port) return false;
+  return !options.label || options.label === 'OpenClaw Gateway';
+}
+
+async function openClawGatewayCliRequest(options: {
+  method: string;
+  params: unknown;
+  label: string;
+  timeoutMs: number;
+  runCommand: CommandRunner;
+}): Promise<unknown> {
+  const result = await options.runCommand('openclaw', [
+    'gateway',
+    'call',
+    options.method,
+    '--params',
+    JSON.stringify(options.params ?? {}),
+    '--timeout',
+    String(options.timeoutMs),
+    '--json',
+  ]);
+  const trimmed = result.stdout.trim();
+  if (!trimmed) {
+    throw new Error(`${options.label} ${options.method} command returned no JSON output.`);
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw new Error(`${options.label} ${options.method} command returned non-JSON output: ${trimmed}`);
+  }
 }
 
 function openClawGatewayHttpRequest(options: {
@@ -1098,8 +1175,8 @@ function encodeWebSocketFrame(text: string, opcode = 0x1): Buffer {
 
 function openClawConnectParams(connectNonce?: string): unknown {
   return {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: OPENCLAW_GATEWAY_MIN_PROTOCOL,
+    maxProtocol: OPENCLAW_GATEWAY_MAX_PROTOCOL,
     client: {
       id: 'cli',
       version: 'agentguard',
@@ -1136,33 +1213,37 @@ function buildOpenClawGatewayDeviceAuth(connectNonce?: string): { device: Record
   if (!connectNonce?.trim()) return undefined;
   const identity = loadOpenClawDeviceIdentity();
   if (!identity) return undefined;
-  const signedAtMs = Date.now();
-  const payload = buildOpenClawDeviceAuthPayload({
-    deviceId: identity.deviceId,
-    clientId: 'cli',
-    clientMode: 'cli',
-    role: 'operator',
-    scopes: [
-      'operator.admin',
-      'operator.read',
-      'operator.write',
-      'operator.approvals',
-      'operator.pairing',
-      'operator.talk.secrets',
-    ],
-    signedAtMs,
-    nonce: connectNonce,
-    platform: process.platform,
-  });
-  return {
-    device: {
-      id: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      signature: signOpenClawDevicePayload(identity.privateKeyPem, payload),
-      signedAt: signedAtMs,
+  try {
+    const signedAtMs = Date.now();
+    const payload = buildOpenClawDeviceAuthPayload({
+      deviceId: identity.deviceId,
+      clientId: 'cli',
+      clientMode: 'cli',
+      role: 'operator',
+      scopes: [
+        'operator.admin',
+        'operator.read',
+        'operator.write',
+        'operator.approvals',
+        'operator.pairing',
+        'operator.talk.secrets',
+      ],
+      signedAtMs,
       nonce: connectNonce,
-    },
-  };
+      platform: process.platform,
+    });
+    return {
+      device: {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signOpenClawDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce: connectNonce,
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function buildOpenClawDeviceAuthPayload(params: {

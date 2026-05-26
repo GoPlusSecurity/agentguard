@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.17] - 2026-05-26
+## [1.1.18] - 2026-05-26
 
 ### Added
 - Added Agent JWT registration and activation links for OpenClaw-backed Cloud connections.
@@ -13,9 +13,18 @@
 - Connect and disconnect flows now keep API key and Agent JWT credentials mutually clean.
 - `agentguard subscribe --cron` now installs OpenClaw jobs with `delivery.mode = none` / `--no-deliver`, then lets the normal internal `--cron-run` path auto-detect the saved OpenClaw host and send notifications directly to the latest deliverable session route instead of relying on `channel:last` announce fallback.
 - `agentguard subscribe --cron --cron-target openclaw` now rejects saved-host mismatches, so an existing non-OpenClaw `agentHost` can no longer install an OpenClaw cron job that would run without any working notification route.
+- `agentguard init --agent <agent>` now overwrites managed hook/template files by default so upgraded OpenClaw plugin templates are refreshed without requiring `--force`; use `--no-force` to preserve existing files.
+- OpenClaw runtime approval-required decisions now hard-block tool calls instead of routing through the OpenClaw plugin approval channel, avoiding accidental auto-allow for sensitive local file access.
+- OpenClaw Gateway WebSocket fallback now signs the connect handshake with the saved local device identity when available.
 
 ### Fixed
+- Fixed Cloud runtime decisions that return `require_approve` instead of `require_approval`.
 - Improved disconnected Cloud guidance and Agent JWT reauth handling.
+- Fixed OpenClaw plugin registration after global npm installs by generating a package-root fallback loader in the local OpenClaw plugin template.
+- Added OpenClaw plugin startup/hook activation metadata so AgentGuard loads as a runtime hook plugin during gateway startup.
+- Fixed runtime protected-path matching so shell commands and file reads against `~/.ssh/**` also match absolute home paths such as `/Users/.../.ssh/id_ed25519.pub`.
+- Fixed OpenClaw Gateway cron setup to fall back from CLI invocation to direct Gateway RPC when plugin protocol compatibility prevents CLI Gateway access.
+- Fixed OpenClaw Gateway WebSocket fallback protocol negotiation for current v4 gateways and made invalid local device identity keys degrade to unsigned connect params instead of failing the fallback.
 
 ## [1.1.14] - 2026-05-22
 

@@ -55,6 +55,40 @@ describe('init CLI', () => {
     assert.equal(config.agentHost, 'codex');
   });
 
+  it('overwrites existing agent templates by default', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-force-default-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-force-default-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+    const pluginDir = join(cwd, '.openclaw', 'plugins', 'agentguard');
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, 'index.js'), 'old plugin template');
+
+    await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'openclaw'], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home, OPENCLAW_STATE_DIR: join(cwd, '.openclaw') },
+    });
+
+    const template = readFileSync(join(pluginDir, 'index.js'), 'utf8');
+    assert.notEqual(template, 'old plugin template');
+    assert.match(template, /loadAgentGuard/);
+  });
+
+  it('preserves existing agent templates with --no-force', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-no-force-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-no-force-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+    const pluginDir = join(cwd, '.openclaw', 'plugins', 'agentguard');
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, 'index.js'), 'old plugin template');
+
+    await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'openclaw', '--no-force'], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home, OPENCLAW_STATE_DIR: join(cwd, '.openclaw') },
+    });
+
+    assert.equal(readFileSync(join(pluginDir, 'index.js'), 'utf8'), 'old plugin template');
+  });
+
   it('accepts Hermes and QClaw agent installers', async () => {
     for (const agent of ['hermes', 'qclaw']) {
       const home = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-home-`));

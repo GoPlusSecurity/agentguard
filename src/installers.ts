@@ -224,7 +224,27 @@ function installClawPlugin(agent: 'openclaw' | 'qclaw', root: string, configPath
 }
 
 function openClawPluginTemplate(): string {
-  return `const { registerOpenClawPlugin } = require('@goplus/agentguard');
+  const packageRoot = resolve(__dirname, '..');
+  return `const agentGuardPackageRoot = ${JSON.stringify(packageRoot)};
+
+function loadAgentGuard() {
+  try {
+    return require('@goplus/agentguard');
+  } catch (firstError) {
+    try {
+      return require(agentGuardPackageRoot);
+    } catch (fallbackError) {
+      const error = new Error(
+        'Unable to load @goplus/agentguard from OpenClaw plugin. ' +
+        'Tried package resolution and fallback path: ' + agentGuardPackageRoot
+      );
+      error.cause = fallbackError;
+      throw error;
+    }
+  }
+}
+
+const { registerOpenClawPlugin } = loadAgentGuard();
 
 function register(api) {
   registerOpenClawPlugin(api, {
@@ -269,6 +289,10 @@ function openClawPluginManifest(): unknown {
     id: 'agentguard',
     name: 'GoPlus AgentGuard',
     description: 'AI agent security framework - blocks dangerous commands, prevents data leaks, and protects secrets',
+    activation: {
+      onStartup: true,
+      onCapabilities: ['hook'],
+    },
     configSchema: {
       type: 'object',
       properties: {
