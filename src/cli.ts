@@ -1376,6 +1376,7 @@ function detectOpenClawRuntime(): boolean {
 function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
   const url = process.env.AGENTGUARD_OPENCLAW_GATEWAY_URL?.trim();
   const host = process.env.AGENTGUARD_OPENCLAW_GATEWAY_HOST?.trim();
+  const token = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN?.trim();
   const portRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_PORT?.trim();
   const timeoutRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS?.trim();
   const port = portRaw ? Number(portRaw) : undefined;
@@ -1383,6 +1384,7 @@ function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
   return {
     ...(url ? { url } : {}),
     ...(host ? { host } : {}),
+    ...(token ? { token } : {}),
     ...(Number.isFinite(port) ? { port } : {}),
     ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
   };

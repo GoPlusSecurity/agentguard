@@ -32,6 +32,7 @@ export interface OpenClawGatewayOptions {
   host?: string;
   port?: number;
   url?: string;
+  token?: string;
   label?: string;
   timeoutMs?: number;
   runCommand?: CommandRunner;
@@ -888,6 +889,7 @@ export function openClawGatewayRequest(
   const port = options.port ?? 18789;
   const label = options.label ?? 'OpenClaw Gateway';
   const timeoutMs = options.timeoutMs ?? 5000;
+  const token = options.token ?? resolveOpenClawGatewayToken();
   if (shouldUseOpenClawGatewayCli(options)) {
     return openClawGatewayCliRequest({
       method,
@@ -895,10 +897,10 @@ export function openClawGatewayRequest(
       label,
       timeoutMs,
       runCommand: options.runCommand ?? execCommand,
-    }).catch(() => openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url }));
+    }).catch(() => openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url, token }));
   }
 
-  return openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url });
+  return openClawGatewayNetworkRequest({ host, port, method, params, label, timeoutMs, url: options.url, token });
 }
 
 function openClawGatewayNetworkRequest(options: {
@@ -909,6 +911,7 @@ function openClawGatewayNetworkRequest(options: {
   label: string;
   timeoutMs: number;
   url?: string;
+  token?: string;
 }): Promise<unknown> {
   if (options.url) {
     return openClawGatewayWebSocketRequest({
@@ -917,6 +920,7 @@ function openClawGatewayNetworkRequest(options: {
       params: options.params,
       label: options.label,
       timeoutMs: options.timeoutMs,
+      token: options.token,
     });
   }
 
@@ -927,6 +931,7 @@ function openClawGatewayNetworkRequest(options: {
     params: options.params,
     label: options.label,
     timeoutMs: options.timeoutMs,
+    token: options.token,
   }).catch((err) => {
     if (err instanceof GatewayHttpFallbackError) {
       return openClawGatewayWebSocketRequest({
@@ -935,6 +940,7 @@ function openClawGatewayNetworkRequest(options: {
         params: options.params,
         label: options.label,
         timeoutMs: options.timeoutMs,
+        token: options.token,
       });
     }
     throw err;
@@ -981,6 +987,7 @@ function openClawGatewayHttpRequest(options: {
   params: unknown;
   label: string;
   timeoutMs: number;
+  token?: string;
 }): Promise<unknown> {
   const payload = JSON.stringify({
     jsonrpc: '2.0',
@@ -988,6 +995,13 @@ function openClawGatewayHttpRequest(options: {
     params: legacyGatewayParams(options.method, options.params),
     id: 1,
   });
+  const headers: Record<string, string | number> = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(payload),
+  };
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -1007,10 +1021,7 @@ function openClawGatewayHttpRequest(options: {
         port: options.port,
         path: '/',
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
+        headers,
       },
       (res) => {
         let data = '';
@@ -1059,12 +1070,44 @@ function legacyGatewayParams(method: string, params: unknown): unknown {
   return params;
 }
 
+function resolveOpenClawGatewayToken(): string | undefined {
+  const agentGuardOverride = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (agentGuardOverride) return agentGuardOverride;
+  const openClawOverride = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (openClawOverride) return openClawOverride;
+  return readOpenClawGatewayConfigToken();
+}
+
+function readOpenClawGatewayConfigToken(): string | undefined {
+  const configPath = resolveOpenClawConfigPath();
+  try {
+    const raw = readFileSync(configPath, 'utf8').trim();
+    if (!raw) return undefined;
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    const gateway = config.gateway;
+    if (!gateway || typeof gateway !== 'object' || Array.isArray(gateway)) return undefined;
+    const auth = (gateway as Record<string, unknown>).auth;
+    if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return undefined;
+    const token = (auth as Record<string, unknown>).token;
+    return typeof token === 'string' && token.trim() ? token.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveOpenClawConfigPath(): string {
+  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (override) return resolveOpenClawUserPath(override);
+  return join(resolveOpenClawStateDir(), 'openclaw.json');
+}
+
 function openClawGatewayWebSocketRequest(options: {
   url: string;
   method: string;
   params: unknown;
   label: string;
   timeoutMs: number;
+  token?: string;
 }): Promise<unknown> {
   const endpoint = parseGatewayWebSocketUrl(options.url, options.label);
 
@@ -1180,7 +1223,7 @@ function openClawGatewayWebSocketRequest(options: {
           type: 'req',
           id: connectRequestId,
           method: 'connect',
-          params: openClawConnectParams(nonce),
+          params: openClawConnectParams(nonce, options.token),
         })));
         return;
       }
@@ -1327,7 +1370,7 @@ function encodeWebSocketFrame(text: string, opcode = 0x1): Buffer {
   return Buffer.concat([header, mask, masked]);
 }
 
-function openClawConnectParams(connectNonce?: string): unknown {
+function openClawConnectParams(connectNonce?: string, token?: string): unknown {
   return {
     minProtocol: OPENCLAW_GATEWAY_MIN_PROTOCOL,
     maxProtocol: OPENCLAW_GATEWAY_MAX_PROTOCOL,
@@ -1347,7 +1390,8 @@ function openClawConnectParams(connectNonce?: string): unknown {
       'operator.pairing',
       'operator.talk.secrets',
     ],
-    ...(buildOpenClawGatewayDeviceAuth(connectNonce) ?? {}),
+    ...(token ? { auth: { token } } : {}),
+    ...(buildOpenClawGatewayDeviceAuth(connectNonce, token) ?? {}),
   };
 }
 
@@ -1363,7 +1407,7 @@ function extractOpenClawConnectNonce(frame: unknown): string | undefined {
   return typeof nonce === 'string' && nonce.trim() ? nonce : undefined;
 }
 
-function buildOpenClawGatewayDeviceAuth(connectNonce?: string): { device: Record<string, unknown> } | undefined {
+function buildOpenClawGatewayDeviceAuth(connectNonce?: string, token?: string): { device: Record<string, unknown> } | undefined {
   if (!connectNonce?.trim()) return undefined;
   const identity = loadOpenClawDeviceIdentity();
   if (!identity) return undefined;
@@ -1385,6 +1429,7 @@ function buildOpenClawGatewayDeviceAuth(connectNonce?: string): { device: Record
       signedAtMs,
       nonce: connectNonce,
       platform: process.platform,
+      token,
     });
     return {
       device: {
@@ -1446,12 +1491,20 @@ function resolveOpenClawDeviceIdentityPath(): string {
 
 function resolveOpenClawStateDir(): string {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) return override;
+  if (override) return resolveOpenClawUserPath(override);
   const current = join(homedir(), OPENCLAW_STATE_DIRNAME);
   if (existsSync(current)) return current;
   const legacy = join(homedir(), OPENCLAW_LEGACY_STATE_DIRNAME);
   if (existsSync(legacy)) return legacy;
   return current;
+}
+
+function resolveOpenClawUserPath(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/') || path.startsWith('~\\')) {
+    return join(homedir(), path.slice(2));
+  }
+  return isAbsolute(path) ? path : join(process.cwd(), path);
 }
 
 function normalizeOpenClawDeviceIdentity(value: unknown): OpenClawDeviceIdentity | null {
