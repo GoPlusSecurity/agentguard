@@ -382,7 +382,8 @@ async function installOpenClawNativeThreatFeedCron(
   } catch (err) {
     throw new CronBackendUnavailableError(`Could not list native OpenClaw cron jobs. Is OpenClaw installed and available on PATH? ${(err as Error).message}`);
   }
-  if (nativeCronListHasExactName(existing.stdout, options.name) && !options.force) {
+  const existingJobs = nativeCronListJobsByName(existing.stdout, options.name);
+  if (existingJobs.length > 0 && !options.force) {
     return {
       name: options.name,
       schedule,
@@ -391,6 +392,11 @@ async function installOpenClawNativeThreatFeedCron(
       backend: 'openclaw',
       command,
     };
+  }
+  if (existingJobs.length > 0) {
+    for (const job of existingJobs) {
+      await runCommand('openclaw', ['cron', 'remove', job.id ?? job.name ?? options.name]);
+    }
   }
 
   const args = [
@@ -414,7 +420,6 @@ async function installOpenClawNativeThreatFeedCron(
     '--thinking',
     'off',
   ];
-  if (options.force) args.push('--force');
   await runCommand('openclaw', args);
   return {
     name: options.name,
@@ -434,14 +439,20 @@ class CronBackendUnavailableError extends Error {
 }
 
 function nativeCronListHasExactName(stdout: string, name: string): boolean {
+  return nativeCronListJobsByName(stdout, name).length > 0;
+}
+
+function nativeCronListJobsByName(stdout: string, name: string): OpenClawCronJob[] {
   const jsonJobs = extractOpenClawCronJobs(parseJsonOrNull(stdout));
-  if (jsonJobs.some((job) => job.name === name)) return true;
+  const exactJsonJobs = jsonJobs.filter((job) => job.name === name);
+  if (exactJsonJobs.length > 0) return exactJsonJobs;
 
   return stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .some((line) => nativeCronListLineHasExactName(line, name));
+    .filter((line) => nativeCronListLineHasExactName(line, name))
+    .map((line) => ({ id: nativeCronListLineId(line), name }));
 }
 
 function nativeCronListLineHasExactName(line: string, name: string): boolean {
@@ -449,7 +460,17 @@ function nativeCronListLineHasExactName(line: string, name: string): boolean {
   if (quoted?.[2] === name) return true;
 
   const cells = line.split(/\s{2,}|\t+/).map((cell) => cell.trim()).filter(Boolean);
-  return cells.includes(name);
+  if (cells.includes(name)) return true;
+
+  return new RegExp(`(^|\\s)${escapeRegExp(name)}(\\s|$)`).test(line);
+}
+
+function nativeCronListLineId(line: string): string | undefined {
+  return line.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parseJsonOrNull(value: string): unknown {
@@ -626,10 +647,13 @@ async function removeOpenClawNativeThreatFeedCron(
 ): Promise<ThreatFeedCronRemovalResult> {
   try {
     const existing = await runCommand('openclaw', ['cron', 'list']);
-    if (!nativeCronListHasExactName(existing.stdout, options.name)) {
+    const jobs = nativeCronListJobsByName(existing.stdout, options.name);
+    if (jobs.length === 0) {
       return { name: options.name, backend: 'openclaw', removed: false };
     }
-    await runCommand('openclaw', ['cron', 'remove', options.name]);
+    for (const job of jobs) {
+      await runCommand('openclaw', ['cron', 'remove', job.id ?? job.name ?? options.name]);
+    }
     return { name: options.name, backend: 'openclaw', removed: true };
   } catch (err) {
     return { name: options.name, backend: 'openclaw', removed: false, error: (err as Error).message };

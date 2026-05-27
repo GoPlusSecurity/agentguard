@@ -260,6 +260,37 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
   });
 
+  it('removes native OpenClaw cron jobs by id', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return {
+          stdout: JSON.stringify({
+            jobs: [
+              { id: '7407b173-da3f-4ded-b6e3-722a9c5248b0', name: 'agentguard-threat-feed' },
+            ],
+          }),
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await removeThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        backend: 'openclaw',
+      },
+      { runCommand: runner, gateway: { request: fakeGateway().request } }
+    );
+
+    assert.equal(result[0].backend, 'openclaw');
+    assert.equal(result[0].removed, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron remove']);
+    assert.deepEqual(calls[1].args, ['cron', 'remove', '7407b173-da3f-4ded-b6e3-722a9c5248b0']);
+  });
+
   it('rejects unsafe AgentGuard home paths for system crontab jobs', async () => {
     await assert.rejects(
       () =>
@@ -389,6 +420,41 @@ describe('feed/cron', () => {
 
     assert.equal(result.created, false);
     assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list']);
+  });
+
+  it('replaces native OpenClaw cron jobs by id when force is set', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return {
+          stdout: [
+            'ID                                   Name                     Schedule',
+            '7407b173-da3f-4ded-b6e3-722a9c5248b0 agentguard-threat-feed   cron */5 * * * * @ UTC',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '*/5 * * * *',
+        quiet: true,
+        force: true,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron remove', 'cron add']);
+    assert.deepEqual(calls[1].args, ['cron', 'remove', '7407b173-da3f-4ded-b6e3-722a9c5248b0']);
+    assert.ok(!calls[2].args.includes('--force'));
   });
 
   it('does not fall back to OpenClaw Gateway when native OpenClaw cron add fails', async () => {
