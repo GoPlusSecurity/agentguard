@@ -260,6 +260,37 @@ describe('feed/cron', () => {
     assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
   });
 
+  it('removes native OpenClaw cron jobs by id', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return {
+          stdout: JSON.stringify({
+            jobs: [
+              { id: '7407b173-da3f-4ded-b6e3-722a9c5248b0', name: 'agentguard-threat-feed' },
+            ],
+          }),
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await removeThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        backend: 'openclaw',
+      },
+      { runCommand: runner, gateway: { request: fakeGateway().request } }
+    );
+
+    assert.equal(result[0].backend, 'openclaw');
+    assert.equal(result[0].removed, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron remove']);
+    assert.deepEqual(calls[1].args, ['cron', 'remove', '7407b173-da3f-4ded-b6e3-722a9c5248b0']);
+  });
+
   it('rejects unsafe AgentGuard home paths for system crontab jobs', async () => {
     await assert.rejects(
       () =>
@@ -389,6 +420,41 @@ describe('feed/cron', () => {
 
     assert.equal(result.created, false);
     assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list']);
+  });
+
+  it('replaces native OpenClaw cron jobs by id when force is set', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.join(' ') === 'cron list') {
+        return {
+          stdout: [
+            'ID                                   Name                     Schedule',
+            '7407b173-da3f-4ded-b6e3-722a9c5248b0 agentguard-threat-feed   cron */5 * * * * @ UTC',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '*/5 * * * *',
+        quiet: true,
+        force: true,
+        backend: 'auto',
+        agentHost: 'openclaw',
+        timezone: 'UTC',
+      },
+      { runCommand: runner }
+    );
+
+    assert.equal(result.created, true);
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')), ['cron list', 'cron remove', 'cron add']);
+    assert.deepEqual(calls[1].args, ['cron', 'remove', '7407b173-da3f-4ded-b6e3-722a9c5248b0']);
+    assert.ok(!calls[2].args.includes('--force'));
   });
 
   it('does not fall back to OpenClaw Gateway when native OpenClaw cron add fails', async () => {
@@ -677,9 +743,11 @@ describe('feed/cron', () => {
 
   it('keeps the default HTTP JSON-RPC Gateway path and legacy cron.add params', async () => {
     let requestBody: any;
+    let authorization: string | undefined;
     const server = http.createServer((req, res) => {
       assert.equal(req.method, 'POST');
       assert.equal(req.url, '/');
+      authorization = req.headers.authorization;
       let raw = '';
       req.setEncoding('utf8');
       req.on('data', (chunk) => {
@@ -696,6 +764,7 @@ describe('feed/cron', () => {
       const result = await openClawGatewayRequest('cron.add', { name: 'agentguard-threat-feed' }, {
         host: '127.0.0.1',
         port: serverPort(server),
+        token: 'gateway-test-token',
         timeoutMs: 100,
         runCommand: async () => {
           throw new Error('explicit host/port should skip OpenClaw CLI');
@@ -703,9 +772,65 @@ describe('feed/cron', () => {
       });
 
       assert.deepEqual(result, { ok: true });
+      assert.equal(authorization, 'Bearer gateway-test-token');
       assert.equal(requestBody.method, 'cron.add');
       assert.deepEqual(requestBody.params, [{ name: 'agentguard-threat-feed' }]);
     } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('loads the local OpenClaw Gateway token for direct HTTP fallback requests', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-token-state-'));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousAgentGuardToken = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN;
+    const previousOpenClawToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    let authorization: string | undefined;
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, 'openclaw.json'), JSON.stringify({
+      gateway: {
+        auth: {
+          token: 'config-gateway-token',
+        },
+      },
+    }));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+    const server = http.createServer((req, res) => {
+      authorization = req.headers.authorization;
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        const requestBody = JSON.parse(raw);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: requestBody.id, result: { sessions: [] } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      await openClawGatewayRequest('sessions.list', {}, {
+        host: '127.0.0.1',
+        port: serverPort(server),
+        timeoutMs: 100,
+      });
+
+      assert.equal(authorization, 'Bearer config-gateway-token');
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+      else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      if (previousAgentGuardToken === undefined) delete process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN;
+      else process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN = previousAgentGuardToken;
+      if (previousOpenClawToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousOpenClawToken;
       await closeServer(server);
     }
   });
@@ -875,6 +1000,77 @@ describe('feed/cron', () => {
     } finally {
       if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
       else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      await closeServer(server);
+    }
+  });
+
+  it('sends the Gateway token during the WebSocket connect handshake', async () => {
+    let connectParams: any;
+
+    const server = net.createServer((socket) => {
+      let handshakeComplete = false;
+      let buffer = Buffer.alloc(0);
+      let clientRequests = 0;
+
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        if (!handshakeComplete) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;
+          const header = buffer.subarray(0, headerEnd + 4).toString('utf8');
+          const key = /^Sec-WebSocket-Key:\s*(.+)$/im.exec(header)?.[1]?.trim();
+          assert.ok(key);
+          const accept = createHash('sha1')
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+          socket.write([
+            'HTTP/1.1 101 Switching Protocols',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Accept: ${accept}`,
+            '',
+            '',
+          ].join('\r\n'));
+          handshakeComplete = true;
+          buffer = buffer.subarray(headerEnd + 4);
+          socket.write(encodeServerWebSocketFrame(JSON.stringify({
+            type: 'event',
+            event: 'connect.challenge',
+            payload: { nonce: 'nonce-token' },
+          })));
+        }
+
+        while (true) {
+          const parsed = readClientWebSocketFrame(buffer);
+          if (!parsed) break;
+          buffer = parsed.rest;
+          clientRequests += 1;
+          const frame = JSON.parse(parsed.payload);
+          if (clientRequests === 1) {
+            connectParams = frame.params;
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: {} })));
+          } else {
+            socket.write(encodeServerWebSocketFrame(JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: { jobs: [] },
+            })));
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await openClawGatewayRequest('cron.list', {}, {
+        url: `ws://127.0.0.1:${serverPort(server)}`,
+        token: 'gateway-websocket-token',
+        timeoutMs: 500,
+      });
+
+      assert.deepEqual(result, { jobs: [] });
+      assert.equal(connectParams.auth.token, 'gateway-websocket-token');
+    } finally {
       await closeServer(server);
     }
   });

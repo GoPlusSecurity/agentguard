@@ -79,7 +79,6 @@ describe('init CLI', () => {
       cloudUrl: 'https://agentguard.example',
       agentId: 'agt_status_test',
       agentJwt: 'agent.jwt.status',
-      agentRegisterUrl: 'https://agentguard.example/activate?token=status',
       agentHost: 'openclaw',
       policyCachePath: join(home, 'policy-cache.json'),
       auditPath: join(home, 'audit.jsonl'),
@@ -95,6 +94,7 @@ describe('init CLI', () => {
     assert.match(stdout, /API key: not used for this connection/);
     assert.match(stdout, /Agent ID: agt_status_test/);
     assert.match(stdout, /Agent JWT: configured/);
+    assert.match(stdout, /Agent account: bound/);
     assert.doesNotMatch(stdout, /API key: not configured/);
   });
 

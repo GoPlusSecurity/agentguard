@@ -10,6 +10,15 @@ import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
+const ISOLATED_OPENCLAW_ENV = {
+  AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '',
+  OPENCLAW_CONFIG_PATH: '',
+  OPENCLAW_STATE_DIR: '',
+};
 
 function runCli(
   args: string[],
@@ -21,6 +30,7 @@ function runCli(
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...ISOLATED_OPENCLAW_ENV,
         ...extraEnv,
         AGENTGUARD_HOME: home,
         HOME: home,
@@ -153,6 +163,105 @@ describe('CLI connect Agent JWT mode', () => {
       };
       assert.equal(config.agentId, 'agt_existing');
       assert.equal(config.agentJwt, 'agent.jwt.active');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('status clears the saved activation link after an Agent JWT is active', async () => {
+    const requests: Array<{ url?: string; method?: string; authorization?: string }> = [];
+    const server = http.createServer((req, res) => {
+      requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization });
+      if (req.method === 'GET' && req.url === '/api/v1/policies/effective') {
+        assert.equal(req.headers.authorization, 'Bearer agent.jwt.active');
+        const policy = getDefaultEffectiveRuntimePolicy();
+        policy.policyVersion = 'status-active-policy';
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: policy }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-status-active-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_existing',
+        agentJwt: 'agent.jwt.active',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=old',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['status'], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Agent account: bound/);
+      assert.match(result.stdout, /Agent activation URL: not required/);
+      assert.doesNotMatch(result.stdout, /activate\?token=old/);
+      assert.deepEqual(requests.map((request) => request.url), ['/api/v1/policies/effective']);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentRegisterUrl?: string;
+      };
+      assert.equal(config.agentRegisterUrl, undefined);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('status describes an unactivated Agent JWT as account binding instead of email binding', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/api/v1/policies/effective') {
+        res.statusCode = 401;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: false, error: { message: 'agent is not activated' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-status-pending-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'openclaw',
+        agentHosts: ['openclaw'],
+        agentId: 'agt_pending',
+        agentJwt: 'agent.jwt.pending',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=pending',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['status'], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Agent account: not bound \(activation required\)/);
+      assert.match(result.stdout, /https:\/\/agentguard\.example\/activate\?token=pending/);
+      assert.doesNotMatch(result.stdout, /email/i);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentRegisterUrl?: string;
+      };
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=pending');
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }

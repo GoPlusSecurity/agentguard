@@ -159,6 +159,13 @@ export function clearAgentJwt(config: AgentGuardConfig = ensureConfig()): AgentG
   return next;
 }
 
+export function clearAgentRegisterUrl(config: AgentGuardConfig = ensureConfig()): AgentGuardConfig {
+  const next: AgentGuardConfig = { ...config };
+  delete next.agentRegisterUrl;
+  saveConfig(next);
+  return next;
+}
+
 export function disconnectCloud(): AgentGuardConfig {
   const current = ensureConfig();
   const next: AgentGuardConfig = { ...current };

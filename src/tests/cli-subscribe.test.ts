@@ -10,6 +10,15 @@ import type { Advisory } from '../feed/types.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
+const ISOLATED_OPENCLAW_ENV = {
+  AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '',
+  OPENCLAW_CONFIG_PATH: '',
+  OPENCLAW_STATE_DIR: '',
+};
 
 function runCli(
   args: string[],
@@ -31,6 +40,7 @@ function runCliNoConfigWrite(
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...ISOLATED_OPENCLAW_ENV,
         ...extraEnv,
         AGENTGUARD_HOME: home,
         HOME: home,
@@ -435,6 +445,73 @@ describe('CLI subscribe command modes', () => {
       assert.equal(config.agentId, 'agt_new_subscribe');
       assert.equal(config.agentJwt, 'agent.jwt.new');
       assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=new-subscribe');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('does not re-register the local agent during subscribe cron runs when Agent JWT auth returns 401', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-cron-reauth-'));
+    const authHeaders: Array<string | undefined> = [];
+    let registerRequests = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/api/agent/register') {
+        registerRequests += 1;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          success: true,
+          data: {
+            agentId: 'agt_unexpected',
+            jwt: 'agent.jwt.unexpected',
+            registerUrl: 'https://agentguard.example/activate?token=unexpected',
+          },
+        }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+        authHeaders.push(req.headers.authorization);
+        res.statusCode = 401;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: false, error: { message: 'expired agent jwt' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'codex',
+        agentHosts: ['codex'],
+        agentId: 'agt_old_subscribe',
+        agentJwt: 'agent.jwt.old',
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json', '--cron-run'], home);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Run `agentguard connect` again/);
+      assert.deepEqual(authHeaders, ['Bearer agent.jwt.old']);
+      assert.equal(registerRequests, 0);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+        agentRegisterUrl?: string;
+      };
+      assert.equal(config.agentId, 'agt_old_subscribe');
+      assert.equal(config.agentJwt, 'agent.jwt.old');
+      assert.equal(config.agentRegisterUrl, undefined);
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }

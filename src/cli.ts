@@ -10,6 +10,7 @@ import {
   connectCloud,
   connectAgentJwt,
   clearAgentJwt,
+  clearAgentRegisterUrl,
   disconnectCloud,
   ensureConfig,
   getAgentGuardPaths,
@@ -141,10 +142,11 @@ async function main() {
               agentRegisterUrl: config.agentRegisterUrl,
               cloudUrl,
             });
-            saveCachedPolicy(savedConfig.policyCachePath, policy);
-            console.log(`Connected to AgentGuard Cloud (${savedConfig.cloudUrl}).`);
-            console.log(`Agent JWT is active for local agent ${savedConfig.agentId}.`);
-            console.log(`Cached policy ${policy.policyVersion} at ${savedConfig.policyCachePath}.`);
+            const activeConfig = clearAgentRegisterUrl(savedConfig);
+            saveCachedPolicy(activeConfig.policyCachePath, policy);
+            console.log(`Connected to AgentGuard Cloud (${activeConfig.cloudUrl}).`);
+            console.log(`Agent JWT is active for local agent ${activeConfig.agentId}.`);
+            console.log(`Cached policy ${policy.policyVersion} at ${activeConfig.policyCachePath}.`);
             return;
           } catch (err) {
             if (!(err instanceof CloudRequestError && err.status === 401)) {
@@ -154,14 +156,19 @@ async function main() {
             }
           }
         }
-        const registration = await registerAgentCredential({
-          cloudUrl,
-          reason: 'connect',
-          notifyOpenClaw: true,
-          resetExistingJwt: true,
-        });
+        let registration: AgentCredentialRegistration;
+        try {
+          registration = await registerAgentCredential({
+            cloudUrl,
+            reason: 'connect',
+            notifyOpenClaw: true,
+            resetExistingJwt: true,
+          });
+        } catch (err) {
+          throw new Error(`Could not register AgentGuard agent: ${err instanceof Error ? err.message : String(err)}`);
+        }
         console.log(`Registered local AgentGuard agent (${registration.config.agentId}).`);
-        console.log('Open this link to bind AgentGuard Cloud to your email:');
+        console.log('Open this link to bind this agent to your account:');
         console.log(registration.registerUrl);
         if (registration.openClawNotification.notified) {
           console.log('Sent the activation link to the last OpenClaw channel.');
@@ -204,8 +211,8 @@ async function main() {
   program
     .command('status')
     .description('Show local and Cloud connection status')
-    .action(() => {
-      const config = ensureConfig();
+    .action(async () => {
+      const config = await refreshAgentAccountBinding(ensureConfig());
       const paths = getAgentGuardPaths();
       console.log(`Config: ${paths.configPath}`);
       console.log(`Protection level: ${config.level}`);
@@ -399,6 +406,7 @@ async function main() {
       const since = options.since as string | undefined;
       const quiet = Boolean(options.quiet);
       const cronNotifyRun = Boolean(options.cronNotifyRun);
+      const cronInternalRun = Boolean(options.cronRun || options.cronNotifyRun);
       const cronTarget = validateCronTarget(options.cronTarget);
       const cronRunSendsToOpenClaw = Boolean(options.cronRun) && cronAgentHost === 'openclaw';
       const cronExpression = options.cron && !options.cronRun
@@ -443,6 +451,11 @@ async function main() {
         await client.subscribeFeed();
       } catch (err) {
         if (err instanceof CloudRequestError && err.status === 401) {
+          if (cronInternalRun) {
+            await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+            process.exitCode = 1;
+            return;
+          }
           if (!isOpenClawAgentConfigured(config)) {
             console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
             process.exitCode = 1;
@@ -489,6 +502,11 @@ async function main() {
         advisories = await client.pullAdvisories(since);
       } catch (err) {
         if (err instanceof CloudRequestError && err.status === 401) {
+          if (cronInternalRun) {
+            await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+            process.exitCode = 1;
+            return;
+          }
           if (!isOpenClawAgentConfigured(config)) {
             console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
             process.exitCode = 1;
@@ -569,20 +587,32 @@ async function main() {
             // match, we must NOT mark the advisory seen, otherwise a
             // transient network blip silently buries a real hit.
             try {
-              const reportResult = await runCloudRequestWithAgentJwtReauth({
-                config,
-                client,
-                reason: 'reauth',
-                notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
-                operation: (activeClient) => activeClient.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+              if (cronInternalRun) {
+                await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
                   elapsedMs: result.elapsedMs,
                   warnings: result.warnings,
-                }),
-              });
-              config = reportResult.config;
-              client = reportResult.client;
-              if (reportResult.registration) registration = reportResult.registration;
+                });
+              } else {
+                const reportResult = await runCloudRequestWithAgentJwtReauth({
+                  config,
+                  client,
+                  reason: 'reauth',
+                  notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+                  operation: (activeClient) => activeClient.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+                    elapsedMs: result.elapsedMs,
+                    warnings: result.warnings,
+                  }),
+                });
+                config = reportResult.config;
+                client = reportResult.client;
+                if (reportResult.registration) registration = reportResult.registration;
+              }
             } catch (err) {
+              if (cronInternalRun && err instanceof CloudRequestError && err.status === 401) {
+                await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+                process.exitCode = 1;
+                return;
+              }
               console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
               processed = false;
               hardFailures += 1;
@@ -894,7 +924,13 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
     console.log('API key: not used for this connection');
     console.log(`Agent ID: ${config.agentId || 'configured'}`);
     console.log('Agent JWT: configured');
-    console.log(`Agent activation URL: ${config.agentRegisterUrl || 'not configured'}`);
+    if (config.agentRegisterUrl) {
+      console.log('Agent account: not bound (activation required)');
+      console.log(`Agent activation URL: ${config.agentRegisterUrl}`);
+    } else {
+      console.log('Agent account: bound');
+      console.log('Agent activation URL: not required');
+    }
     return;
   }
   if (config.apiKey) {
@@ -907,6 +943,44 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
   console.log('Cloud auth: not connected');
   console.log('API key: not configured');
   console.log('Agent JWT: not configured');
+}
+
+async function printSubscribeConnectRequired(
+  options: { json?: boolean; cronNotifyRun?: boolean },
+  notifyOpenClaw: boolean
+): Promise<void> {
+  const message = 'AgentGuard Cloud credential was rejected. Run `agentguard connect` again before the next subscribe cron run.';
+  if (notifyOpenClaw) {
+    const notification = await notifyOpenClawMessage(message, resolveOpenClawGatewayOptionsFromEnv(), {
+      idempotencyKeyPrefix: 'agentguard-subscribe-auth',
+    });
+    if (notification.notified) {
+      console.log('NO_REPLY');
+      return;
+    }
+    console.error(`! Could not send OpenClaw cron auth notification: ${notification.reason ?? 'Unknown error'}`);
+    return;
+  }
+  if (options.cronNotifyRun) {
+    console.log(message);
+  } else if (options.json) {
+    console.log(JSON.stringify({ success: false, error: message }, null, 2));
+  } else {
+    console.error(`! ${message}`);
+  }
+}
+
+async function refreshAgentAccountBinding(config: AgentGuardConfig): Promise<AgentGuardConfig> {
+  if (!config.agentJwt || !config.agentRegisterUrl) return config;
+  const client = new AgentGuardCloudClient(config);
+  try {
+    const policy = await client.fetchEffectivePolicy();
+    const activeConfig = clearAgentRegisterUrl(config);
+    saveCachedPolicy(activeConfig.policyCachePath, policy);
+    return activeConfig;
+  } catch {
+    return config;
+  }
 }
 
 function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
@@ -1343,7 +1417,7 @@ function printAgentActivationRequired(
   console.error(`! AgentGuard Cloud authorization is not active yet. ${message}`);
   const registerUrl = registration?.registerUrl || ensureConfig().agentRegisterUrl;
   if (registerUrl) {
-    console.error('Open this link to bind this agent to your email, then rerun the command:');
+    console.error('Open this link to bind this agent to your account, then rerun the command:');
     console.error(registerUrl);
   }
 }
@@ -1376,6 +1450,7 @@ function detectOpenClawRuntime(): boolean {
 function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
   const url = process.env.AGENTGUARD_OPENCLAW_GATEWAY_URL?.trim();
   const host = process.env.AGENTGUARD_OPENCLAW_GATEWAY_HOST?.trim();
+  const token = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TOKEN?.trim();
   const portRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_PORT?.trim();
   const timeoutRaw = process.env.AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS?.trim();
   const port = portRaw ? Number(portRaw) : undefined;
@@ -1383,6 +1458,7 @@ function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
   return {
     ...(url ? { url } : {}),
     ...(host ? { host } : {}),
+    ...(token ? { token } : {}),
     ...(Number.isFinite(port) ? { port } : {}),
     ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
   };
