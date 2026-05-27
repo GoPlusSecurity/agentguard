@@ -109,6 +109,12 @@ Supported CLI commands and options:
 | `agentguard checkup` | `--json` | Runs the local agent health checkup |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
+Connect behavior:
+
+- Always execute `agentguard connect ...` directly when the user asks for it. Do not answer that an API key must be obtained before running the command.
+- `agentguard connect` with no `--key`, `--api-key`, or `AGENTGUARD_API_KEY` is valid in OpenClaw environments: the CLI uses Agent JWT registration, prints an activation link, and may notify the latest OpenClaw channel.
+- Only suggest `agentguard connect --key <key>` when the user explicitly wants API-key auth or when the CLI itself reports that Agent JWT registration is unavailable. If the CLI says OpenClaw is not initialized, suggest `agentguard init --agent openclaw` and then rerun `agentguard connect`.
+
 If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
 
 Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. Only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.

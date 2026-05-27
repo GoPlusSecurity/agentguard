@@ -124,10 +124,11 @@ async function main() {
     .action(async (options) => {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
       if (!apiKey) {
-        const config = ensureConfig();
+        let config = ensureConfig();
         if (!isOpenClawAgentConfigured(config)) {
           throw new Error('Missing API key. Pass --key, --api-key, set AGENTGUARD_API_KEY, or run `agentguard init --agent openclaw` before using Agent JWT registration.');
         }
+        config = withDetectedOpenClawAgentHost(config);
         const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
         if (config.agentId && config.agentJwt) {
           const existingConfig = { ...config, cloudUrl };
@@ -1348,7 +1349,28 @@ function printAgentActivationRequired(
 }
 
 function isOpenClawAgentConfigured(config: AgentGuardConfig): boolean {
-  return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true;
+  return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true || detectOpenClawRuntime();
+}
+
+function withDetectedOpenClawAgentHost(config: AgentGuardConfig): AgentGuardConfig {
+  if (hasSavedAgentHost(config) || !detectOpenClawRuntime()) return config;
+  const next: AgentGuardConfig = {
+    ...config,
+    agentHost: 'openclaw',
+    agentHosts: appendAgentHost(config.agentHosts, 'openclaw'),
+  };
+  saveConfig(next);
+  return next;
+}
+
+function detectOpenClawRuntime(): boolean {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath && existsSync(configPath)) return true;
+
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir && (existsSync(stateDir) || existsSync(join(stateDir, 'openclaw.json')))) return true;
+
+  return existsSync(join(homedir(), '.openclaw', 'openclaw.json'));
 }
 
 function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {
