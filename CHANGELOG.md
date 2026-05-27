@@ -5,12 +5,13 @@
 ### Added
 - Added Agent JWT registration and activation links for OpenClaw-backed Cloud connections.
 - Added Cloud feed subscription support for the default advisory ecosystems.
-- `agentguard status` now shows saved Agent JWT registration details.
+- `agentguard status` now shows the active Cloud auth method, including API-key and Agent JWT connection details.
 
 ### Changed
 - Cloud flows now prefer Agent JWT auth when available, with API key support preserved.
 - Threat-feed notifications now include Cloud remediation guidance when available.
 - Connect and disconnect flows now keep API key and Agent JWT credentials mutually clean.
+- `agentguard disconnect` now removes the managed threat-feed subscribe cron job from the configured agent backend and clears saved cron metadata.
 - `agentguard subscribe --cron` now installs OpenClaw jobs with `delivery.mode = none` / `--no-deliver`, then lets the normal internal `--cron-run` path auto-detect the saved OpenClaw host and send notifications directly to the latest deliverable session route instead of relying on `channel:last` announce fallback.
 - `agentguard subscribe --cron --cron-target openclaw` now rejects saved-host mismatches, so an existing non-OpenClaw `agentHost` can no longer install an OpenClaw cron job that would run without any working notification route.
 - `agentguard init --agent <agent>` now overwrites managed hook/template files by default so upgraded OpenClaw plugin templates are refreshed without requiring `--force`; use `--no-force` to preserve existing files.
@@ -19,6 +20,8 @@
 
 ### Fixed
 - Fixed Cloud runtime decisions that return `require_approve` instead of `require_approval`.
+- Fixed OpenClaw Agent JWT connect so OpenClaw runtime detection can start registration without requiring an API key or prior AgentGuard init.
+- Fixed AgentGuard runtime self-handling so direct `agentguard` and `agentguard-mcp` CLI commands are not audited, reported, or blocked by AgentGuard's own hooks while compound shell commands remain protected.
 - Improved disconnected Cloud guidance and Agent JWT reauth handling.
 - Fixed OpenClaw plugin registration after global npm installs by generating a package-root fallback loader in the local OpenClaw plugin template.
 - Added OpenClaw plugin startup/hook activation metadata so AgentGuard loads as a runtime hook plugin during gateway startup.
