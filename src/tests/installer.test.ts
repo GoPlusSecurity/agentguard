@@ -129,6 +129,73 @@ describe('Agent template installers', () => {
     assert.ok(!template.includes("level: 'balanced'"));
   });
 
+  it('also enables the main OpenClaw config when init runs from workspace state', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-workspace-state-'));
+    const mainRoot = join(dir, '.openclaw');
+    const workspaceRoot = join(mainRoot, 'workspace', '.openclaw');
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+
+    try {
+      process.env.OPENCLAW_STATE_DIR = workspaceRoot;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+
+      const result = installAgentTemplates('openclaw');
+      const mainPluginDir = join(mainRoot, 'plugins', 'agentguard');
+      const workspacePluginDir = join(workspaceRoot, 'plugins', 'agentguard');
+      const mainConfig = JSON.parse(readFileSync(join(mainRoot, 'openclaw.json'), 'utf8'));
+      const workspaceConfig = JSON.parse(readFileSync(join(workspaceRoot, 'openclaw.json'), 'utf8'));
+
+      assert.ok(result.files.includes(join(mainRoot, 'openclaw.json')));
+      assert.ok(existsSync(join(mainPluginDir, 'openclaw.plugin.json')));
+      assert.ok(existsSync(join(workspacePluginDir, 'openclaw.plugin.json')));
+      assert.deepEqual(mainConfig.plugins.load.paths, [mainPluginDir]);
+      assert.deepEqual(workspaceConfig.plugins.load.paths, [workspacePluginDir]);
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+      else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+  });
+
+  it('also enables the workspace OpenClaw config when init runs from main state', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-main-state-'));
+    const mainRoot = join(dir, '.openclaw');
+    const workspace = join(mainRoot, 'workspace');
+    const workspaceRoot = join(workspace, '.openclaw');
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(mainRoot, { recursive: true });
+    writeFileSync(join(mainRoot, 'openclaw.json'), JSON.stringify({
+      agents: {
+        defaults: {
+          workspace,
+        },
+      },
+    }, null, 2));
+
+    try {
+      process.env.OPENCLAW_STATE_DIR = mainRoot;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+
+      installAgentTemplates('openclaw');
+      const mainPluginDir = join(mainRoot, 'plugins', 'agentguard');
+      const workspacePluginDir = join(workspaceRoot, 'plugins', 'agentguard');
+      const mainConfig = JSON.parse(readFileSync(join(mainRoot, 'openclaw.json'), 'utf8'));
+      const workspaceConfig = JSON.parse(readFileSync(join(workspaceRoot, 'openclaw.json'), 'utf8'));
+
+      assert.deepEqual(mainConfig.plugins.load.paths, [mainPluginDir]);
+      assert.deepEqual(workspaceConfig.plugins.load.paths, [workspacePluginDir]);
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+      else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+  });
+
   it('adds AgentGuard to an existing OpenClaw plugin allowlist', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-existing-'));
     const configPath = join(dir, '.openclaw', 'openclaw.json');

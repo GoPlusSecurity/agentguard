@@ -1,12 +1,17 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
 
 export interface InstallResult {
   agent: AgentInstaller;
   files: string[];
+}
+
+interface ClawInstallTarget {
+  root: string;
+  configPath: string;
 }
 
 export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: string; force?: boolean } = {}): InstallResult {
@@ -47,7 +52,19 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
     ? join(openClawRoot, 'openclaw.json')
     : process.env.OPENCLAW_CONFIG_PATH || join(openClawRoot, 'openclaw.json');
 
-  return installClawPlugin('openclaw', openClawRoot, configPath, force);
+  if (cwd) {
+    return installClawPlugin('openclaw', openClawRoot, configPath, force);
+  }
+
+  const targets = uniqueClawInstallTargets([
+    { root: openClawRoot, configPath },
+    ...inferOpenClawCompanionInstallTargets(openClawRoot, configPath),
+  ]);
+  const files = targets.flatMap((target) =>
+    installClawPlugin('openclaw', target.root, target.configPath, force).files
+  );
+
+  return { agent: 'openclaw', files: uniqueStrings(files) };
 }
 
 function installHermes(root: string, force: boolean): InstallResult {
@@ -221,6 +238,74 @@ function installClawPlugin(agent: 'openclaw' | 'qclaw', root: string, configPath
   enableClawPlugin(configPath, pluginDir);
 
   return { agent, files: [packagePath, pluginPath, manifestPath, configPath] };
+}
+
+function inferOpenClawCompanionInstallTargets(root: string, configPath: string): ClawInstallTarget[] {
+  const targets: ClawInstallTarget[] = [];
+  const workspaceParent = dirname(root);
+
+  if (basename(root) === '.openclaw' && basename(workspaceParent) === 'workspace') {
+    const mainRoot = dirname(workspaceParent);
+    targets.push({ root: mainRoot, configPath: join(mainRoot, 'openclaw.json') });
+    return targets;
+  }
+
+  const workspace = readOpenClawWorkspacePath(configPath, root) || existingOpenClawWorkspacePath(root);
+  if (workspace) {
+    const workspaceStateRoot = join(workspace, '.openclaw');
+    if (workspaceStateRoot !== root) {
+      targets.push({ root: workspaceStateRoot, configPath: join(workspaceStateRoot, 'openclaw.json') });
+    }
+  }
+
+  return targets;
+}
+
+function readOpenClawWorkspacePath(configPath: string, root: string): string | undefined {
+  if (!existsSync(configPath)) return undefined;
+  try {
+    const raw = readFileSync(configPath, 'utf8').trim();
+    if (!raw) return undefined;
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    const agents = config.agents;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return undefined;
+    const defaults = (agents as Record<string, unknown>).defaults;
+    if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) return undefined;
+    const workspace = (defaults as Record<string, unknown>).workspace;
+    if (typeof workspace !== 'string' || workspace.trim() === '') return undefined;
+    return resolveOpenClawPath(workspace.trim(), root);
+  } catch {
+    return undefined;
+  }
+}
+
+function existingOpenClawWorkspacePath(root: string): string | undefined {
+  const workspace = join(root, 'workspace');
+  return existsSync(workspace) ? workspace : undefined;
+}
+
+function resolveOpenClawPath(path: string, baseDir: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/') || path.startsWith('~\\')) {
+    return join(homedir(), path.slice(2));
+  }
+  return isAbsolute(path) ? path : resolve(baseDir, path);
+}
+
+function uniqueClawInstallTargets(targets: ClawInstallTarget[]): ClawInstallTarget[] {
+  const seen = new Set<string>();
+  const unique: ClawInstallTarget[] = [];
+  for (const target of targets) {
+    const key = `${target.root}\0${target.configPath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(target);
+  }
+  return unique;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }
 
 function openClawPluginTemplate(): string {
