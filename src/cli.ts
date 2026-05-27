@@ -32,9 +32,11 @@ import { CloudRequestError } from './cloud/client.js';
 import { notifyOpenClawMessage, notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
 import {
   installThreatFeedCron,
+  removeThreatFeedCron,
   validateCronExpression,
   type OpenClawCronInstallResult,
   type CronBackend,
+  type ThreatFeedCronRemovalResult,
   type OpenClawGatewayOptions,
 } from './feed/cron.js';
 
@@ -122,10 +124,11 @@ async function main() {
     .action(async (options) => {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
       if (!apiKey) {
-        const config = ensureConfig();
+        let config = ensureConfig();
         if (!isOpenClawAgentConfigured(config)) {
           throw new Error('Missing API key. Pass --key, --api-key, set AGENTGUARD_API_KEY, or run `agentguard init --agent openclaw` before using Agent JWT registration.');
         }
+        config = withDetectedOpenClawAgentHost(config);
         const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
         if (config.agentId && config.agentJwt) {
           const existingConfig = { ...config, cloudUrl };
@@ -183,10 +186,18 @@ async function main() {
   program
     .command('disconnect')
     .description('Disconnect local AgentGuard from AgentGuard Cloud')
-    .action(() => {
+    .action(async () => {
+      const currentConfig = ensureConfig();
+      const cronRemoval = await removeThreatFeedCron({
+        name: currentConfig.threatFeedCronName || 'agentguard-threat-feed',
+        backend: 'auto',
+        agentHost: resolveCronAgentHost(currentConfig),
+        agentGuardHome: getAgentGuardPaths().home,
+      });
       const config = disconnectCloud();
       console.log('Disconnected from AgentGuard Cloud.');
       console.log('Removed local Cloud API key, Agent JWT, connection timestamp, pending event spool, and cached Cloud policy.');
+      printCronRemovalSummary(cronRemoval);
       console.log(`Local protection remains active using the built-in policy. Audit log: ${config.auditPath}`);
     });
 
@@ -199,10 +210,7 @@ async function main() {
       console.log(`Config: ${paths.configPath}`);
       console.log(`Protection level: ${config.level}`);
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
-      console.log(`API key: ${maskApiKey(config.apiKey)}`);
-      console.log(`Agent ID: ${config.agentId || 'not configured'}`);
-      console.log(`Agent JWT: ${config.agentJwt ? 'configured' : 'not configured'}`);
-      console.log(`Agent activation URL: ${config.agentRegisterUrl || 'not configured'}`);
+      printCloudAuthStatus(config);
       console.log(`Agent host: ${config.agentHost || 'not configured'}`);
       console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
@@ -628,6 +636,11 @@ async function main() {
             agentHost: resolveCronAgentHost(config),
             agentGuardHome: getAgentGuardPaths().home,
           });
+          saveConfig({
+            ...config,
+            threatFeedCronName: summary.cron.result.name,
+            threatFeedCronInstalledAt: new Date().toISOString(),
+          });
           summary.cron.installed = true;
         } catch (err) {
           summary.cron.error = (err as Error).message;
@@ -873,6 +886,46 @@ function printInitGuidanceIfNeeded(config: AgentGuardConfig): void {
   console.log('');
   console.log('Required next step:');
   console.log(`  ${REQUIRED_INIT_COMMAND}`);
+}
+
+function printCloudAuthStatus(config: AgentGuardConfig): void {
+  if (config.agentJwt) {
+    console.log('Cloud auth: connected via Agent JWT');
+    console.log('API key: not used for this connection');
+    console.log(`Agent ID: ${config.agentId || 'configured'}`);
+    console.log('Agent JWT: configured');
+    console.log(`Agent activation URL: ${config.agentRegisterUrl || 'not configured'}`);
+    return;
+  }
+  if (config.apiKey) {
+    console.log('Cloud auth: connected via API key');
+    console.log(`API key: ${maskApiKey(config.apiKey)}`);
+    console.log('Agent JWT: not used for this connection');
+    return;
+  }
+
+  console.log('Cloud auth: not connected');
+  console.log('API key: not configured');
+  console.log('Agent JWT: not configured');
+}
+
+function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
+  const removed = results.filter((result) => result.removed);
+  if (removed.length > 0) {
+    console.log(`Removed AgentGuard subscribe cron job "${removed[0]!.name}" from: ${removed.map((result) => result.backend).join(', ')}.`);
+    return;
+  }
+
+  const errors = results.filter((result) => result.error);
+  if (errors.length > 0) {
+    console.log('No AgentGuard subscribe cron job was removed; some cron backends were unavailable.');
+    for (const result of errors) {
+      console.error(`! ${result.backend}: ${result.error}`);
+    }
+    return;
+  }
+
+  console.log('No AgentGuard subscribe cron job was found.');
 }
 
 function resolveCronAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
@@ -1296,7 +1349,28 @@ function printAgentActivationRequired(
 }
 
 function isOpenClawAgentConfigured(config: AgentGuardConfig): boolean {
-  return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true;
+  return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true || detectOpenClawRuntime();
+}
+
+function withDetectedOpenClawAgentHost(config: AgentGuardConfig): AgentGuardConfig {
+  if (hasSavedAgentHost(config) || !detectOpenClawRuntime()) return config;
+  const next: AgentGuardConfig = {
+    ...config,
+    agentHost: 'openclaw',
+    agentHosts: appendAgentHost(config.agentHosts, 'openclaw'),
+  };
+  saveConfig(next);
+  return next;
+}
+
+function detectOpenClawRuntime(): boolean {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath && existsSync(configPath)) return true;
+
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir && (existsSync(stateDir) || existsSync(join(stateDir, 'openclaw.json')))) return true;
+
+  return existsSync(join(homedir(), '.openclaw', 'openclaw.json'));
 }
 
 function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {

@@ -7,6 +7,7 @@ import {
   getSkillTrustPolicy,
   isActionAllowedByCapabilities,
 } from './common.js';
+import { isAgentGuardCliCommand } from '../runtime/self-command.js';
 
 /**
  * Evaluate a hook event using the common AgentGuard decision engine.
@@ -20,6 +21,9 @@ export async function evaluateHook(
   options: EngineOptions
 ): Promise<HookOutput> {
   const input = adapter.parseInput(rawInput);
+  if (isAgentGuardHookCommand(adapter, input)) {
+    return { decision: 'allow' };
+  }
 
   // Post-tool events → audit only
   if (input.eventType === 'post') {
@@ -115,4 +119,10 @@ export async function evaluateHook(
     writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill);
     return { decision: 'allow' };
   }
+}
+
+function isAgentGuardHookCommand(adapter: HookAdapter, input: HookInput): boolean {
+  if (adapter.mapToolToActionType(input.toolName) !== 'exec_command') return false;
+  const command = input.toolInput.command;
+  return typeof command === 'string' && isAgentGuardCliCommand(command);
 }

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -11,12 +11,17 @@ import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 
-function runCli(args: string[], home: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runCli(
+  args: string[],
+  home: string,
+  extraEnv: Record<string, string> = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
     const child = spawn('node', [CLI_PATH, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...extraEnv,
         AGENTGUARD_HOME: home,
         HOME: home,
       },
@@ -222,5 +227,26 @@ describe('CLI connect Agent JWT mode', () => {
     assert.equal(result.exitCode, 1);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /init --agent openclaw/);
+  });
+
+  it('uses detected OpenClaw runtime for no-key connect before requiring an API key', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-openclaw-env-'));
+    const openClawState = join(home, '.openclaw');
+    mkdirSync(openClawState, { recursive: true });
+    writeFileSync(join(openClawState, 'openclaw.json'), '{}');
+
+    const result = await runCli(['connect', '--url', 'http://127.0.0.1:9'], home, {
+      OPENCLAW_STATE_DIR: openClawState,
+    });
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+
+    assert.equal(result.exitCode, 1);
+    assert.doesNotMatch(result.stderr, /Missing API key/);
+    assert.match(result.stderr, /Could not register AgentGuard agent/);
+    assert.equal(config.agentHost, 'openclaw');
+    assert.deepEqual(config.agentHosts, ['openclaw']);
   });
 });
