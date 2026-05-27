@@ -10,6 +10,7 @@ import {
   connectCloud,
   connectAgentJwt,
   clearAgentJwt,
+  clearAgentRegisterUrl,
   disconnectCloud,
   ensureConfig,
   getAgentGuardPaths,
@@ -141,10 +142,11 @@ async function main() {
               agentRegisterUrl: config.agentRegisterUrl,
               cloudUrl,
             });
-            saveCachedPolicy(savedConfig.policyCachePath, policy);
-            console.log(`Connected to AgentGuard Cloud (${savedConfig.cloudUrl}).`);
-            console.log(`Agent JWT is active for local agent ${savedConfig.agentId}.`);
-            console.log(`Cached policy ${policy.policyVersion} at ${savedConfig.policyCachePath}.`);
+            const activeConfig = clearAgentRegisterUrl(savedConfig);
+            saveCachedPolicy(activeConfig.policyCachePath, policy);
+            console.log(`Connected to AgentGuard Cloud (${activeConfig.cloudUrl}).`);
+            console.log(`Agent JWT is active for local agent ${activeConfig.agentId}.`);
+            console.log(`Cached policy ${policy.policyVersion} at ${activeConfig.policyCachePath}.`);
             return;
           } catch (err) {
             if (!(err instanceof CloudRequestError && err.status === 401)) {
@@ -154,14 +156,19 @@ async function main() {
             }
           }
         }
-        const registration = await registerAgentCredential({
-          cloudUrl,
-          reason: 'connect',
-          notifyOpenClaw: true,
-          resetExistingJwt: true,
-        });
+        let registration: AgentCredentialRegistration;
+        try {
+          registration = await registerAgentCredential({
+            cloudUrl,
+            reason: 'connect',
+            notifyOpenClaw: true,
+            resetExistingJwt: true,
+          });
+        } catch (err) {
+          throw new Error(`Could not register AgentGuard agent: ${err instanceof Error ? err.message : String(err)}`);
+        }
         console.log(`Registered local AgentGuard agent (${registration.config.agentId}).`);
-        console.log('Open this link to bind AgentGuard Cloud to your email:');
+        console.log('Open this link to bind this agent to your account:');
         console.log(registration.registerUrl);
         if (registration.openClawNotification.notified) {
           console.log('Sent the activation link to the last OpenClaw channel.');
@@ -204,8 +211,8 @@ async function main() {
   program
     .command('status')
     .description('Show local and Cloud connection status')
-    .action(() => {
-      const config = ensureConfig();
+    .action(async () => {
+      const config = await refreshAgentAccountBinding(ensureConfig());
       const paths = getAgentGuardPaths();
       console.log(`Config: ${paths.configPath}`);
       console.log(`Protection level: ${config.level}`);
@@ -894,7 +901,13 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
     console.log('API key: not used for this connection');
     console.log(`Agent ID: ${config.agentId || 'configured'}`);
     console.log('Agent JWT: configured');
-    console.log(`Agent activation URL: ${config.agentRegisterUrl || 'not configured'}`);
+    if (config.agentRegisterUrl) {
+      console.log('Agent account: not bound (activation required)');
+      console.log(`Agent activation URL: ${config.agentRegisterUrl}`);
+    } else {
+      console.log('Agent account: bound');
+      console.log('Agent activation URL: not required');
+    }
     return;
   }
   if (config.apiKey) {
@@ -907,6 +920,19 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
   console.log('Cloud auth: not connected');
   console.log('API key: not configured');
   console.log('Agent JWT: not configured');
+}
+
+async function refreshAgentAccountBinding(config: AgentGuardConfig): Promise<AgentGuardConfig> {
+  if (!config.agentJwt || !config.agentRegisterUrl) return config;
+  const client = new AgentGuardCloudClient(config);
+  try {
+    const policy = await client.fetchEffectivePolicy();
+    const activeConfig = clearAgentRegisterUrl(config);
+    saveCachedPolicy(activeConfig.policyCachePath, policy);
+    return activeConfig;
+  } catch {
+    return config;
+  }
 }
 
 function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
@@ -1343,7 +1369,7 @@ function printAgentActivationRequired(
   console.error(`! AgentGuard Cloud authorization is not active yet. ${message}`);
   const registerUrl = registration?.registerUrl || ensureConfig().agentRegisterUrl;
   if (registerUrl) {
-    console.error('Open this link to bind this agent to your email, then rerun the command:');
+    console.error('Open this link to bind this agent to your account, then rerun the command:');
     console.error(registerUrl);
   }
 }

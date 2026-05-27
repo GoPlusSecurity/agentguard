@@ -10,6 +10,15 @@ import type { Advisory } from '../feed/types.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
+const ISOLATED_OPENCLAW_ENV = {
+  AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '',
+  OPENCLAW_CONFIG_PATH: '',
+  OPENCLAW_STATE_DIR: '',
+};
 
 function runCli(
   args: string[],
@@ -31,6 +40,7 @@ function runCliNoConfigWrite(
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...ISOLATED_OPENCLAW_ENV,
         ...extraEnv,
         AGENTGUARD_HOME: home,
         HOME: home,
