@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.20] - 2026-05-27
+
+### Changed
+- `agentguard init --agent openclaw` now enables the AgentGuard plugin in both the main OpenClaw config and companion workspace state when either layout is detected.
+- OpenClaw Gateway fallback requests now reuse configured bearer tokens from `AGENTGUARD_OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_TOKEN`, or the local OpenClaw config for HTTP and WebSocket paths.
+- `agentguard status` now refreshes Agent JWT account binding state and clears stale activation links once the saved Agent JWT is accepted by Cloud.
+
+### Fixed
+- Fixed Agent JWT activation messaging to describe account binding instead of email binding.
+- Fixed native OpenClaw cron replacement and removal to delete existing jobs by job ID before reinstalling, avoiding reliance on unsupported `openclaw cron add --force` behavior.
+
 ## [1.1.18] - 2026-05-26
 
 ### Added
