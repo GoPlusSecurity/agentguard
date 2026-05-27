@@ -160,6 +160,32 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('clears API key credentials when connecting with an Agent JWT', () => {
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-connect-jwt-'));
+    try {
+      connectCloud({
+        apiKey: 'ag_live_test_key_123456',
+        cloudUrl: 'https://agentguard.example',
+      });
+
+      const config = connectAgentJwt({
+        agentId: 'agt_jwt_shadow_test',
+        agentJwt: 'agent.jwt.shadow',
+        agentRegisterUrl: 'https://agentguard.example/activate?token=shadow',
+        cloudUrl: 'https://agentguard.example',
+      });
+
+      assert.equal(config.apiKey, undefined);
+      assert.equal(config.agentId, 'agt_jwt_shadow_test');
+      assert.equal(config.agentJwt, 'agent.jwt.shadow');
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=shadow');
+    } finally {
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
+  });
+
   it('evaluates local action with cached Cloud policy shape', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     policy.policyVersion = 'runtime-test';
@@ -240,6 +266,70 @@ describe('Runtime Cloud bridge', () => {
     const audit = readFileSync(config.auditPath, 'utf8');
     assert.ok(audit.includes('[REDACTED]'));
     assert.ok(!audit.includes('secret-value'));
+  });
+
+  it('skips AgentGuard CLI commands before local audit or Cloud reporting', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-self-cli-'));
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      throw new Error('unexpected cloud request');
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+
+      const result = await protectAction({
+        config,
+        stdinText: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command: 'AGENTGUARD_AGENT_HOST=codex agentguard protect --json' },
+          session_id: 'sess_test',
+        }),
+      });
+
+      assert.equal(result, null);
+      assert.deepEqual(requests, []);
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not skip compound shell commands just because they mention agentguard', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-compound-cli-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+
+    const result = await protectAction({
+      config,
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'agentguard status; rm -rf /' },
+        session_id: 'sess_test',
+      }),
+    });
+
+    assert.ok(result);
+    assert.equal(result.decision.decision, 'block');
+    assert.equal(existsSync(config.auditPath), true);
   });
 
   it('protectAction still returns policy decision when local audit write fails', async () => {

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign as signPayload } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { homedir } from 'node:os';
@@ -19,6 +19,13 @@ export interface OpenClawCronInstallResult {
   backend?: ResolvedCronBackend;
   command?: string;
   script?: string;
+}
+
+export interface ThreatFeedCronRemovalResult {
+  name: string;
+  backend: ResolvedCronBackend;
+  removed: boolean;
+  error?: string;
 }
 
 export interface OpenClawGatewayOptions {
@@ -147,6 +154,72 @@ export async function installThreatFeedCron(
   }
 
   throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, or system.');
+}
+
+export async function removeThreatFeedCron(
+  options: {
+    name: string;
+    backend?: CronBackend | 'all';
+    agentHost?: CronAgentHost;
+    agentGuardHome?: string;
+    hermesHome?: string;
+  },
+  adapters: {
+    gateway?: OpenClawGatewayOptions;
+    runCommand?: CommandRunner;
+  } = {}
+): Promise<ThreatFeedCronRemovalResult[]> {
+  const backend = options.backend ?? 'auto';
+  if (backend === 'all') {
+    return removeThreatFeedCronFromBackends(options, ['system', 'hermes', 'openclaw', 'openclaw-gateway', 'qclaw-gateway'], adapters);
+  }
+  if (backend === 'system') {
+    return [await removeSystemThreatFeedCron(options, adapters.runCommand)];
+  }
+  if (backend === 'hermes') {
+    return [await removeHermesThreatFeedCron(options, adapters.runCommand)];
+  }
+  if (backend === 'openclaw') {
+    return removeThreatFeedCronFromBackends(options, ['openclaw', 'openclaw-gateway'], adapters);
+  }
+  if (backend === 'qclaw') {
+    return [await removeGatewayThreatFeedCron(options, qclawGatewayOptions(adapters.gateway), 'qclaw-gateway')];
+  }
+
+  const targets: ResolvedCronBackend[] = ['system'];
+  if (options.agentHost === 'hermes') targets.push('hermes');
+  if (options.agentHost === 'openclaw') targets.push('openclaw', 'openclaw-gateway');
+  if (options.agentHost === 'qclaw') targets.push('qclaw-gateway');
+  return removeThreatFeedCronFromBackends(options, targets, adapters);
+}
+
+async function removeThreatFeedCronFromBackends(
+  options: {
+    name: string;
+    agentGuardHome?: string;
+    hermesHome?: string;
+  },
+  backends: ResolvedCronBackend[],
+  adapters: {
+    gateway?: OpenClawGatewayOptions;
+    runCommand?: CommandRunner;
+  }
+): Promise<ThreatFeedCronRemovalResult[]> {
+  const results: ThreatFeedCronRemovalResult[] = [];
+  for (const backend of backends) {
+    if (backend === 'system') {
+      results.push(await removeSystemThreatFeedCron(options, adapters.runCommand));
+    } else if (backend === 'hermes') {
+      results.push(await removeHermesThreatFeedCron(options, adapters.runCommand));
+    } else if (backend === 'openclaw') {
+      results.push(await removeOpenClawNativeThreatFeedCron(options, adapters.runCommand));
+    } else if (backend === 'openclaw-gateway') {
+      results.push(await removeGatewayThreatFeedCron(options, adapters.gateway, 'openclaw-gateway'));
+    } else if (backend === 'qclaw-gateway') {
+      results.push(await removeGatewayThreatFeedCron(options, qclawGatewayOptions(adapters.gateway), 'qclaw-gateway'));
+    }
+  }
+  return results;
 }
 
 export async function installOpenClawThreatFeedCron(
@@ -498,6 +571,87 @@ async function installSystemThreatFeedCron(
     command,
     script,
   };
+}
+
+async function removeSystemThreatFeedCron(
+  options: {
+    name: string;
+    agentGuardHome?: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<ThreatFeedCronRemovalResult> {
+  const home = validateCronFilesystemPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
+  const jobId = sanitizeCronJobId(options.name);
+  try {
+    const existing = await runCommand('crontab', ['-l']).then((result) => result.stdout, () => '');
+    const next = removeAgentGuardCronBlock(existing, jobId).trimEnd();
+    if (next === existing.trimEnd()) {
+      return { name: options.name, backend: 'system', removed: false };
+    }
+    await runCommand('crontab', ['-'], next ? `${next}\n` : '');
+    await rm(join(home, 'scripts', `${jobId}.sh`), { force: true }).catch(() => undefined);
+    return { name: options.name, backend: 'system', removed: true };
+  } catch (err) {
+    return { name: options.name, backend: 'system', removed: false, error: (err as Error).message };
+  }
+}
+
+async function removeHermesThreatFeedCron(
+  options: {
+    name: string;
+    hermesHome?: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<ThreatFeedCronRemovalResult> {
+  try {
+    const existing = await runCommand('hermes', ['cron', 'list']);
+    if (!existing.stdout.includes(options.name)) {
+      return { name: options.name, backend: 'hermes', removed: false };
+    }
+    await runCommand('hermes', ['cron', 'remove', options.name]);
+    const hermesHome = (options.hermesHome ?? process.env.HERMES_HOME?.trim()) || join(homedir(), '.hermes');
+    await rm(join(hermesHome, 'scripts', `${sanitizeHermesScriptName(options.name)}.sh`), { force: true }).catch(() => undefined);
+    return { name: options.name, backend: 'hermes', removed: true };
+  } catch (err) {
+    return { name: options.name, backend: 'hermes', removed: false, error: (err as Error).message };
+  }
+}
+
+async function removeOpenClawNativeThreatFeedCron(
+  options: {
+    name: string;
+  },
+  runCommand: CommandRunner = execCommand
+): Promise<ThreatFeedCronRemovalResult> {
+  try {
+    const existing = await runCommand('openclaw', ['cron', 'list']);
+    if (!nativeCronListHasExactName(existing.stdout, options.name)) {
+      return { name: options.name, backend: 'openclaw', removed: false };
+    }
+    await runCommand('openclaw', ['cron', 'remove', options.name]);
+    return { name: options.name, backend: 'openclaw', removed: true };
+  } catch (err) {
+    return { name: options.name, backend: 'openclaw', removed: false, error: (err as Error).message };
+  }
+}
+
+async function removeGatewayThreatFeedCron(
+  options: {
+    name: string;
+  },
+  gateway: OpenClawGatewayOptions = {},
+  backend: 'openclaw-gateway' | 'qclaw-gateway' = 'openclaw-gateway'
+): Promise<ThreatFeedCronRemovalResult> {
+  try {
+    const jobs = await findOpenClawCronJobsByName(options.name, gateway);
+    if (jobs.length === 0) {
+      return { name: options.name, backend, removed: false };
+    }
+    await removeOpenClawCronJobs(jobs, gateway);
+    return { name: options.name, backend, removed: jobs.some((job) => Boolean(job.id)) };
+  } catch (err) {
+    return { name: options.name, backend, removed: false, error: (err as Error).message };
+  }
 }
 
 function threatFeedCommand(

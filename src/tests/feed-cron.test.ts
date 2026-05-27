@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   installThreatFeedCron,
   installOpenClawThreatFeedCron,
+  removeThreatFeedCron,
   openClawGatewayRequest,
   validateCronExpression,
   type CommandRunner,
@@ -198,6 +199,65 @@ describe('feed/cron', () => {
     const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
     assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
     assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+  });
+
+  it('removes the managed system crontab block without touching other entries', async () => {
+    const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-system-remove-'));
+    const current = [
+      '# existing',
+      '# AgentGuard begin agentguard-threat-feed',
+      '0 * * * * /tmp/agentguard-threat-feed.sh',
+      '# AgentGuard end agentguard-threat-feed',
+      '15 * * * * /tmp/other-job.sh',
+      '',
+    ].join('\n');
+    const runner: CommandRunner = async (command, args, input) => {
+      calls.push({ command, args, input });
+      if (command === 'crontab' && args[0] === '-l') {
+        return { stdout: current, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await removeThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        backend: 'system',
+        agentGuardHome: home,
+      },
+      { runCommand: runner }
+    );
+
+    assert.deepEqual(result, [{ name: 'agentguard-threat-feed', backend: 'system', removed: true }]);
+    assert.deepEqual(calls.map((call) => call.args[0]), ['-l', '-']);
+    assert.match(calls[1].input ?? '', /# existing/);
+    assert.match(calls[1].input ?? '', /other-job/);
+    assert.doesNotMatch(calls[1].input ?? '', /AgentGuard begin agentguard-threat-feed/);
+  });
+
+  it('removes OpenClaw gateway cron jobs by default subscribe name', async () => {
+    const gateway = fakeGateway([{ id: 'job-1', name: 'agentguard-threat-feed' }]);
+
+    const result = await removeThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        backend: 'openclaw',
+      },
+      {
+        async runCommand() {
+          throw new Error('native openclaw unavailable');
+        },
+        gateway: { request: gateway.request },
+      }
+    );
+
+    assert.deepEqual(result.map((item) => item.backend), ['openclaw', 'openclaw-gateway']);
+    assert.equal(result[0].removed, false);
+    assert.match(result[0].error ?? '', /native openclaw unavailable/);
+    assert.equal(result[1].removed, true);
+    assert.deepEqual(gateway.calls.map((call) => call.method), ['cron.list', 'cron.remove']);
+    assert.deepEqual(gateway.calls[1].params, { jobId: 'job-1' });
   });
 
   it('rejects unsafe AgentGuard home paths for system crontab jobs', async () => {

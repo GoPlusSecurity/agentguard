@@ -71,7 +71,7 @@ required post-install steps.
 Parse `$ARGUMENTS` to determine the subcommand:
 
 - **`init [args...]`** — Run `agentguard init`, especially `agentguard init --agent <agent>` after installation
-- **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals
+- **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals. AgentGuard supports either API-key auth or Agent JWT auth; only one Cloud auth method is required.
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
@@ -98,9 +98,9 @@ Supported CLI commands and options:
 | CLI command | Options | Notes |
 |---|---|---|
 | `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs templates for `claude-code`, `codex`, `openclaw`, `hermes`, or `qclaw` |
-| `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
-| `agentguard disconnect` | none | Removes local Cloud API key, connection timestamp, pending event spool, and cached Cloud policy; keeps Cloud URL, audit log, and installed hooks/templates |
-| `agentguard status` | none | Shows local config, Cloud URL/API key status, policy cache, audit path |
+| `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | API-key auth and Agent JWT auth are alternatives; configure only one. Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
+| `agentguard disconnect` | none | Removes local Cloud credentials, pending event spool, cached Cloud policy, and the managed `agentguard-threat-feed` subscribe cron job; keeps Cloud URL, audit log, and installed hooks/templates |
+| `agentguard status` | none | Shows local config, active Cloud auth method, policy cache, audit path |
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
 | `agentguard policy show` | `--json` | Shows the cached effective runtime policy, or the bundled default policy when no cache exists |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |

@@ -16,6 +16,8 @@ export interface AgentGuardConfig {
   agentRegisterUrl?: string;
   agentRegisteredAt?: string;
   connectedAt?: string;
+  threatFeedCronName?: string;
+  threatFeedCronInstalledAt?: string;
   policyCachePath: string;
   auditPath: string;
   eventSpoolPath: string;
@@ -142,6 +144,7 @@ export function connectAgentJwt(options: {
     agentRegisteredAt: new Date().toISOString(),
     connectedAt: new Date().toISOString(),
   };
+  delete next.apiKey;
   saveConfig(next);
   return next;
 }
@@ -165,6 +168,8 @@ export function disconnectCloud(): AgentGuardConfig {
   delete next.agentRegisterUrl;
   delete next.agentRegisteredAt;
   delete next.connectedAt;
+  delete next.threatFeedCronName;
+  delete next.threatFeedCronInstalledAt;
   rmSync(current.eventSpoolPath, { force: true });
   rmSync(current.policyCachePath, { force: true });
   saveConfig(next);

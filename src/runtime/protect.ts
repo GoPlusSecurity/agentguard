@@ -4,6 +4,7 @@ import type { AgentGuardConfig } from '../config.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateLocalAction } from './evaluator.js';
 import { resolveRuntimePolicy } from './policy.js';
+import { isAgentGuardCliCommand } from './self-command.js';
 import type { RuntimeAction, RuntimeAgentHost, RuntimeAuditEvent, RuntimeActionType, RuntimeDecision } from './types.js';
 
 export interface ProtectOptions {
@@ -27,6 +28,7 @@ export interface ProtectResult {
 export async function protectAction(options: ProtectOptions): Promise<ProtectResult | null> {
   const action = buildRuntimeAction(options);
   if (!action.input) return null;
+  if (isAgentGuardRuntimeAction(action)) return null;
 
   const client = new AgentGuardCloudClient(options.config);
   if (client.connected) {
@@ -77,6 +79,10 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
 
   return { decision, event, approvalChannel, policySource };
+}
+
+function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
+  return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
 }
 
 function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
