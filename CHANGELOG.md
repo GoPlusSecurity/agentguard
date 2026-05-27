@@ -9,6 +9,7 @@
 
 ### Fixed
 - Fixed Agent JWT activation messaging to describe account binding instead of email binding.
+- Fixed subscribe cron runs so Agent JWT 401 responses prompt for a manual `agentguard connect` instead of automatically re-registering the local agent.
 - Fixed native OpenClaw cron replacement and removal to delete existing jobs by job ID before reinstalling, avoiding reliance on unsupported `openclaw cron add --force` behavior.
 
 ## [1.1.18] - 2026-05-26

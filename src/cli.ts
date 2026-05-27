@@ -406,6 +406,7 @@ async function main() {
       const since = options.since as string | undefined;
       const quiet = Boolean(options.quiet);
       const cronNotifyRun = Boolean(options.cronNotifyRun);
+      const cronInternalRun = Boolean(options.cronRun || options.cronNotifyRun);
       const cronTarget = validateCronTarget(options.cronTarget);
       const cronRunSendsToOpenClaw = Boolean(options.cronRun) && cronAgentHost === 'openclaw';
       const cronExpression = options.cron && !options.cronRun
@@ -450,6 +451,11 @@ async function main() {
         await client.subscribeFeed();
       } catch (err) {
         if (err instanceof CloudRequestError && err.status === 401) {
+          if (cronInternalRun) {
+            await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+            process.exitCode = 1;
+            return;
+          }
           if (!isOpenClawAgentConfigured(config)) {
             console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
             process.exitCode = 1;
@@ -496,6 +502,11 @@ async function main() {
         advisories = await client.pullAdvisories(since);
       } catch (err) {
         if (err instanceof CloudRequestError && err.status === 401) {
+          if (cronInternalRun) {
+            await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+            process.exitCode = 1;
+            return;
+          }
           if (!isOpenClawAgentConfigured(config)) {
             console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
             process.exitCode = 1;
@@ -576,20 +587,32 @@ async function main() {
             // match, we must NOT mark the advisory seen, otherwise a
             // transient network blip silently buries a real hit.
             try {
-              const reportResult = await runCloudRequestWithAgentJwtReauth({
-                config,
-                client,
-                reason: 'reauth',
-                notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
-                operation: (activeClient) => activeClient.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+              if (cronInternalRun) {
+                await client.reportSelfCheck(advisory.id, result.matchedArtifacts, {
                   elapsedMs: result.elapsedMs,
                   warnings: result.warnings,
-                }),
-              });
-              config = reportResult.config;
-              client = reportResult.client;
-              if (reportResult.registration) registration = reportResult.registration;
+                });
+              } else {
+                const reportResult = await runCloudRequestWithAgentJwtReauth({
+                  config,
+                  client,
+                  reason: 'reauth',
+                  notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+                  operation: (activeClient) => activeClient.reportSelfCheck(advisory.id, result.matchedArtifacts, {
+                    elapsedMs: result.elapsedMs,
+                    warnings: result.warnings,
+                  }),
+                });
+                config = reportResult.config;
+                client = reportResult.client;
+                if (reportResult.registration) registration = reportResult.registration;
+              }
             } catch (err) {
+              if (cronInternalRun && err instanceof CloudRequestError && err.status === 401) {
+                await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
+                process.exitCode = 1;
+                return;
+              }
               console.error(`! Failed to report self-check for ${advisory.id}: ${(err as Error).message}`);
               processed = false;
               hardFailures += 1;
@@ -920,6 +943,31 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
   console.log('Cloud auth: not connected');
   console.log('API key: not configured');
   console.log('Agent JWT: not configured');
+}
+
+async function printSubscribeConnectRequired(
+  options: { json?: boolean; cronNotifyRun?: boolean },
+  notifyOpenClaw: boolean
+): Promise<void> {
+  const message = 'AgentGuard Cloud credential was rejected. Run `agentguard connect` again before the next subscribe cron run.';
+  if (notifyOpenClaw) {
+    const notification = await notifyOpenClawMessage(message, resolveOpenClawGatewayOptionsFromEnv(), {
+      idempotencyKeyPrefix: 'agentguard-subscribe-auth',
+    });
+    if (notification.notified) {
+      console.log('NO_REPLY');
+      return;
+    }
+    console.error(`! Could not send OpenClaw cron auth notification: ${notification.reason ?? 'Unknown error'}`);
+    return;
+  }
+  if (options.cronNotifyRun) {
+    console.log(message);
+  } else if (options.json) {
+    console.log(JSON.stringify({ success: false, error: message }, null, 2));
+  } else {
+    console.error(`! ${message}`);
+  }
 }
 
 async function refreshAgentAccountBinding(config: AgentGuardConfig): Promise<AgentGuardConfig> {
