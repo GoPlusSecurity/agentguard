@@ -518,8 +518,14 @@ if [ "$PLATFORM" = "openclaw-workspace" ] || [ "$PLATFORM" = "openclaw-managed" 
   AGENT_HOST="openclaw"
 fi
 echo "    agentguard init --agent $AGENT_HOST"
-echo "    agentguard connect"
 echo "    agentguard checkup"
+echo ""
+echo "  Optional Cloud connect:"
+if [ "$AGENT_HOST" = "openclaw" ]; then
+  echo "    agentguard connect        # uses OpenClaw Agent JWT; no API key required"
+else
+  echo "    agentguard connect        # optional; use AGENTGUARD_API_KEY for API-key auth"
+fi
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

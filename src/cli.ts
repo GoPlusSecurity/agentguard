@@ -127,7 +127,7 @@ async function main() {
       if (!apiKey) {
         let config = ensureConfig();
         if (!isOpenClawAgentConfigured(config)) {
-          throw new Error('Missing API key. Pass --key, --api-key, set AGENTGUARD_API_KEY, or run `agentguard init --agent openclaw` before using Agent JWT registration.');
+          throw new Error('AgentGuard Cloud connect supports API-key auth or OpenClaw Agent JWT registration. No API key was provided, and OpenClaw has not been initialized. Run `agentguard init --agent openclaw`, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
         }
         config = withDetectedOpenClawAgentHost(config);
         const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
