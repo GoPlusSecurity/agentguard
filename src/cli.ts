@@ -447,49 +447,36 @@ async function main() {
         }
       }
 
-      try {
-        await client.subscribeFeed();
-      } catch (err) {
-        if (err instanceof CloudRequestError && err.status === 401) {
-          if (cronInternalRun) {
-            await printSubscribeConnectRequired(options, cronRunSendsToOpenClaw);
-            process.exitCode = 1;
-            return;
-          }
-          if (!isOpenClawAgentConfigured(config)) {
-            console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
-            process.exitCode = 1;
-            return;
-          }
-          try {
-            registration = await registerAgentCredential({
-              cloudUrl: config.cloudUrl,
-              reason: 'subscribe',
-              notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
-              resetExistingJwt: true,
-            });
-            config = registration.config;
-            client = registration.client;
-            await client.subscribeFeed();
-          } catch (retryErr) {
-            if (cronNotifyRun) {
-              console.log('NO_REPLY');
-              process.exitCode = 0;
+      if (!cronInternalRun) {
+        try {
+          await client.subscribeFeed();
+        } catch (err) {
+          if (err instanceof CloudRequestError && err.status === 401) {
+            if (!isOpenClawAgentConfigured(config)) {
+              console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
+              process.exitCode = 1;
               return;
             }
-            printAgentActivationRequired(registration, retryErr);
+            try {
+              registration = await registerAgentCredential({
+                cloudUrl: config.cloudUrl,
+                reason: 'subscribe',
+                notifyOpenClaw: resolveCronAgentHost(config) === 'openclaw',
+                resetExistingJwt: true,
+              });
+              config = registration.config;
+              client = registration.client;
+              await client.subscribeFeed();
+            } catch (retryErr) {
+              printAgentActivationRequired(registration, retryErr);
+              process.exitCode = 1;
+              return;
+            }
+          } else {
+            console.error(`! Could not subscribe to AgentGuard Cloud feed: ${(err as Error).message}`);
             process.exitCode = 1;
             return;
           }
-        } else {
-          if (cronNotifyRun) {
-            console.log('NO_REPLY');
-            process.exitCode = 0;
-            return;
-          }
-          console.error(`! Could not subscribe to AgentGuard Cloud feed: ${(err as Error).message}`);
-          process.exitCode = 1;
-          return;
         }
       }
 
