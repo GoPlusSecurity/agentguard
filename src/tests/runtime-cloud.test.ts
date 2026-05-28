@@ -7,6 +7,7 @@ import { evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
+import { actionFingerprint, approvePendingApproval, cleanupExpiredApprovals, listPendingApprovals } from '../runtime/approvals.js';
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { ProtectResult } from '../runtime/protect.js';
 import { connectAgentJwt, connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
@@ -589,6 +590,91 @@ describe('Runtime Cloud bridge', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('stores pending approvals with expiration and cleans expired records', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-expiry-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+
+    const result = await protectAction({
+      config,
+      agentHost: 'codex',
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+        session_id: 'sess_approval_expiry',
+      }),
+    });
+
+    assert.equal(result?.decision.decision, 'require_approval');
+    assert.equal(result?.pendingApproval?.status, 'pending');
+    assert.ok(result?.pendingApproval?.expiresAt);
+    assert.equal(listPendingApprovals(config.approvalStorePath!).length, 1);
+
+    const removed = cleanupExpiredApprovals(
+      config.approvalStorePath!,
+      new Date(Date.parse(result!.pendingApproval!.expiresAt) + 1)
+    );
+
+    assert.equal(removed, 1);
+    assert.equal(listPendingApprovals(config.approvalStorePath!).length, 0);
+  });
+
+  it('approves one pending action once and consumes the grant on retry', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-once-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+    const stdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_once',
+    });
+
+    const blocked = await protectAction({ config, agentHost: 'codex', stdinText });
+    assert.equal(blocked?.decision.decision, 'require_approval');
+
+    const approved = approvePendingApproval(config.approvalStorePath!, {
+      actionId: blocked!.decision.actionId,
+      once: true,
+    });
+    assert.equal(approved.status, 'approved');
+
+    const allowedRetry = await protectAction({ config, agentHost: 'codex', stdinText });
+    assert.equal(allowedRetry?.decision.decision, 'allow');
+    assert.equal(allowedRetry?.event.decision, 'allow');
+    assert.equal(allowedRetry?.event.metadata?.approvedByLocalGrant, true);
+    assert.match(readFileSync(config.auditPath, 'utf8'), /approvedByLocalGrant/);
+
+    const blockedAgain = await protectAction({ config, agentHost: 'codex', stdinText });
+    assert.equal(blockedAgain?.decision.decision, 'require_approval');
+  });
+
+  it('does not collapse internal whitespace when fingerprinting approved actions', () => {
+    const base = {
+      sessionId: 'sess_fingerprint',
+      agentHost: 'codex' as const,
+      actionType: 'shell' as const,
+      toolName: 'Bash',
+      cwd: '/workspace',
+    };
+
+    assert.notEqual(
+      actionFingerprint({ ...base, input: 'printf "a  b"' }),
+      actionFingerprint({ ...base, input: 'printf "a b"' })
+    );
   });
 
   it('formats Claude Code agent approval as a PreToolUse ask response', () => {

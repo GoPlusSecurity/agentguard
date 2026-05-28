@@ -79,6 +79,14 @@ export {
   type ProtectOptions,
   type ProtectResult,
 } from './runtime/protect.js';
+export {
+  approvePendingApproval,
+  cleanupExpiredApprovals,
+  consumeApprovedApproval,
+  listPendingApprovals,
+  writePendingApproval,
+  type ApprovalRecord,
+} from './runtime/approvals.js';
 export { redactText, redactPreview, redactReasons } from './runtime/redaction.js';
 export {
   getDefaultEffectiveRuntimePolicy,

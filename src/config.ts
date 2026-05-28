@@ -21,6 +21,7 @@ export interface AgentGuardConfig {
   policyCachePath: string;
   auditPath: string;
   eventSpoolPath: string;
+  approvalStorePath?: string;
 }
 
 export interface AgentGuardPaths {
@@ -29,6 +30,7 @@ export interface AgentGuardPaths {
   policyCachePath: string;
   auditPath: string;
   eventSpoolPath: string;
+  approvalStorePath: string;
 }
 
 const DEFAULT_CLOUD_URL = 'https://agentguard.gopluslabs.io';
@@ -42,6 +44,7 @@ export function getAgentGuardPaths(): AgentGuardPaths {
     policyCachePath: join(home, 'policy-cache.json'),
     auditPath: join(home, 'audit.jsonl'),
     eventSpoolPath: join(home, 'events-spool.jsonl'),
+    approvalStorePath: join(home, 'approvals.json'),
   };
 }
 
@@ -54,6 +57,7 @@ export function defaultConfig(): AgentGuardConfig {
     policyCachePath: paths.policyCachePath,
     auditPath: paths.auditPath,
     eventSpoolPath: paths.eventSpoolPath,
+    approvalStorePath: paths.approvalStorePath,
   };
 }
 
@@ -90,6 +94,7 @@ export function loadConfig(): AgentGuardConfig {
       policyCachePath: parsed.policyCachePath || fallback.policyCachePath,
       auditPath: parsed.auditPath || fallback.auditPath,
       eventSpoolPath: parsed.eventSpoolPath || fallback.eventSpoolPath,
+      approvalStorePath: parsed.approvalStorePath || fallback.approvalStorePath,
     };
   } catch {
     return fallback;

@@ -103,6 +103,8 @@ Supported CLI commands and options:
 | `agentguard status` | none | Shows local config, active Cloud auth method, policy cache, audit path |
 | `agentguard policy pull` | `--json` | Pulls Cloud effective runtime policy into the local cache |
 | `agentguard policy show` | `--json` | Shows the cached effective runtime policy, or the bundled default policy when no cache exists |
+| `agentguard approve` | `--action-id <id>` or `--last`, `--once`, `--json` | Approves one existing pending runtime action; never approve without explicit user confirmation |
+| `agentguard approvals list` | `--json` | Lists unexpired pending runtime approvals |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
 | `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run`, `--cron-notify-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
@@ -116,6 +118,8 @@ Connect behavior:
 - Only suggest `agentguard connect --key <key>` when the user explicitly wants API-key auth or when the CLI itself reports that Agent JWT registration is unavailable. If the CLI says OpenClaw is not initialized, suggest `agentguard init --agent openclaw` and then rerun `agentguard connect`.
 
 If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` directly.
+
+When AgentGuard returns `confirm` or a block reason that includes `Approve once: agentguard approve --action-id ... --once`, do not retry the protected action until the user explicitly approves. Treat user replies such as "yes", "approve", "approved", "confirm", "confirmed", "continue", "go ahead", "execute", "run it", "同意", "确认", "批准", "继续", or "执行" as explicit approval for the most recent protected action. After approval, run exactly the provided `agentguard approve --action-id ... --once` command, then retry the original action once. If the action id is unavailable, use `agentguard approvals list --json`; only use `agentguard approve --last --once` when there is exactly one relevant unexpired pending approval. If multiple pending approvals exist, ask the user to choose a specific action id.
 
 Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. Only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.
 

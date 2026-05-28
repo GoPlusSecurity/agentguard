@@ -10,7 +10,7 @@ To install and enable the AgentGuard OpenClaw plugin:
 agentguard init --agent openclaw
 ```
 
-This creates a local plugin under `~/.openclaw/plugins/agentguard` and enables it in `~/.openclaw/openclaw.json`.
+This creates a local plugin under `~/.openclaw/plugins/agentguard`, installs the AgentGuard skill under `~/.openclaw/skills/agentguard`, and enables the plugin in `~/.openclaw/openclaw.json`.
 
 ```ts
 import { registerOpenClawPlugin } from '@goplus/agentguard';
@@ -47,6 +47,25 @@ agentguard protect
 ```
 
 AgentGuard accepts OpenClaw-style JSON with `toolName` and `params`, plus Claude-style `tool_name` and `tool_input`.
+
+OpenClaw cannot safely pause and resume a protected tool call, so AgentGuard
+blocks `require_approval` actions locally and stores a short-lived pending
+approval. The block reason includes:
+
+```bash
+agentguard approve --action-id act_local_... --once
+```
+
+Run that command only after the user explicitly approves, then retry the
+original action once. If the action id was not visible in the OpenClaw message,
+inspect pending approvals first:
+
+```bash
+agentguard approvals list --json
+```
+
+Use `agentguard approve --last --once` only when there is exactly one relevant
+unexpired pending approval; otherwise approve the specific `actionId`.
 
 ## Docker demo
 

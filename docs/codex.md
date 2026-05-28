@@ -36,3 +36,15 @@ Use these mappings for Codex-style hooks or skills:
 - MCP tool calls → `mcp_tool`
 
 When Cloud is connected, Codex events are synced as redacted previews. Confirmation still happens through the local agent permission flow, not a Cloud approval page.
+
+If a protected action returns `confirm`, AgentGuard stores a short-lived pending
+approval and includes an approval command:
+
+```bash
+agentguard approve --action-id act_local_... --once
+```
+
+Run that command only after the user explicitly approves, then retry the
+original action once. If the action id was not visible, inspect
+`agentguard approvals list --json`; use `agentguard approve --last --once`
+only when there is exactly one relevant unexpired pending approval.

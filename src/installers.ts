@@ -82,11 +82,9 @@ function installHermes(root: string, force: boolean): InstallResult {
 
 function installQClaw(root: string, force: boolean): InstallResult {
   const qclawRoot = join(root, '.qclaw');
-  const skillDir = join(qclawRoot, 'skills', 'agentguard');
   const configPath = join(qclawRoot, 'qclaw.json');
-  copyBundledSkill(skillDir, force);
   const pluginResult = installClawPlugin('qclaw', qclawRoot, configPath, force);
-  return { agent: 'qclaw', files: [skillDir, ...pluginResult.files] };
+  return { agent: 'qclaw', files: pluginResult.files };
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
@@ -179,6 +177,17 @@ Expected decisions:
 - \`warn\`: show warning and continue
 - \`confirm\`: ask for approval in the agent channel before continuing
 - \`block\`: stop the action
+
+When a response includes \`Approve once: agentguard approve --action-id ... --once\`,
+ask the user before running that approval command. Treat replies such as
+"yes", "approve", "confirm", "continue", "go ahead", "execute", "run it",
+"同意", "确认", "批准", "继续", or "执行" as explicit approval for the most
+recent protected action. After approval, run the exact
+\`agentguard approve --action-id ... --once\` command and retry the original
+action once. If the id is unavailable, inspect \`agentguard approvals list --json\`;
+use \`agentguard approve --last --once\` only when there is exactly one relevant
+unexpired pending approval. If multiple pending approvals exist, ask the user to
+choose a specific action id.
 `;
 }
 
@@ -228,16 +237,18 @@ hooks_auto_accept: false
 
 function installClawPlugin(agent: 'openclaw' | 'qclaw', root: string, configPath: string, force: boolean): InstallResult {
   const pluginDir = join(root, 'plugins', 'agentguard');
+  const skillDir = join(root, 'skills', 'agentguard');
   const packagePath = join(pluginDir, 'package.json');
   const pluginPath = join(pluginDir, 'index.js');
   const manifestPath = join(pluginDir, 'openclaw.plugin.json');
 
+  copyBundledSkill(skillDir, force);
   writeIfAllowed(packagePath, JSON.stringify(openClawPackageManifest(agent), null, 2) + '\n', force);
   writeIfAllowed(pluginPath, openClawPluginTemplate(), force);
   writeIfAllowed(manifestPath, JSON.stringify(openClawPluginManifest(), null, 2) + '\n', force);
   enableClawPlugin(configPath, pluginDir);
 
-  return { agent, files: [packagePath, pluginPath, manifestPath, configPath] };
+  return { agent, files: [skillDir, packagePath, pluginPath, manifestPath, configPath] };
 }
 
 function inferOpenClawCompanionInstallTargets(root: string, configPath: string): ClawInstallTarget[] {

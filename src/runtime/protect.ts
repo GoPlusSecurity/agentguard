@@ -1,6 +1,8 @@
 import { cwd } from 'node:process';
+import { dirname, join } from 'node:path';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
+import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateLocalAction } from './evaluator.js';
 import { resolveRuntimePolicy } from './policy.js';
@@ -22,6 +24,7 @@ export interface ProtectResult {
   decision: RuntimeDecision;
   event: RuntimeAuditEvent;
   approvalChannel?: 'agent' | null;
+  pendingApproval?: ApprovalRecord;
   policySource: 'cloud' | 'cache' | 'default' | 'cloud-decision';
 }
 
@@ -29,6 +32,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   const action = buildRuntimeAction(options);
   if (!action.input) return null;
   if (isAgentGuardRuntimeAction(action)) return null;
+  const approvalStorePath = resolveApprovalStorePath(options.config);
 
   const client = new AgentGuardCloudClient(options.config);
   if (client.connected) {
@@ -48,6 +52,13 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
     policySource = source;
   }
+
+  const approvedGrant = decision.decision === 'require_approval'
+    ? consumeApprovedApproval(approvalStorePath, action)
+    : null;
+  if (approvedGrant) {
+    decision = { ...decision, decision: 'allow' };
+  }
   if (isEmptySafeDecision(decision)) return null;
 
   const event: RuntimeAuditEvent = {
@@ -62,6 +73,14 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
       ...(action.metadata || {}),
       evaluation: policySource === 'cloud-decision' ? 'cloud' : 'local-oss',
       policySource,
+      ...(approvedGrant
+        ? {
+            approvedByLocalGrant: true,
+            approvalActionId: approvedGrant.actionId,
+            approvalOnce: approvedGrant.once,
+            approvalExpiresAt: approvedGrant.expiresAt,
+          }
+        : {}),
     },
   };
 
@@ -78,12 +97,19 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (decision.decision === 'require_approval') {
     approvalChannel = 'agent';
   }
+  const pendingApproval = decision.decision === 'require_approval' && !approvedGrant
+    ? writePendingApproval(approvalStorePath, action, decision)
+    : undefined;
 
-  return { decision, event, approvalChannel, policySource };
+  return { decision, event, approvalChannel, pendingApproval, policySource };
 }
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+}
+
+function resolveApprovalStorePath(config: AgentGuardConfig): string {
+  return config.approvalStorePath || join(dirname(config.auditPath), 'approvals.json');
 }
 
 function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
@@ -113,6 +139,8 @@ export function formatProtectResult(result: ProtectResult, json = false): string
       riskLevel: result.decision.riskLevel,
       reasons: result.decision.reasons,
       approvalChannel: result.approvalChannel,
+      approvalCommand: result.pendingApproval ? approvalCommand(result.pendingApproval) : undefined,
+      approvalExpiresAt: result.pendingApproval?.expiresAt,
       policySource: result.policySource,
     }, null, 2);
   }
@@ -122,7 +150,7 @@ export function formatProtectResult(result: ProtectResult, json = false): string
     return `BLOCKED by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
   }
   if (result.decision.decision === 'require_approval') {
-    return `CONFIRM required by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
+    return `CONFIRM required by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).${approvalHint(result)}`;
   }
   if (result.decision.decision === 'warn') {
     return `WARN from AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
@@ -162,6 +190,8 @@ function formatAgentApproval(result: ProtectResult): string | null {
       reasons: result.decision.reasons,
       approvalChannel: 'agent',
       message: reason,
+      approvalCommand: result.pendingApproval ? approvalCommand(result.pendingApproval) : undefined,
+      approvalExpiresAt: result.pendingApproval?.expiresAt,
     }, null, 2);
   }
 
@@ -177,8 +207,18 @@ function formatApprovalReason(result: ProtectResult): string {
   return (
     `GoPlus AgentGuard requires approval for this action` +
     ` (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}).` +
-    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '')
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
+    approvalHint(result)
   );
+}
+
+function approvalHint(result: ProtectResult): string {
+  if (!result.pendingApproval) return '';
+  return ` Approve once: ${approvalCommand(result.pendingApproval)}`;
+}
+
+function approvalCommand(record: ApprovalRecord): string {
+  return `agentguard approve --action-id ${record.actionId} --once`;
 }
 
 function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
