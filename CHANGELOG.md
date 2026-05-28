@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `agentguard subscribe` cron internals (`--cron-run` and `--cron-notify-run`) now only pull feed advisories instead of re-subscribing on every scheduled run, preserving Cloud-side unsubscribe choices.
+
+### Fixed
+- Supported agent CLI commands such as `openclaw`, `qclaw`, `hermes`, `codex`, and `claude` are now treated like AgentGuard self-commands so normal agent management commands are not audited, reported, or blocked by AgentGuard hooks while compound shell commands remain protected.
+
 ## [1.1.20] - 2026-05-27
 
 ### Changed
