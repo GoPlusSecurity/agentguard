@@ -675,7 +675,8 @@ function runtimeResultToBeforeToolCallResult(
     (decision === 'require_approval'
       ? ' OpenClaw cannot safely resume this call after an external approval, so AgentGuard blocked it locally.'
       : '') +
-    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
+    (result.pendingApproval ? ` Approve once: agentguard approve --action-id ${result.pendingApproval.actionId} --once` : '');
 
   if (decision === 'require_approval') {
     return { block: true, blockReason: reason };

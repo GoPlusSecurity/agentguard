@@ -22,6 +22,7 @@ import {
 import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
+import { approvePendingApproval, listPendingApprovals } from './runtime/approvals.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller, type InstallResult } from './installers.js';
@@ -358,6 +359,55 @@ async function main() {
         if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
       }
       process.exitCode = result.risk_level === 'critical' ? 2 : 0;
+    });
+
+  program
+    .command('approve')
+    .description('Approve one pending runtime action')
+    .option('--action-id <id>', 'Pending action id returned by agentguard protect')
+    .option('--last', 'Approve the most recent unambiguous pending action')
+    .option('--once', 'Approve only the next matching retry')
+    .option('--json', 'Print JSON output')
+    .action((options) => {
+      if (!options.once) {
+        throw new Error('Approvals must be scoped with --once.');
+      }
+      const config = ensureConfig();
+      const approved = approvePendingApproval(config.approvalStorePath!, {
+        actionId: options.actionId,
+        last: Boolean(options.last),
+        once: true,
+        sessionId: process.env.AGENTGUARD_SESSION_ID,
+      });
+      if (options.json) {
+        console.log(JSON.stringify({ success: true, approval: approved }, null, 2));
+      } else {
+        console.log(`Approved once: ${approved.actionId}`);
+        console.log(`Expires: ${approved.expiresAt}`);
+      }
+    });
+
+  const approvals = program
+    .command('approvals')
+    .description('Inspect pending runtime approvals');
+
+  approvals
+    .command('list')
+    .description('List unexpired pending approvals')
+    .option('--json', 'Print JSON output')
+    .action((options) => {
+      const config = ensureConfig();
+      const pending = listPendingApprovals(config.approvalStorePath!);
+      if (options.json) {
+        console.log(JSON.stringify({ success: true, approvals: pending }, null, 2));
+      } else if (pending.length === 0) {
+        console.log('No pending approvals.');
+      } else {
+        for (const approval of pending) {
+          console.log(`${approval.actionId} ${approval.actionType} ${approval.toolName} expires=${approval.expiresAt}`);
+          console.log(`  ${approval.inputPreview}`);
+        }
+      }
     });
 
   program

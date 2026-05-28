@@ -2,9 +2,13 @@
 
 ## [1.1.22] - 2026-05-28
 
+### Added
+- Added local one-time runtime approval grants: `agentguard approve --action-id <id> --once`, `agentguard approve --last --once`, and `agentguard approvals list` let agents retry a previously intercepted protected action after explicit user approval, with short-lived pending approvals and audited approved retries.
+
 ### Changed
 - `agentguard subscribe` cron internals (`--cron-run` and `--cron-notify-run`) now only pull feed advisories instead of re-subscribing on every scheduled run, preserving Cloud-side unsubscribe choices.
 - OpenClaw Cloud connect guidance now documents the Agent JWT flow explicitly: initialized OpenClaw installs can run `agentguard connect` without an API key, while API-key auth remains available for explicit API-key connections.
+- `agentguard init --agent openclaw` now installs the AgentGuard skill alongside the runtime plugin so OpenClaw agents can learn the local approval/retry flow.
 
 ### Fixed
 - Supported agent CLI commands such as `openclaw`, `qclaw`, `hermes`, `codex`, and `claude` are now treated like AgentGuard self-commands so normal agent management commands are not audited, reported, or blocked by AgentGuard hooks while compound shell commands remain protected.

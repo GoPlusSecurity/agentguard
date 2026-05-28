@@ -186,8 +186,11 @@ describe('init CLI', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-force-default-cwd-'));
     const cliPath = resolve('dist', 'cli.js');
     const pluginDir = join(cwd, '.openclaw', 'plugins', 'agentguard');
+    const skillDir = join(cwd, '.openclaw', 'skills', 'agentguard');
     mkdirSync(pluginDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(pluginDir, 'index.js'), 'old plugin template');
+    writeFileSync(join(skillDir, 'SKILL.md'), 'old skill template');
 
     await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'openclaw'], {
       cwd,
@@ -197,6 +200,9 @@ describe('init CLI', () => {
     const template = readFileSync(join(pluginDir, 'index.js'), 'utf8');
     assert.notEqual(template, 'old plugin template');
     assert.match(template, /loadAgentGuard/);
+    const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    assert.notEqual(skill, 'old skill template');
+    assert.match(skill, /agentguard approve --last --once/);
   });
 
   it('preserves existing agent templates with --no-force', async () => {
@@ -204,8 +210,11 @@ describe('init CLI', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-no-force-cwd-'));
     const cliPath = resolve('dist', 'cli.js');
     const pluginDir = join(cwd, '.openclaw', 'plugins', 'agentguard');
+    const skillDir = join(cwd, '.openclaw', 'skills', 'agentguard');
     mkdirSync(pluginDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(pluginDir, 'index.js'), 'old plugin template');
+    writeFileSync(join(skillDir, 'SKILL.md'), 'old skill template');
 
     await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'openclaw', '--no-force'], {
       cwd,
@@ -213,6 +222,7 @@ describe('init CLI', () => {
     });
 
     assert.equal(readFileSync(join(pluginDir, 'index.js'), 'utf8'), 'old plugin template');
+    assert.equal(readFileSync(join(skillDir, 'SKILL.md'), 'utf8'), 'old skill template');
   });
 
   it('accepts Hermes and QClaw agent installers', async () => {

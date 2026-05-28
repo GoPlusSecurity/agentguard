@@ -101,13 +101,14 @@ describe('Agent template installers', () => {
     const config = JSON.parse(readFileSync(join(dir, '.qclaw', 'qclaw.json'), 'utf8'));
 
     assert.equal(result.agent, 'qclaw');
+    assert.ok(result.files.includes(join(dir, '.qclaw', 'skills', 'agentguard')));
     assert.ok(existsSync(join(dir, '.qclaw', 'skills', 'agentguard', 'SKILL.md')));
     assert.deepEqual(packageJson.qclaw.extensions, ['./index.js']);
     assert.equal(config.plugins.entries.agentguard.enabled, true);
     assert.deepEqual(config.plugins.load.paths, [pluginDir]);
   });
 
-  it('writes and enables OpenClaw plugin template', () => {
+  it('writes OpenClaw skill and enables plugin template', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-'));
     const result = installAgentTemplates('openclaw', { cwd: dir });
 
@@ -117,7 +118,9 @@ describe('Agent template installers', () => {
     const manifest = readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8');
     const config = JSON.parse(readFileSync(join(dir, '.openclaw', 'openclaw.json'), 'utf8'));
 
-    assert.equal(result.files.length, 4);
+    assert.equal(result.files.length, 5);
+    assert.ok(result.files.includes(join(dir, '.openclaw', 'skills', 'agentguard')));
+    assert.ok(existsSync(join(dir, '.openclaw', 'skills', 'agentguard', 'SKILL.md')));
     assert.deepEqual(packageJson.openclaw.extensions, ['./index.js']);
     assert.deepEqual(packageJson.openclaw.runtimeExtensions, ['./index.js']);
     assert.ok(template.includes('registerOpenClawPlugin'));
@@ -147,10 +150,14 @@ describe('Agent template installers', () => {
       const workspaceConfig = JSON.parse(readFileSync(join(workspaceRoot, 'openclaw.json'), 'utf8'));
 
       assert.ok(result.files.includes(join(mainRoot, 'openclaw.json')));
+      assert.ok(existsSync(join(mainRoot, 'skills', 'agentguard', 'SKILL.md')));
+      assert.ok(existsSync(join(workspaceRoot, 'skills', 'agentguard', 'SKILL.md')));
       assert.ok(existsSync(join(mainPluginDir, 'openclaw.plugin.json')));
       assert.ok(existsSync(join(workspacePluginDir, 'openclaw.plugin.json')));
       assert.deepEqual(mainConfig.plugins.load.paths, [mainPluginDir]);
       assert.deepEqual(workspaceConfig.plugins.load.paths, [workspacePluginDir]);
+      assert.ok(existsSync(join(mainRoot, 'skills', 'agentguard', 'SKILL.md')));
+      assert.ok(existsSync(join(workspaceRoot, 'skills', 'agentguard', 'SKILL.md')));
     } finally {
       if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
       else process.env.OPENCLAW_STATE_DIR = previousStateDir;
