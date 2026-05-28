@@ -23,6 +23,18 @@ export default function setup(api) {
 }
 ```
 
+## Cloud connect
+
+After OpenClaw initialization, run:
+
+```bash
+agentguard connect
+```
+
+No API key is required for the OpenClaw flow. AgentGuard registers a local Agent
+JWT, prints an activation link, and may send the link to the latest OpenClaw
+channel. Open that link to bind the local agent to your account.
+
 ## Runtime hook shape
 
 For direct hook integration, send events to:
