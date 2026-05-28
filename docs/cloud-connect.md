@@ -13,12 +13,25 @@ This creates `~/.agentguard/config.json`, `~/.agentguard/audit.jsonl`, and local
 
 ## Connect Cloud
 
+OpenClaw users can connect without an API key after initialization:
+
+```bash
+agentguard init --agent openclaw
+agentguard connect
+```
+
+In this mode, `connect` registers a local Agent JWT, prints an activation link,
+and may send that link to the latest OpenClaw channel. Open the link to bind the
+local agent to your AgentGuard account.
+
+API-key auth is also supported:
+
 ```bash
 AGENTGUARD_API_KEY=ag_live_xxxxx \
   agentguard connect --url https://agentguard.gopluslabs.io
 ```
 
-`connect` stores the API key locally, fetches `/api/v1/policies/effective`, and caches the policy. If Cloud is unavailable, AgentGuard keeps enforcing with cached policy or the bundled default policy.
+With API-key auth, `connect` stores the API key locally, fetches `/api/v1/policies/effective`, and caches the policy. With Agent JWT auth, `connect` stores the local agent credential instead of an API key. If Cloud is unavailable, AgentGuard keeps enforcing with cached policy or the bundled default policy.
 
 Prefer `AGENTGUARD_API_KEY` or an ignored `.env.local` file over passing secrets as CLI flags, because shell history can persist command-line arguments.
 

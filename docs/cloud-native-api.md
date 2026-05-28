@@ -91,10 +91,24 @@ The script installs `@goplus/agentguard`, writes a safe fallback local config, t
 
 ```bash
 agentguard init --agent "$AGENTGUARD_AGENT" --cloud "$AGENTGUARD_CLOUD_URL"
+```
+
+When the effective agent host is OpenClaw, the script should connect without an
+API key:
+
+```bash
+agentguard connect --cloud "$AGENTGUARD_CLOUD_URL"
+```
+
+The CLI registers a local Agent JWT and prints an activation link. For other
+agent hosts, or when the user explicitly chooses API-key auth, the script should
+call:
+
+```bash
 agentguard connect --cloud "$AGENTGUARD_CLOUD_URL" --api-key "$AGENTGUARD_API_KEY"
 ```
 
-Native CLI implementations should support `--cloud` as an alias for the Cloud URL and `--api-key` as an alias for the API key.
+Native CLI implementations should support `--cloud` as an alias for the Cloud URL and `--api-key` as an alias for the API key. Installers that accept `agent=auto` should use the agent host persisted by `agentguard init --agent auto` when choosing between Agent JWT and API-key auth.
 
 ### Health check
 
