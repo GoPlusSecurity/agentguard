@@ -1,4 +1,13 @@
-const AGENTGUARD_BINARIES = new Set(['agentguard', 'agentguard-mcp']);
+const SUPPORTED_AGENT_BINARIES = new Set([
+  'agentguard',
+  'agentguard-mcp',
+  'claude',
+  'claude-code',
+  'codex',
+  'openclaw',
+  'qclaw',
+  'hermes',
+]);
 const SHELL_CONTROL_RE = /[;&|<>`]|\$\(/;
 
 export function isAgentGuardCliCommand(command: string): boolean {
@@ -19,7 +28,7 @@ export function isAgentGuardCliCommand(command: string): boolean {
     index += 1;
   }
 
-  return AGENTGUARD_BINARIES.has(basename(tokens[index] || ''));
+  return SUPPORTED_AGENT_BINARIES.has(basename(tokens[index] || ''));
 }
 
 function skipAssignments(tokens: string[], start: number): number {

@@ -24,6 +24,16 @@ describe('Integration: Claude Code evaluateHook', () => {
     assert.equal(result.decision, 'allow');
   });
 
+  it('should ALLOW supported agent CLI commands', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'openclaw gateway restart' },
+    }, ctx.options);
+    assert.equal(result.decision, 'allow');
+  });
+
   it('should DENY rm -rf /', async () => {
     ctx = createTestContext('balanced');
     const result = await evaluateHook(ctx.claudeAdapter, {

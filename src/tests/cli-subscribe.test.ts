@@ -178,6 +178,76 @@ const advisory: Advisory = {
 };
 
 describe('CLI subscribe command modes', () => {
+  it('subscribes before pulling advisories during interactive subscribe runs', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(`${req.method} ${req.url}`);
+      res.setHeader('content-type', 'application/json');
+      if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+        res.end(JSON.stringify({ success: true, data: { id: 'sub_test', status: 'active' } }));
+        return;
+      }
+      if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
+        res.end(JSON.stringify({ success: true, data: { advisories: [] } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-order-'));
+
+      const result = await runCli(['subscribe'], home, cloudUrl);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.deepEqual(requests, [
+        'POST /api/v1/feed/subscribe',
+        'GET /api/v1/feed/advisories',
+      ]);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('cron internal subscribe runs pull advisories without subscribing first', async () => {
+    for (const args of [
+      ['subscribe', '--json', '--cron-run'],
+      ['subscribe', '--cron-notify-run'],
+    ]) {
+      const requests: string[] = [];
+      const server = http.createServer((req, res) => {
+        requests.push(`${req.method} ${req.url}`);
+        res.setHeader('content-type', 'application/json');
+        if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
+          res.end(JSON.stringify({ success: true, data: { advisories: [] } }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false }));
+      });
+      await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+      try {
+        const address = server.address();
+        assert.ok(address && typeof address === 'object');
+        const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+        const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-cron-order-'));
+
+        const result = await runCli(args, home, cloudUrl);
+
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.stderr, '');
+        assert.deepEqual(requests, ['GET /api/v1/feed/advisories']);
+      } finally {
+        await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+      }
+    }
+  });
+
   it('without --quiet notifies about new advisories without reporting self-check matches', async () => {
     await withFeedServer([advisory], async (cloudUrl, reports) => {
       const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-'));
@@ -468,7 +538,7 @@ describe('CLI subscribe command modes', () => {
         }));
         return;
       }
-      if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+      if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
         authHeaders.push(req.headers.authorization);
         res.statusCode = 401;
         res.setHeader('content-type', 'application/json');

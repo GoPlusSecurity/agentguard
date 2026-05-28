@@ -307,6 +307,57 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('skips supported agent CLI commands before local audit or Cloud reporting', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-cli-'));
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      throw new Error('unexpected cloud request');
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+
+      for (const command of [
+        'openclaw gateway restart',
+        'qclaw gateway restart',
+        'hermes config reload',
+        'codex --version',
+        'claude mcp list',
+        'claude-code --version',
+        'env AGENTGUARD_AGENT_HOST=openclaw openclaw gateway restart',
+        'command codex --version',
+      ]) {
+        const result = await protectAction({
+          config,
+          stdinText: JSON.stringify({
+            tool_name: 'Bash',
+            tool_input: { command },
+            session_id: 'sess_test',
+          }),
+        });
+
+        assert.equal(result, null);
+      }
+
+      assert.deepEqual(requests, []);
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('does not skip compound shell commands just because they mention agentguard', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-compound-cli-'));
     const config: AgentGuardConfig = {
@@ -323,6 +374,31 @@ describe('Runtime Cloud bridge', () => {
       stdinText: JSON.stringify({
         tool_name: 'Bash',
         tool_input: { command: 'agentguard status; rm -rf /' },
+        session_id: 'sess_test',
+      }),
+    });
+
+    assert.ok(result);
+    assert.equal(result.decision.decision, 'block');
+    assert.equal(existsSync(config.auditPath), true);
+  });
+
+  it('does not skip compound shell commands just because they mention agent CLIs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-compound-cli-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+
+    const result = await protectAction({
+      config,
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'openclaw gateway status; rm -rf /' },
         session_id: 'sess_test',
       }),
     });
@@ -358,6 +434,107 @@ describe('Runtime Cloud bridge', () => {
     });
 
     assert.equal(result?.decision.decision, 'block');
+  });
+
+  it('does not audit or sync empty safe local runtime decisions', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-safe-noop-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/api/v1/policies/effective')) {
+        return jsonResponse({ success: true, data: policy });
+      }
+      if (url.endsWith('/api/v1/events/ingest')) {
+        throw new Error('safe decisions should not be synced');
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+
+      const result = await protectAction({
+        config,
+        stdinText: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command: 'echo hello' },
+          session_id: 'sess_safe',
+        }),
+      });
+
+      assert.equal(result, null);
+      assert.deepEqual(requests, ['https://agentguard.example/api/v1/policies/effective']);
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not intercept empty safe Cloud require_approval decisions', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-cloud-safe-noop-'));
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/api/v1/actions/evaluate')) {
+        return jsonResponse({
+          success: true,
+          data: {
+            actionId: 'act_cloud_empty_safe',
+            decision: 'require_approval',
+            riskScore: 0,
+            riskLevel: 'safe',
+            reasons: [],
+            policyVersion: 'cloud-test',
+          },
+        });
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+
+      const result = await protectAction({
+        config,
+        decisionMode: 'cloud',
+        stdinText: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command: 'echo hello' },
+          session_id: 'sess_cloud_safe',
+        }),
+      });
+
+      assert.equal(result, null);
+      assert.deepEqual(requests, ['https://agentguard.example/api/v1/actions/evaluate']);
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('syncs redacted audit events and uses agent approval by default on require_approval', async () => {
