@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -148,6 +148,16 @@ async function withOpenClawGateway<T>(
         res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { ok: true } }));
         return;
       }
+      if (body.method === 'cron.list') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { jobs: [] } }));
+        return;
+      }
+      if (body.method === 'cron.add') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { ok: true } }));
+        return;
+      }
       res.statusCode = 404;
       res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { message: 'not found' } }));
     });
@@ -280,6 +290,42 @@ describe('CLI subscribe command modes', () => {
       assert.match(result.stdout, /Self-check found 1 match/);
       assert.equal(reports.length, 1);
       assert.deepEqual((reports[0] as { advisoryId: string }).advisoryId, 'AGS-2026-subscribe');
+    });
+  });
+
+  it('--quiet --cron prints the initial pull and self-check summary even with no new advisories', async () => {
+    await withFeedServer([], async (cloudUrl) => {
+      await withOpenClawGateway(async (env, calls) => {
+        const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-cron-initial-'));
+        const bin = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-empty-bin-'));
+        const fakeOpenClaw = join(bin, 'openclaw');
+        writeFileSync(fakeOpenClaw, '#!/usr/bin/env sh\nexit 127\n');
+        chmodSync(fakeOpenClaw, 0o755);
+        writeFileSync(join(home, 'config.json'), JSON.stringify({
+          version: 1,
+          level: 'balanced',
+          cloudUrl,
+          apiKey: 'ag_live_test_key_123456',
+          agentHost: 'openclaw',
+          agentHosts: ['openclaw'],
+          policyCachePath: join(home, 'policy-cache.json'),
+          auditPath: join(home, 'audit.jsonl'),
+          eventSpoolPath: join(home, 'events-spool.jsonl'),
+        }));
+
+        const result = await runCliNoConfigWrite(
+          ['subscribe', '--cron', '*/5 * * * *', '--quiet', '--cron-target', 'openclaw'],
+          home,
+          { ...env, PATH: `${bin}:${process.env.PATH || ''}` }
+        );
+
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.stderr, '');
+        assert.match(result.stdout, /Pulled 0 advisory record\(s\); 0 new\./);
+        assert.match(result.stdout, /Self-check found 0 match\(es\) across 0 new advisory record\(s\)\./);
+        assert.match(result.stdout, /Installed openclaw-gateway cron job "agentguard-threat-feed"/);
+        assert.deepEqual(calls.map((call) => call.method), ['cron.list', 'cron.add']);
+      });
     });
   });
 

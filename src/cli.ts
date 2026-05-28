@@ -162,7 +162,7 @@ async function main() {
           registration = await registerAgentCredential({
             cloudUrl,
             reason: 'connect',
-            notifyOpenClaw: true,
+            notifyOpenClaw: false,
             resetExistingJwt: true,
           });
         } catch (err) {
@@ -702,6 +702,8 @@ async function main() {
             backend: cronTarget,
             agentHost: resolveCronAgentHost(config),
             agentGuardHome: getAgentGuardPaths().home,
+          }, {
+            gateway: resolveOpenClawGatewayOptionsFromEnv(),
           });
           saveConfig({
             ...config,
@@ -763,8 +765,8 @@ async function main() {
       console.log(`Pulled ${advisories.length} advisory record(s); ${fresh.length} new.`);
       if (!quiet && fresh.length > 0) {
         console.log(summary.notification?.body ?? formatNewAdvisoryNotification(fresh));
-      } else if (quiet && fresh.length > 0) {
-        console.log(`Self-check found ${totalMatches} match(es) across the new advisories.`);
+      } else if (quiet && (fresh.length > 0 || summary.cron.result)) {
+        console.log(`Self-check found ${totalMatches} match(es) across ${fresh.length} new advisory record(s).`);
         for (const r of results) {
           if (r.matchedArtifacts.length === 0) continue;
           console.log(`  - ${r.advisoryId}: ${r.matchedArtifacts.length} match(es)`);
