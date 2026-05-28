@@ -29,9 +29,15 @@ export class OpenClawAdapter implements HookAdapter {
 
   parseInput(raw: unknown): HookInput {
     const event = raw as Record<string, unknown>;
+    const toolInput =
+      (event.params as Record<string, unknown>) ||
+      (event.toolInput as Record<string, unknown>) ||
+      (event.tool_input as Record<string, unknown>) ||
+      (event.args as Record<string, unknown>) ||
+      {};
     return {
-      toolName: (event.toolName as string) || '',
-      toolInput: (event.params as Record<string, unknown>) || {},
+      toolName: (event.toolName as string) || (event.tool_name as string) || '',
+      toolInput,
       eventType: 'pre', // before_tool_call = pre
       raw: event,
     };

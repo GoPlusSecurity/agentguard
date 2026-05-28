@@ -33,6 +33,17 @@ export async function evaluateLocalAction(
   policy: EffectiveRuntimePolicy,
   action: RuntimeAction
 ): Promise<RuntimeDecision> {
+  if (isAllowedByCommandPolicy(policy, action)) {
+    return {
+      actionId: `act_local_${Date.now()}_${process.pid}`,
+      decision: 'allow',
+      riskScore: 0,
+      riskLevel: 'safe',
+      reasons: [],
+      policyVersion: policy.policyVersion || 'runtime-local-v0.1',
+    };
+  }
+
   const customReasons = customPolicyReasons(policy, action);
   const ossDecision = await evaluateWithOssActionScanner(policy, action);
   const ossReasons = (ossDecision?.risk_tags || []).map((tag, index) =>
@@ -51,6 +62,11 @@ export async function evaluateLocalAction(
     reasons,
     policyVersion: policy.policyVersion || 'runtime-local-v0.1',
   };
+}
+
+function isAllowedByCommandPolicy(policy: EffectiveRuntimePolicy, action: RuntimeAction): boolean {
+  if (action.actionType !== 'shell') return false;
+  return policy.allowedCommandPatterns.some((pattern) => matchesAllowedCommand(action.input, pattern));
 }
 
 function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeAction): PolicyReason[] {
@@ -246,6 +262,46 @@ function matchesPattern(input: string, pattern: string): boolean {
   if (input.includes(pattern)) return true;
   const compact = pattern.replace(/\s*\.\.\.\s*/g, ' ');
   return compact !== pattern && input.includes(compact);
+}
+
+function matchesAllowedCommand(input: string, pattern: string): boolean {
+  const trimmedInput = input.trim();
+  const trimmedPattern = pattern.trim();
+  if (!trimmedInput || !trimmedPattern) return false;
+
+  const inputHasControl = hasShellControl(trimmedInput);
+  const patternHasControl = hasShellControl(trimmedPattern);
+  if (inputHasControl && !patternHasControl) return false;
+
+  const normalizedInput = normalizeCommand(trimmedInput);
+  const normalizedPattern = normalizeCommand(trimmedPattern);
+  if (normalizedPattern === '*') return true;
+  if (/[?*]/.test(normalizedPattern) || normalizedPattern.includes('...')) {
+    const regex = new RegExp(`^${globCommandToRegexSource(normalizedPattern)}$`);
+    return regex.test(normalizedInput);
+  }
+
+  return normalizedInput === normalizedPattern ||
+    (!inputHasControl && normalizedInput.startsWith(`${normalizedPattern} `));
+}
+
+function normalizeCommand(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function hasShellControl(command: string): boolean {
+  return /[;&|<>`\n\r\t]|\$\(/.test(command);
+}
+
+function globCommandToRegexSource(pattern: string): string {
+  const normalized = pattern.replace(/\s*\.\.\.\s*/g, ' * ');
+  let source = '';
+  for (const char of normalized) {
+    if (char === '*') source += '.*';
+    else if (char === '?') source += '.';
+    else source += escapeRegex(char);
+  }
+  return source;
 }
 
 function matchesPath(input: string, pattern: string): boolean {

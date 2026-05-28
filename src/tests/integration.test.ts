@@ -264,6 +264,21 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(result, undefined, 'Ordinary OpenClaw exec command should be allowed');
   });
 
+  it('should allow AgentGuard CLI commands from OpenClaw args/cmd payloads', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'terminal',
+      args: { cmd: 'agentguard disconnect' },
+    });
+    assert.equal(result, undefined, 'AgentGuard self-command should be allowed');
+  });
+
   it('should run runtime protection for OpenClaw tool calls', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();

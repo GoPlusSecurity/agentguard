@@ -586,6 +586,10 @@ function mapOpenClawToolToRuntimeAction(
     return 'network';
   }
 
+  const record = isRecord(event) ? event : undefined;
+  if (typeof record?.command === 'string' || typeof record?.cmd === 'string') {
+    return 'shell';
+  }
   const params = readOpenClawParams(event);
   if (typeof params?.command === 'string' || typeof params?.cmd === 'string') {
     return 'shell';
@@ -617,8 +621,14 @@ function mapOpenClawToolToRuntimeAction(
 
 function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
   const record = isRecord(event) ? event : undefined;
-  const params = record?.params ?? record?.toolInput ?? record?.tool_input;
-  return isRecord(params) ? params : undefined;
+  const params = firstRecord(
+    record?.params,
+    record?.toolInput,
+    record?.tool_input,
+    record?.args,
+    record?.input
+  );
+  return params;
 }
 
 function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
@@ -708,6 +718,13 @@ function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['dec
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  for (const value of values) {
+    if (isRecord(value)) return value;
+  }
+  return undefined;
 }
 
 /**
