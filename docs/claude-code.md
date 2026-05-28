@@ -36,6 +36,7 @@ Recommended matchers:
 ## Decisions
 
 - `allow` and `warn` exit `0`
-- `require_approval` and `block` exit `2`
+- `require_approval` is returned as Claude Code's native `ask` response when available
+- `block` exits `2`
 
-Connected Cloud approvals print the approval id when creation succeeds.
+Cloud-connected runs still enforce locally. AgentGuard does not require a Cloud approval page for runtime confirmation.

@@ -35,4 +35,4 @@ Use these mappings for Codex-style hooks or skills:
 - browser/network fetches → `network`
 - MCP tool calls → `mcp_tool`
 
-When Cloud is connected, Codex events are synced as redacted previews and can participate in Cloud approvals.
+When Cloud is connected, Codex events are synced as redacted previews. Confirmation still happens through the local agent permission flow, not a Cloud approval page.

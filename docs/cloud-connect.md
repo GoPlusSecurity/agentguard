@@ -1,6 +1,6 @@
 # Connect AgentGuard OSS to AgentGuard Cloud
 
-AgentGuard is local-first. Cloud is optional and adds hosted policy, redacted audit sync, session timelines, and approval workflows.
+AgentGuard is local-first. Cloud is optional and adds hosted policy, redacted audit sync, and session timelines.
 
 ## Install and initialize
 
@@ -41,7 +41,7 @@ Prefer `AGENTGUARD_API_KEY` or an ignored `.env.local` file over passing secrets
 2. AgentGuard evaluates locally by default.
 3. Local audit is written to `~/.agentguard/audit.jsonl`.
 4. Connected clients sync redacted audit events to `/api/v1/events/ingest`.
-5. `require_approval` creates `/api/v1/approvals` and blocks the action until reviewed.
+5. `require_approval` is handled by the agent host's native permission channel when one is available. If the host cannot safely resume an approved call, AgentGuard blocks locally and asks the user to retry only after intentionally changing local policy.
 
 Use `AGENTGUARD_DECISION_MODE=cloud` or `agentguard protect --decision-mode cloud` only when Cloud should be authoritative for a specific hook.
 

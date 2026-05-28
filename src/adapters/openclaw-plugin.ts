@@ -672,6 +672,9 @@ function runtimeResultToBeforeToolCallResult(
   const reason =
     `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
     ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
+    (decision === 'require_approval'
+      ? ' OpenClaw cannot safely resume this call after an external approval, so AgentGuard blocked it locally.'
+      : '') +
     (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
   if (decision === 'require_approval') {

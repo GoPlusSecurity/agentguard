@@ -25,7 +25,7 @@ X-API-Key: ag_live_xxxxx
 3. Evaluate runtime actions locally using cached policy and the bundled local engine.
 4. Write local audit JSONL before any Cloud sync.
 5. Upload redacted audit events to `POST /api/v1/events/ingest`.
-6. For `require_approval`, create `POST /api/v1/approvals` and block the action until reviewed.
+6. For `require_approval`, use the local agent host's native permission channel when supported. If the host cannot safely resume a reviewed call, block locally and ask the user to retry only after intentionally changing local policy.
 7. Use `GET /api/v1/sessions/:sessionId/timeline` for review/debug UI.
 
 If Cloud is unavailable, continue local enforcement using cached policy, then bundled default policy.
@@ -276,126 +276,20 @@ Limits and behavior:
 - `input` should be a redacted preview, not full file content or full prompt content.
 - If upload fails, spool locally and retry later.
 
-### Create approval
+### Runtime approvals
 
-```http
-POST /api/v1/approvals
-Content-Type: application/json
-X-API-Key: ag_live_xxxxx
-```
+There is no Cloud approval inbox in the current native runtime flow. Native
+clients must not tell users to approve protected runtime actions in Cloud.
 
-Request:
+When a decision returns `require_approval`:
 
-```json
-{
-  "actionId": "act_local_123",
-  "sessionId": "sess_local_123",
-  "agentHost": "claude-code",
-  "actionType": "file_read",
-  "toolName": "Read",
-  "input": "~/.ssh/id_rsa",
-  "riskScore": 55,
-  "riskLevel": "high",
-  "reasons": [],
-  "policyVersion": "runtime-v0.1",
-  "cwd": "/workspace/app",
-  "sourceSkill": "optional-skill-id",
-  "metadata": {
-    "evaluation": "local-oss"
-  }
-}
-```
+- Claude Code should surface the native `PreToolUse` `ask` response.
+- Codex-style hosts should surface the local `confirm` response.
+- OpenClaw currently blocks locally because the runtime hook cannot safely pause
+  and resume the original tool call after an external review.
 
-Response:
-
-```json
-{
-  "success": true,
-  "data": {
-    "approvalId": "apr_abc123",
-    "actionId": "act_local_123",
-    "sessionId": "sess_local_123",
-    "status": "pending"
-  }
-}
-```
-
-Native behavior:
-
-- Create this only after local or Cloud decision returns `require_approval`.
-- Block the action while approval is pending.
-- Show the approval id to the user when available.
-
-### List approvals
-
-```http
-GET /api/v1/approvals?status=pending
-X-API-Key: ag_live_xxxxx
-```
-
-Response:
-
-```json
-{
-  "success": true,
-  "data": {
-    "approvals": [
-      {
-        "approvalId": "apr_abc123",
-        "actionId": "act_local_123",
-        "sessionId": "sess_local_123",
-        "agentHost": "claude-code",
-        "actionType": "file_read",
-        "toolName": "Read",
-        "inputPreview": "~/.ssh/id_rsa",
-        "status": "pending",
-        "riskScore": 55,
-        "riskLevel": "high",
-        "reasons": [],
-        "policyVersion": "runtime-v0.1",
-        "createdAt": "2026-05-11T00:00:00.000Z"
-      }
-    ]
-  }
-}
-```
-
-Native usage: optional inbox UI or debugging command.
-
-### Review approval
-
-```http
-PATCH /api/v1/approvals/:approvalId
-Content-Type: application/json
-X-API-Key: ag_live_xxxxx
-```
-
-Request:
-
-```json
-{
-  "status": "approved",
-  "note": "Expected deploy"
-}
-```
-
-`status` must be either `approved` or `denied`.
-
-Response:
-
-```json
-{
-  "success": true,
-  "data": {
-    "approvalId": "apr_abc123",
-    "actionId": "act_local_123",
-    "sessionId": "sess_local_123",
-    "status": "approved"
-  }
-}
-```
-
-Native usage: optional reviewer UX. Most local hooks should simply block and ask the user to review in Cloud.
+Cloud may still provide policy and session timeline visibility, but approval or
+confirmation must happen in the local agent host.
 
 ### Session timeline
 

@@ -18,7 +18,6 @@ Only redacted runtime audit previews are uploaded by default:
 - `sessionId`, `agentHost`, `actionType`, `toolName`
 - Redacted `input` preview, capped at 2,000 characters
 - Decision, risk score, risk level, reasons, and policy version
-- Optional approval request metadata for `require_approval`
 
 ## Built-in redaction
 
