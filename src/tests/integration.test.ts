@@ -264,6 +264,21 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(result, undefined, 'Ordinary OpenClaw exec command should be allowed');
   });
 
+  it('should allow AgentGuard CLI commands from OpenClaw args/cmd payloads', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'terminal',
+      args: { cmd: 'agentguard disconnect' },
+    });
+    assert.equal(result, undefined, 'AgentGuard self-command should be allowed');
+  });
+
   it('should run runtime protection for OpenClaw tool calls', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
@@ -493,6 +508,51 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 
     assert.equal(result?.block, true);
     assert.ok(result?.blockReason?.includes('requires approval'));
+  });
+
+  it('should allow OpenClaw retries that consumed a local one-time approval', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+      protectAction: async () => ({
+        policySource: 'default',
+        approvalChannel: undefined,
+        event: {
+          actionId: 'act_retry',
+          sessionId: 'openclaw-session',
+          agentHost: 'openclaw',
+          actionType: 'shell',
+          toolName: 'exec',
+          input: 'cat ~/.ssh/id_ed25519.pub',
+          decision: 'allow',
+          riskScore: 55,
+          riskLevel: 'high',
+          reasons: [],
+          policyVersion: 'runtime-test',
+          metadata: {
+            approvedByLocalGrant: true,
+            approvalActionId: 'act_original',
+          },
+        },
+        decision: {
+          actionId: 'act_retry',
+          decision: 'allow',
+          riskScore: 55,
+          riskLevel: 'high',
+          policyVersion: 'runtime-test',
+          reasons: [],
+        },
+      }),
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'exec',
+      params: { command: 'cat ~/.ssh/id_ed25519.pub' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+
+    assert.equal(result, undefined);
   });
 
   it('should return { block: true } for rm -rf /', async () => {

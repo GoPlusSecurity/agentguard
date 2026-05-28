@@ -1,4 +1,4 @@
-const SUPPORTED_AGENT_BINARIES = new Set([
+const SUPPORTED_AGENT_COMMANDS = [
   'agentguard',
   'agentguard-mcp',
   'claude',
@@ -7,8 +7,13 @@ const SUPPORTED_AGENT_BINARIES = new Set([
   'openclaw',
   'qclaw',
   'hermes',
-]);
-const SHELL_CONTROL_RE = /[;&|<>`]|\$\(/;
+  'cursor',
+  'cursor-agent',
+  'gemini',
+  'copilot',
+  'gh copilot',
+];
+const SHELL_CONTROL_RE = /[;&|<>`\n\r\t]|\$\(/;
 
 export function isAgentGuardCliCommand(command: string): boolean {
   const trimmed = command.trim();
@@ -28,7 +33,13 @@ export function isAgentGuardCliCommand(command: string): boolean {
     index += 1;
   }
 
-  return SUPPORTED_AGENT_BINARIES.has(basename(tokens[index] || ''));
+  return SUPPORTED_AGENT_COMMANDS.some((command) => matchesCommand(tokens, index, command));
+}
+
+function matchesCommand(tokens: string[], start: number, command: string): boolean {
+  const expected = command.split(/\s+/);
+  if (start + expected.length > tokens.length) return false;
+  return expected.every((part, offset) => basename(tokens[start + offset] || '') === part);
 }
 
 function skipAssignments(tokens: string[], start: number): number {

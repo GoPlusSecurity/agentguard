@@ -308,6 +308,81 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('skips AgentGuard CLI commands from alternate tool argument shapes', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-self-cli-args-'));
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      throw new Error('unexpected cloud request');
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+
+      const result = await protectAction({
+        config,
+        actionType: 'shell',
+        stdinText: JSON.stringify({
+          toolName: 'terminal',
+          args: { cmd: 'agentguard disconnect' },
+          sessionId: 'sess_test',
+        }),
+      });
+
+      assert.equal(result, null);
+      assert.deepEqual(requests, []);
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('honors allowed command patterns without allowing compound shell commands', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.blockedCommandPatterns = ['agentguard'];
+    policy.allowedCommandPatterns = ['agentguard'];
+
+    const allowed = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: 'agentguard disconnect',
+    });
+    assert.equal(allowed.decision, 'allow');
+    assert.equal(allowed.riskScore, 0);
+    assert.deepEqual(allowed.reasons, []);
+
+    const compound = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: 'agentguard status; rm -rf /',
+    });
+    assert.equal(compound.decision, 'block');
+
+    const multiline = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: 'agentguard status\nrm -rf /',
+    });
+    assert.equal(multiline.decision, 'block');
+  });
+
   it('skips supported agent CLI commands before local audit or Cloud reporting', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-cli-'));
@@ -336,6 +411,11 @@ describe('Runtime Cloud bridge', () => {
         'codex --version',
         'claude mcp list',
         'claude-code --version',
+        'cursor-agent --version',
+        'cursor --version',
+        'gemini --version',
+        'copilot --version',
+        'gh copilot explain "git status"',
         'env AGENTGUARD_AGENT_HOST=openclaw openclaw gateway restart',
         'command codex --version',
       ]) {
@@ -375,6 +455,31 @@ describe('Runtime Cloud bridge', () => {
       stdinText: JSON.stringify({
         tool_name: 'Bash',
         tool_input: { command: 'agentguard status; rm -rf /' },
+        session_id: 'sess_test',
+      }),
+    });
+
+    assert.ok(result);
+    assert.equal(result.decision.decision, 'block');
+    assert.equal(existsSync(config.auditPath), true);
+  });
+
+  it('does not skip multiline shell commands just because they start with agent CLIs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-multiline-cli-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+
+    const result = await protectAction({
+      config,
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'openclaw gateway status\nrm -rf /' },
         session_id: 'sess_test',
       }),
     });

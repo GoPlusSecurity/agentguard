@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.23] - 2026-05-28
+## [1.1.24] - 2026-05-28
 
 ### Added
 - Added local one-time runtime approval grants: `agentguard approve --action-id <id> --once`, `agentguard approve --last --once`, and `agentguard approvals list` let agents retry a previously intercepted protected action after explicit user approval, with short-lived pending approvals and audited approved retries.

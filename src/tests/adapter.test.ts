@@ -208,6 +208,15 @@ describe('OpenClawAdapter', () => {
       assert.deepEqual(input.toolInput, {});
     });
 
+    it('should fall back to args/cmd payloads', () => {
+      const input = adapter.parseInput({
+        toolName: 'terminal',
+        args: { cmd: 'agentguard disconnect' },
+      });
+      assert.equal(input.toolName, 'terminal');
+      assert.deepEqual(input.toolInput, { cmd: 'agentguard disconnect' });
+    });
+
     it('should handle empty event', () => {
       const input = adapter.parseInput({});
       assert.equal(input.toolName, '');

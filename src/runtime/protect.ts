@@ -264,6 +264,7 @@ function mapToolToRuntimeAction(toolName: string, raw: Record<string, unknown> |
   if (['Write', 'Edit', 'MultiEdit'].includes(toolName) || lower.includes('write')) return 'file_write';
   if (lower.includes('web') || lower.includes('browser')) return 'network';
   if (raw?.actionType && typeof raw.actionType === 'string') return raw.actionType as RuntimeActionType;
+  if (raw?.action_type && typeof raw.action_type === 'string') return raw.action_type as RuntimeActionType;
   return 'other';
 }
 
@@ -271,16 +272,45 @@ function pickInput(raw: Record<string, unknown> | null, actionType: RuntimeActio
   if (!raw) return '';
   if (typeof raw.input === 'string') return raw.input;
   if (typeof raw.content === 'string') return raw.content;
-  const toolInput = (raw.tool_input || raw.toolInput || raw.params) as Record<string, unknown> | undefined;
-  if (toolInput && typeof toolInput === 'object') {
-    if (actionType === 'shell' && typeof toolInput.command === 'string') return toolInput.command;
-    const filePath = toolInput.file_path || toolInput.path;
+  if (actionType === 'shell') {
+    const command = firstString(raw.command, raw.cmd);
+    if (command) return command;
+  }
+  const toolInput = firstRecord(
+    raw.tool_input,
+    raw.toolInput,
+    raw.params,
+    raw.args,
+    raw.input
+  );
+  if (toolInput) {
+    if (actionType === 'shell') {
+      const command = firstString(toolInput.command, toolInput.cmd);
+      if (command) return command;
+    }
+    const filePath = toolInput.file_path || toolInput.filePath || toolInput.path || toolInput.target;
     if ((actionType === 'file_read' || actionType === 'file_write') && typeof filePath === 'string') return filePath;
-    const url = toolInput.url || toolInput.query;
+    const url = toolInput.url || toolInput.uri || toolInput.href || toolInput.query;
     if (typeof url === 'string') return url;
     return JSON.stringify(toolInput);
   }
   return JSON.stringify(raw);
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  for (const value of values) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return '';
 }
 
 function pickSessionId(raw: Record<string, unknown> | null): string {

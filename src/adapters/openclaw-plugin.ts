@@ -459,6 +459,9 @@ export function registerOpenClawPlugin(
           if (hookDecision) {
             return hookDecision;
           }
+          if (isApprovedLocalRuntimeRetry(runtimeResult)) {
+            return undefined;
+          }
         } catch (err) {
           if (
             options.runtimeFailureMode !== 'fallback' &&
@@ -583,6 +586,10 @@ function mapOpenClawToolToRuntimeAction(
     return 'network';
   }
 
+  const record = isRecord(event) ? event : undefined;
+  if (typeof record?.command === 'string' || typeof record?.cmd === 'string') {
+    return 'shell';
+  }
   const params = readOpenClawParams(event);
   if (typeof params?.command === 'string' || typeof params?.cmd === 'string') {
     return 'shell';
@@ -614,8 +621,14 @@ function mapOpenClawToolToRuntimeAction(
 
 function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
   const record = isRecord(event) ? event : undefined;
-  const params = record?.params ?? record?.toolInput ?? record?.tool_input;
-  return isRecord(params) ? params : undefined;
+  const params = firstRecord(
+    record?.params,
+    record?.toolInput,
+    record?.tool_input,
+    record?.args,
+    record?.input
+  );
+  return params;
 }
 
 function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
@@ -695,12 +708,23 @@ function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
   );
 }
 
+function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
+  return result?.decision.decision === 'allow' && result.event.metadata?.approvedByLocalGrant === true;
+}
+
 function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
   return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  for (const value of values) {
+    if (isRecord(value)) return value;
+  }
+  return undefined;
 }
 
 /**
