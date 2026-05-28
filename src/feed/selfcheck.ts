@@ -7,10 +7,10 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { glob } from 'glob';
 import { homedir } from 'node:os';
-import { basename, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { hashFile } from '../utils/hash.js';
 import type {
   Advisory,
@@ -66,6 +66,17 @@ export const DEFAULT_SUPPLY_CHAIN_PATHS = [
   'go.mod',
   'go.sum',
 ];
+
+const PLUGIN_BODY_FILES = [
+  'openclaw.plugin.json',
+  'package.json',
+  join('.claude-plugin', 'plugin.json'),
+  'plugin.json',
+  'index.js',
+  'index.ts',
+];
+
+const MAX_PLUGIN_DISCOVERY_DEPTH = 4;
 
 export const DEFAULT_URL_SCAN_PATHS = [
   join(homedir(), '.agentguard', 'policy-cache.json'),
@@ -170,11 +181,11 @@ async function listArtifactsForAdvisory(
     case 'plugin':
       return listPluginArtifacts(options.pluginRoots ?? DEFAULT_PLUGIN_ROOTS);
     case 'mcp_server':
-      return listFileArtifacts(options.mcpConfigPaths ?? DEFAULT_MCP_CONFIG_PATHS);
+      return listFileArtifacts(options.mcpConfigPaths ?? DEFAULT_MCP_CONFIG_PATHS, mcpConfigFilenames());
     case 'supply_chain':
-      return listFileArtifacts(options.supplyChainPaths ?? DEFAULT_SUPPLY_CHAIN_PATHS);
+      return listFileArtifacts(options.supplyChainPaths ?? DEFAULT_SUPPLY_CHAIN_PATHS, DEFAULT_SUPPLY_CHAIN_PATHS);
     case 'url':
-      return listFileArtifacts(options.urlScanPaths ?? DEFAULT_URL_SCAN_PATHS);
+      return listFileArtifacts(options.urlScanPaths ?? DEFAULT_URL_SCAN_PATHS, urlScanFilenames());
     case 'prompt_injection':
       return listPromptInjectionArtifacts(options);
     default:
@@ -203,9 +214,11 @@ async function listExplicitArtifacts(
     case 'prompt_injection':
       return listPromptInjectionArtifacts({ ...options, promptInjectionRoots: expanded });
     case 'mcp_server':
+      return listFileArtifacts(expanded, mcpConfigFilenames());
     case 'supply_chain':
+      return listFileArtifacts(expanded, DEFAULT_SUPPLY_CHAIN_PATHS);
     case 'url':
-      return listFileArtifacts(expanded);
+      return listFileArtifacts(expanded, urlScanFilenames());
     default:
       return [];
   }
@@ -240,51 +253,82 @@ async function listSkillDirs(roots: string[]): Promise<string[]> {
 async function listPluginArtifacts(roots: string[]): Promise<LocalArtifact[]> {
   const found: LocalArtifact[] = [];
   for (const root of roots) {
-    if (!existsSync(root)) continue;
-    const rootManifest = firstExisting([
-      join(root, 'openclaw.plugin.json'),
-      join(root, 'package.json'),
-      join(root, '.claude-plugin', 'plugin.json'),
-      join(root, 'plugin.json'),
-      join(root, 'index.js'),
-      join(root, 'index.ts'),
-    ]);
-    if (rootManifest) {
-      found.push({ path: root, name: basename(root), bodyPath: rootManifest });
-      continue;
-    }
-    let entries;
-    try {
-      entries = await readdir(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const pluginDir = join(root, entry.name);
-      const manifest = firstExisting([
-        join(pluginDir, 'openclaw.plugin.json'),
-        join(pluginDir, 'package.json'),
-        join(pluginDir, '.claude-plugin', 'plugin.json'),
-        join(pluginDir, 'plugin.json'),
-        join(pluginDir, 'index.js'),
-        join(pluginDir, 'index.ts'),
-      ]);
-      if (manifest) {
-        found.push({ path: pluginDir, name: entry.name, bodyPath: manifest });
-      }
-    }
+    found.push(...await discoverPluginArtifacts(root, 0));
+  }
+  return dedupeArtifacts(found);
+}
+
+async function discoverPluginArtifacts(path: string, depth: number): Promise<LocalArtifact[]> {
+  if (!existsSync(path)) return [];
+  const kind = await pathKind(path);
+  if (kind === 'file') {
+    return [pluginFileArtifact(path)];
+  }
+  if (kind !== 'dir') return [];
+
+  const bodyPath = firstExisting(PLUGIN_BODY_FILES.map((file) => join(path, file)));
+  if (bodyPath) {
+    return [{ path, name: basename(path), bodyPath }];
+  }
+  if (depth >= MAX_PLUGIN_DISCOVERY_DEPTH) return [];
+
+  let entries;
+  try {
+    entries = await readdir(path, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const found: LocalArtifact[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    found.push(...await discoverPluginArtifacts(join(path, entry.name), depth + 1));
   }
   return found;
 }
 
-async function listFileArtifacts(paths: string[]): Promise<LocalArtifact[]> {
+function pluginFileArtifact(path: string): LocalArtifact {
+  const parent = dirname(path);
+  return { path: parent, name: basename(parent), bodyPath: path };
+}
+
+async function listFileArtifacts(paths: string[], directoryFiles: string[] = []): Promise<LocalArtifact[]> {
   const found: LocalArtifact[] = [];
   for (const path of paths) {
     if (!existsSync(path)) continue;
-    found.push({ path, name: basename(path), bodyPath: path });
+    const kind = await pathKind(path);
+    if (kind === 'file') {
+      found.push({ path, name: basename(path), bodyPath: path });
+      continue;
+    }
+    if (kind !== 'dir') continue;
+    for (const file of directoryFiles) {
+      const bodyPath = join(path, file);
+      if (existsSync(bodyPath)) {
+        found.push({ path: bodyPath, name: basename(bodyPath), bodyPath });
+      }
+    }
   }
-  return found;
+  return dedupeArtifacts(found);
+}
+
+async function pathKind(path: string): Promise<'file' | 'dir' | 'other' | null> {
+  try {
+    const info = await stat(path);
+    if (info.isFile()) return 'file';
+    if (info.isDirectory()) return 'dir';
+    return 'other';
+  } catch {
+    return null;
+  }
+}
+
+function mcpConfigFilenames(): string[] {
+  return dedupePaths(DEFAULT_MCP_CONFIG_PATHS.map((path) => basename(path)));
+}
+
+function urlScanFilenames(): string[] {
+  return dedupePaths(DEFAULT_URL_SCAN_PATHS.map((path) => basename(path)));
 }
 
 async function listPromptInjectionArtifacts(options: RunSelfCheckOptions): Promise<LocalArtifact[]> {
@@ -513,6 +557,7 @@ function extractPackageCoordinates(
 ): PackageCoordinate[] {
   const coordinates: PackageCoordinate[] = [
     ...extractManifestCoordinate(artifact, body),
+    ...extractMcpServerCoordinates(ecosystem, body),
     ...extractSupplyChainCoordinates(artifact, ecosystem, body),
   ];
   return dedupeCoordinates(coordinates);
@@ -523,7 +568,11 @@ function extractManifestCoordinate(artifact: LocalArtifact, body: string): Packa
   if (json && typeof json === 'object' && !Array.isArray(json)) {
     const name = typeof json.name === 'string' ? json.name : artifact.name;
     const version = typeof json.version === 'string' ? json.version : undefined;
-    return [{ name, version }];
+    const coordinates: PackageCoordinate[] = [{ name, version }];
+    if (typeof json.id === 'string' && json.id !== name) {
+      coordinates.push({ name: json.id, version });
+    }
+    return coordinates;
   }
 
   const skillName = body.match(/^\s*name:\s*["']?([^\n"']+)["']?\s*$/im)?.[1]?.trim();
@@ -536,6 +585,41 @@ function extractManifestCoordinate(artifact: LocalArtifact, body: string): Packa
   }
 
   return [];
+}
+
+function extractMcpServerCoordinates(ecosystem: AdvisoryEcosystem, body: string): PackageCoordinate[] {
+  if (ecosystem !== 'mcp_server') return [];
+
+  const coordinates: PackageCoordinate[] = [];
+  const json = tryParseJson(body);
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const root = json as Record<string, unknown>;
+    for (const field of ['mcpServers', 'mcp_servers', 'servers']) {
+      const servers = root[field];
+      if (!servers || typeof servers !== 'object' || Array.isArray(servers)) continue;
+      for (const [name, meta] of Object.entries(servers as Record<string, unknown>)) {
+        const version = meta && typeof meta === 'object' && !Array.isArray(meta) && typeof (meta as Record<string, unknown>).version === 'string'
+          ? (meta as Record<string, unknown>).version as string
+          : undefined;
+        coordinates.push({ name, version });
+      }
+    }
+    return coordinates;
+  }
+
+  const tomlSection = /^\s*\[\s*mcp[_-]servers\.([^\]\s]+)\s*\]\s*$/gim;
+  for (const match of body.matchAll(tomlSection)) {
+    coordinates.push({ name: stripTomlQuotes(match[1]) });
+  }
+  return coordinates;
+}
+
+function stripTomlQuotes(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
 }
 
 function extractSupplyChainCoordinates(
@@ -554,6 +638,8 @@ function extractSupplyChainCoordinates(
       return extractPackageLockDependencies(body);
     case 'requirements.txt':
       return extractRequirementsDependencies(body);
+    case 'pyproject.toml':
+      return extractPyprojectDependencies(body);
     case 'Cargo.toml':
       return extractCargoTomlDependencies(body);
     case 'Cargo.lock':
@@ -598,13 +684,17 @@ function extractPackageLockDependencies(body: string): PackageCoordinate[] {
       const version = typeof pkg.version === 'string' ? pkg.version : undefined;
       const name = typeof pkg.name === 'string'
         ? pkg.name
-        : packagePath.startsWith('node_modules/')
-          ? packagePath.slice('node_modules/'.length)
-          : '';
+        : packageNameFromLockPath(packagePath);
       if (name) coordinates.push({ name, version });
     }
   }
   return coordinates;
+}
+
+function packageNameFromLockPath(packagePath: string): string {
+  if (!packagePath.includes('node_modules/')) return '';
+  const segments = packagePath.split('node_modules/').filter(Boolean);
+  return segments[segments.length - 1] ?? '';
 }
 
 function collectPackageLockDeps(node: unknown, coordinates: PackageCoordinate[]): void {
@@ -621,13 +711,81 @@ function collectPackageLockDeps(node: unknown, coordinates: PackageCoordinate[])
 function extractRequirementsDependencies(body: string): PackageCoordinate[] {
   const coordinates: PackageCoordinate[] = [];
   for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
+    const trimmed = line.split(/\s+#/)[0].split(';')[0].trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*(?:==|>=|<=|~=|!=|>|<)\s*([A-Za-z0-9+_.-]+)/);
-    if (match) {
-      coordinates.push({ name: match[1], version: normalizeVersionCandidate(match[2]) ?? match[2] });
+    coordinates.push(...parseRequirementSpec(trimmed));
+  }
+  return coordinates;
+}
+
+function parseRequirementSpec(requirement: string): PackageCoordinate[] {
+  const trimmed = requirement.split(';')[0].trim();
+  const match = trimmed.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*(?:(?:===|==|>=|<=|~=|!=|>|<)\s*([A-Za-z0-9+_.!*-]+))?/);
+  if (!match) return [];
+  return [{ name: match[1], version: normalizeVersionCandidate(match[2]) ?? match[2] }];
+}
+
+function extractQuotedValues(value: string): string[] {
+  const result: string[] = [];
+  const re = /["']([^"']+)["']/g;
+  for (const match of value.matchAll(re)) {
+    result.push(match[1]);
+  }
+  return result;
+}
+
+function extractPyprojectDependencies(body: string): PackageCoordinate[] {
+  const coordinates: PackageCoordinate[] = [];
+  let activeArray: string | null = null;
+  let activeTable: string | null = null;
+
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.split(/\s+#/)[0].trim();
+    if (!line) continue;
+
+    const table = line.match(/^\[([^\]]+)\]$/);
+    if (table) {
+      activeTable = table[1];
+      activeArray = null;
+      continue;
+    }
+
+    const arrayStart = line.match(/^(dependencies|requires)\s*=\s*\[$/);
+    if (arrayStart && (activeTable === 'project' || activeTable === 'build-system')) {
+      activeArray = arrayStart[1];
+      continue;
+    }
+    if (activeArray) {
+      if (line === ']') {
+        activeArray = null;
+        continue;
+      }
+      const requirement = line.match(/^["']([^"']+)["'],?$/)?.[1];
+      if (requirement) {
+        coordinates.push(...parseRequirementSpec(requirement));
+      }
+      continue;
+    }
+
+    if (activeTable === 'project') {
+      const inlineDeps = line.match(/^dependencies\s*=\s*\[(.*)\]$/);
+      if (inlineDeps) {
+        for (const requirement of extractQuotedValues(inlineDeps[1])) {
+          coordinates.push(...parseRequirementSpec(requirement));
+        }
+      }
+      continue;
+    }
+
+    if (activeTable === 'tool.poetry.dependencies' || activeTable === 'tool.poetry.group.dev.dependencies') {
+      const dep = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*version\s*=\s*["']([^"']+)["'][^}]*\})/);
+      if (dep && dep[1] !== 'python') {
+        const rawVersion = dep[2] || dep[3] || dep[4];
+        coordinates.push({ name: dep[1], version: normalizeVersionCandidate(rawVersion) ?? rawVersion });
+      }
     }
   }
+
   return coordinates;
 }
 
@@ -713,6 +871,7 @@ function dedupeCoordinates(coordinates: PackageCoordinate[]): PackageCoordinate[
 
 function versionSatisfiesRange(version: string | undefined, range: string | undefined): boolean {
   if (!range) return true;
+  if (range.trim() === '*') return true;
   const parsedVersion = parseSemver(version);
   if (!parsedVersion) return false;
   const comparators = parseComparators(range);
@@ -722,8 +881,11 @@ function versionSatisfiesRange(version: string | undefined, range: string | unde
 
 function normalizeVersionCandidate(value: string | undefined): string | null {
   if (!value) return null;
-  const exact = value.trim().match(/^v?(\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/);
-  return exact ? exact[1] : null;
+  const trimmed = value.trim();
+  const exact = trimmed.match(/^v?(\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/);
+  if (exact) return exact[1];
+  const ranged = trimmed.match(/^(?:[\^~]|<=|>=|<|>|=)\s*v?(\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/);
+  return ranged ? ranged[1] : null;
 }
 
 interface ParsedSemver {
@@ -751,7 +913,7 @@ function parseSemver(input: string | undefined): ParsedSemver | null {
 }
 
 function parseComparators(range: string): Comparator[] {
-  const trimmed = range.trim();
+  const trimmed = range.trim().replace(/(<=|>=|<|>|=)\s+/g, '$1');
   if (!trimmed || trimmed === '*') return [];
 
   if (trimmed.startsWith('^')) {
