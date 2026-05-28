@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.21] - 2026-05-28
 
 ### Changed
 - `agentguard subscribe` cron internals (`--cron-run` and `--cron-notify-run`) now only pull feed advisories instead of re-subscribing on every scheduled run, preserving Cloud-side unsubscribe choices.
