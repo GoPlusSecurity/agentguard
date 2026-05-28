@@ -9,6 +9,7 @@
 ### Fixed
 - Supported agent CLI commands such as `openclaw`, `qclaw`, `hermes`, `codex`, and `claude` are now treated like AgentGuard self-commands so normal agent management commands are not audited, reported, or blocked by AgentGuard hooks while compound shell commands remain protected.
 - Empty safe runtime decisions (`riskScore: 0`, `riskLevel: safe`, and no reasons) no longer trigger local interception or Cloud event sync.
+- Threat-feed self-checks for non-skill ecosystems now cover more local artifact shapes: plugin manifest/code file inspect paths and nested Codex plugin caches, MCP server names from JSON/TOML configs, and common supply-chain dependency coordinates from npm locks, `requirements.txt`, and `pyproject.toml`.
 
 ## [1.1.20] - 2026-05-27
 
