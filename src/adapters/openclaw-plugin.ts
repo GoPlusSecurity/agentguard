@@ -459,6 +459,9 @@ export function registerOpenClawPlugin(
           if (hookDecision) {
             return hookDecision;
           }
+          if (isApprovedLocalRuntimeRetry(runtimeResult)) {
+            return undefined;
+          }
         } catch (err) {
           if (
             options.runtimeFailureMode !== 'fallback' &&
@@ -693,6 +696,10 @@ function shouldSurfaceRuntimeApproval(result: ProtectResult): boolean {
     result.decision.riskScore > 0 ||
     result.decision.reasons.length > 0
   );
+}
+
+function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
+  return result?.decision.decision === 'allow' && result.event.metadata?.approvedByLocalGrant === true;
 }
 
 function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {

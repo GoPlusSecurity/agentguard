@@ -495,6 +495,51 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result?.blockReason?.includes('requires approval'));
   });
 
+  it('should allow OpenClaw retries that consumed a local one-time approval', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+      protectAction: async () => ({
+        policySource: 'default',
+        approvalChannel: undefined,
+        event: {
+          actionId: 'act_retry',
+          sessionId: 'openclaw-session',
+          agentHost: 'openclaw',
+          actionType: 'shell',
+          toolName: 'exec',
+          input: 'cat ~/.ssh/id_ed25519.pub',
+          decision: 'allow',
+          riskScore: 55,
+          riskLevel: 'high',
+          reasons: [],
+          policyVersion: 'runtime-test',
+          metadata: {
+            approvedByLocalGrant: true,
+            approvalActionId: 'act_original',
+          },
+        },
+        decision: {
+          actionId: 'act_retry',
+          decision: 'allow',
+          riskScore: 55,
+          riskLevel: 'high',
+          policyVersion: 'runtime-test',
+          reasons: [],
+        },
+      }),
+    });
+
+    const result = await handlers['before_tool_call']({
+      toolName: 'exec',
+      params: { command: 'cat ~/.ssh/id_ed25519.pub' },
+    }) as { block?: boolean; blockReason?: string } | undefined;
+
+    assert.equal(result, undefined);
+  });
+
   it('should return { block: true } for rm -rf /', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
