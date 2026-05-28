@@ -48,6 +48,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
     policySource = source;
   }
+  if (isEmptySafeDecision(decision)) return null;
 
   const event: RuntimeAuditEvent = {
     ...action,
@@ -91,6 +92,10 @@ function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
     return { ...decision, decision: 'require_approval' };
   }
   return decision;
+}
+
+function isEmptySafeDecision(decision: RuntimeDecision): boolean {
+  return decision.riskScore === 0 && decision.riskLevel === 'safe' && decision.reasons.length === 0;
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {
