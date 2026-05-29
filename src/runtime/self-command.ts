@@ -14,8 +14,14 @@ const SUPPORTED_AGENT_COMMANDS = [
   'gh copilot',
 ];
 const SHELL_CONTROL_RE = /[;&|<>`\n\r\t]|\$\(/;
+const SHELL_EXECUTABLES = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
 
 export function isAgentGuardCliCommand(command: string): boolean {
+  return isAgentGuardCliCommandInner(command, 0);
+}
+
+function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
   const trimmed = command.trim();
   if (!trimmed || SHELL_CONTROL_RE.test(trimmed)) return false;
 
@@ -33,7 +39,12 @@ export function isAgentGuardCliCommand(command: string): boolean {
     index += 1;
   }
 
-  return SUPPORTED_AGENT_COMMANDS.some((command) => matchesCommand(tokens, index, command));
+  if (SUPPORTED_AGENT_COMMANDS.some((command) => matchesCommand(tokens, index, command))) {
+    return true;
+  }
+
+  const wrappedCommand = shellWrapperCommand(tokens, index);
+  return wrappedCommand ? isAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
 }
 
 function matchesCommand(tokens: string[], start: number, command: string): boolean {
@@ -48,6 +59,18 @@ function skipAssignments(tokens: string[], start: number): number {
     index += 1;
   }
   return index;
+}
+
+function shellWrapperCommand(tokens: string[], start: number): string | null {
+  if (!SHELL_EXECUTABLES.has(basename(tokens[start] || ''))) return null;
+
+  for (let index = start + 1; index < tokens.length; index += 1) {
+    const token = tokens[index] || '';
+    if (!token.startsWith('-') || token === '-') return null;
+    if (token.includes('c')) return tokens[index + 1] || null;
+  }
+
+  return null;
 }
 
 function basename(value: string): string {

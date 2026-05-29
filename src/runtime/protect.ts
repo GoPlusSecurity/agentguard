@@ -59,7 +59,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
-  if (isEmptySafeDecision(decision)) return null;
+  if (shouldSuppressRuntimeReport(decision)) return null;
 
   const event: RuntimeAuditEvent = {
     ...action,
@@ -120,8 +120,8 @@ function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
   return decision;
 }
 
-function isEmptySafeDecision(decision: RuntimeDecision): boolean {
-  return decision.riskScore === 0 && decision.riskLevel === 'safe' && decision.reasons.length === 0;
+function shouldSuppressRuntimeReport(decision: RuntimeDecision): boolean {
+  return decision.riskScore < 20 || decision.riskLevel === 'safe';
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {
@@ -140,6 +140,7 @@ export function formatProtectResult(result: ProtectResult, json = false): string
       reasons: result.decision.reasons,
       approvalChannel: result.approvalChannel,
       approvalCommand: result.pendingApproval ? approvalCommand(result.pendingApproval) : undefined,
+      approvalInstruction: result.pendingApproval ? approvalInstruction(result.pendingApproval) : undefined,
       approvalExpiresAt: result.pendingApproval?.expiresAt,
       policySource: result.policySource,
     }, null, 2);
@@ -191,6 +192,7 @@ function formatAgentApproval(result: ProtectResult): string | null {
       approvalChannel: 'agent',
       message: reason,
       approvalCommand: result.pendingApproval ? approvalCommand(result.pendingApproval) : undefined,
+      approvalInstruction: result.pendingApproval ? approvalInstruction(result.pendingApproval) : undefined,
       approvalExpiresAt: result.pendingApproval?.expiresAt,
     }, null, 2);
   }
@@ -214,7 +216,14 @@ function formatApprovalReason(result: ProtectResult): string {
 
 function approvalHint(result: ProtectResult): string {
   if (!result.pendingApproval) return '';
-  return ` Approve once: ${approvalCommand(result.pendingApproval)}`;
+  return ` ${approvalInstruction(result.pendingApproval)}`;
+}
+
+function approvalInstruction(record: ApprovalRecord): string {
+  return (
+    `Approve once (only after explicit user approval): ${approvalCommand(record)}.` +
+    ' Do not run this approval command yourself unless the user explicitly approves this exact action.'
+  );
 }
 
 function approvalCommand(record: ApprovalRecord): string {

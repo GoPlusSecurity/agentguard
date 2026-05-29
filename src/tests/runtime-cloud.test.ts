@@ -383,6 +383,25 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(multiline.decision, 'block');
   });
 
+  it('scores shell metacharacters below the approval threshold', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+
+    for (const command of ['echo a>b', 'echo a&b', 'echo test!', 'echo a^b']) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_metachar_score',
+        agentHost: 'codex',
+        actionType: 'shell',
+        toolName: 'Bash',
+        input: command,
+      });
+
+      assert.equal(decision.decision, 'allow', command);
+      assert.equal(decision.riskScore, 10, command);
+      assert.equal(decision.riskLevel, 'low', command);
+      assert.ok(decision.reasons.some((reason) => reason.code === 'SHELL_INJECTION_RISK'), command);
+    }
+  });
+
   it('skips supported agent CLI commands before local audit or Cloud reporting', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-cli-'));
@@ -589,6 +608,59 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('does not audit, sync, or request approval for low-risk metacharacter-only commands', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-metachar-low-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/api/v1/policies/effective')) {
+        return jsonResponse({ success: true, data: policy });
+      }
+      if (url.endsWith('/api/v1/events/ingest')) {
+        throw new Error('low-risk metacharacter decisions should not be synced');
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+        approvalStorePath: join(dir, 'approvals.json'),
+      };
+
+      for (const command of ['echo a>b', 'echo a&b', 'echo test!', 'echo a^b']) {
+        const result = await protectAction({
+          config,
+          agentHost: 'codex',
+          stdinText: JSON.stringify({
+            tool_name: 'Bash',
+            tool_input: { command },
+            session_id: 'sess_metachar_low',
+          }),
+        });
+
+        assert.equal(result, null, command);
+      }
+
+      assert.deepEqual(requests, Array(4).fill('https://agentguard.example/api/v1/policies/effective'));
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+      assert.equal(existsSync(config.approvalStorePath!), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('does not intercept empty safe Cloud require_approval decisions', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-cloud-safe-noop-'));
@@ -732,6 +804,36 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(listPendingApprovals(config.approvalStorePath!).length, 0);
   });
 
+  it('reuses pending approval ids for repeated matching actions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-dedupe-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+    const firstStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_dedupe_first',
+    });
+    const retryStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_dedupe_first',
+    });
+
+    const first = await protectAction({ config, agentHost: 'codex', stdinText: firstStdinText });
+    const retry = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
+
+    assert.equal(first?.decision.decision, 'require_approval');
+    assert.equal(retry?.decision.decision, 'require_approval');
+    assert.equal(retry?.pendingApproval?.actionId, first?.pendingApproval?.actionId);
+    assert.equal(listPendingApprovals(config.approvalStorePath!).length, 1);
+  });
+
   it('approves one pending action once and consumes the grant on retry', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-once-'));
     const config: AgentGuardConfig = {
@@ -747,6 +849,11 @@ describe('Runtime Cloud bridge', () => {
       tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
       session_id: 'sess_approval_once',
     });
+    const retryStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_once',
+    });
 
     const blocked = await protectAction({ config, agentHost: 'codex', stdinText });
     assert.equal(blocked?.decision.decision, 'require_approval');
@@ -757,14 +864,38 @@ describe('Runtime Cloud bridge', () => {
     });
     assert.equal(approved.status, 'approved');
 
-    const allowedRetry = await protectAction({ config, agentHost: 'codex', stdinText });
+    const allowedRetry = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
     assert.equal(allowedRetry?.decision.decision, 'allow');
     assert.equal(allowedRetry?.event.decision, 'allow');
     assert.equal(allowedRetry?.event.metadata?.approvedByLocalGrant, true);
     assert.match(readFileSync(config.auditPath, 'utf8'), /approvedByLocalGrant/);
 
-    const blockedAgain = await protectAction({ config, agentHost: 'codex', stdinText });
+    const blockedAgain = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
     assert.equal(blockedAgain?.decision.decision, 'require_approval');
+  });
+
+  it('does not protect AgentGuard approval commands wrapped by a shell', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-self-command-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+
+    const result = await protectAction({
+      config,
+      agentHost: 'codex',
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: "/bin/zsh -lc 'agentguard approve --action-id act_local_1 --once'" },
+        session_id: 'sess_approval_self_command',
+      }),
+    });
+
+    assert.equal(result, null);
   });
 
   it('does not collapse internal whitespace when fingerprinting approved actions', () => {
@@ -782,11 +913,44 @@ describe('Runtime Cloud bridge', () => {
     );
   });
 
+  it('scopes approval fingerprints to the runtime session', () => {
+    const base = {
+      agentHost: 'codex' as const,
+      actionType: 'shell' as const,
+      toolName: 'Bash',
+      input: 'cat ~/.ssh/id_rsa.pub',
+      cwd: '/workspace',
+    };
+
+    assert.notEqual(
+      actionFingerprint({ ...base, sessionId: 'sess_first' }),
+      actionFingerprint({ ...base, sessionId: 'sess_retry' })
+    );
+  });
+
   it('formats Claude Code agent approval as a PreToolUse ask response', () => {
     const result: ProtectResult = {
       policySource: 'cloud',
       approvalChannel: 'agent',
       event: { ...sampleEvent(), agentHost: 'claude-code' as const },
+      pendingApproval: {
+        actionId: 'act_confirm',
+        status: 'pending',
+        once: true,
+        actionFingerprint: 'fingerprint',
+        sessionId: 'sess_test',
+        agentHost: 'claude-code',
+        actionType: 'shell',
+        toolName: 'Bash',
+        inputPreview: 'cat ~/.ssh/id_rsa.pub',
+        cwd: '/tmp/project',
+        reasonTitles: ['Protected path'],
+        riskScore: 70,
+        riskLevel: 'high',
+        policyVersion: 'runtime-test',
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
       decision: {
         actionId: 'act_confirm',
         decision: 'require_approval' as const,
@@ -807,6 +971,8 @@ describe('Runtime Cloud bridge', () => {
     const formatted = JSON.parse(formatProtectResult(result, false));
     assert.equal(formatted.hookSpecificOutput.permissionDecision, 'ask');
     assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /Protected path/);
+    assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /explicit user approval/);
+    assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /Do not run this approval command yourself/);
   });
 });
 

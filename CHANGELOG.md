@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Shell metacharacter-only runtime findings now stay below the approval threshold: benign commands with redirects or simple shell metacharacters are scored as low risk, auto-allowed locally, and no longer generate audit events, Cloud sync, or pending approvals on that signal alone.
+- Runtime approval prompts and AgentGuard skill guidance now require agents to show the exact `agentguard approve --action-id ... --once` command and wait for explicit user approval for that exact action before approving and retrying.
+
+### Fixed
+- OpenClaw runtime protection now recognizes alternate tool name fields such as `tool_name`, `name`, and `id`, and classifies `exec`/`execute` tools as shell actions before policy evaluation.
+- Repeated matching protected actions now reuse the existing pending approval id instead of creating duplicate pending approvals.
+- AgentGuard approval/self commands wrapped through simple shell launchers such as `/bin/zsh -lc` are now treated as self-commands and skipped by runtime protection.
+
 ## [1.1.25] - 2026-05-28
 
 ### Added

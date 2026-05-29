@@ -429,8 +429,8 @@ export function registerOpenClawPlugin(
   api.on('before_tool_call', async (event: unknown, ctx?: unknown) => {
     try {
       // Try to infer plugin from tool name
-      const toolEvent = event as { toolName?: string };
-      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+      const toolName = readOpenClawToolName(event);
+      const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
 
       // Check if plugin is untrusted
       if (pluginId) {
@@ -444,14 +444,14 @@ export function registerOpenClawPlugin(
       }
 
       if (runtimeProtectionEnabled) {
-        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolEvent.toolName, event);
+        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolName, event);
         try {
           const runtimeResult = await runProtectAction({
             config,
             rawInput: event,
             agentHost: 'openclaw',
             actionType: runtimeActionType,
-            toolName: toolEvent.toolName,
+            toolName,
             sessionId: readOpenClawSessionId(event, ctx),
             decisionMode: options.decisionMode ?? 'local-first',
           });
@@ -509,8 +509,8 @@ export function registerOpenClawPlugin(
   api.on('after_tool_call', async (event: unknown) => {
     try {
       const input = adapter.parseInput(event);
-      const toolEvent = event as { toolName?: string };
-      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+      const toolName = readOpenClawToolName(event);
+      const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
       writeAuditLog(input, null, pluginId);
     } catch {
       // Non-critical
@@ -544,6 +544,8 @@ function mapOpenClawToolToRuntimeAction(
     normalized === 'command' ||
     normalized === 'terminal' ||
     normalized === 'run' ||
+    normalized.includes('exec') ||
+    normalized.includes('execute') ||
     normalized.includes('shell') ||
     normalized.includes('terminal') ||
     normalized.includes('command') ||
@@ -619,6 +621,12 @@ function mapOpenClawToolToRuntimeAction(
   return 'other';
 }
 
+function readOpenClawToolName(event: unknown): string | undefined {
+  const record = isRecord(event) ? event : undefined;
+  const value = record?.toolName ?? record?.tool_name ?? record?.name ?? record?.id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
   const record = isRecord(event) ? event : undefined;
   const params = firstRecord(
@@ -689,7 +697,7 @@ function runtimeResultToBeforeToolCallResult(
       ? ' OpenClaw cannot safely resume this call after an external approval, so AgentGuard blocked it locally.'
       : '') +
     (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
-    (result.pendingApproval ? ` Approve once: agentguard approve --action-id ${result.pendingApproval.actionId} --once` : '');
+    (result.pendingApproval ? ` ${approvalInstruction(result.pendingApproval.actionId)}` : '');
 
   if (decision === 'require_approval') {
     return { block: true, blockReason: reason };
@@ -714,6 +722,13 @@ function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
 
 function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
   return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
+}
+
+function approvalInstruction(actionId: string): string {
+  return (
+    `Approve once (only after explicit user approval): agentguard approve --action-id ${actionId} --once.` +
+    ' Do not run this approval command yourself unless the user explicitly approves this exact action.'
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -44,7 +44,8 @@ approval and includes an approval command:
 agentguard approve --action-id act_local_... --once
 ```
 
-Run that command only after the user explicitly approves, then retry the
-original action once. If the action id was not visible, inspect
+Show that command to the user before running it. Run it only after the user
+explicitly approves that exact action; do not let the agent approve its own
+blocked command proactively. Then retry the original action once. If the action id was not visible, inspect
 `agentguard approvals list --json`; use `agentguard approve --last --once`
 only when there is exactly one relevant unexpired pending approval.

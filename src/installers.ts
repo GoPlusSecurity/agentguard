@@ -178,11 +178,13 @@ Expected decisions:
 - \`confirm\`: ask for approval in the agent channel before continuing
 - \`block\`: stop the action
 
-When a response includes \`Approve once: agentguard approve --action-id ... --once\`,
-ask the user before running that approval command. Treat replies such as
+When a response includes \`Approve once ... agentguard approve --action-id ... --once\`,
+show the exact approval command to the user and ask before running it. Do not
+run an approval command proactively or infer approval from context. Treat replies such as
 "yes", "approve", "confirm", "continue", "go ahead", "execute", "run it",
 "同意", "确认", "批准", "继续", or "执行" as explicit approval for the most
-recent protected action. After approval, run the exact
+recent protected action only after the user has seen the command and understood
+which action is being approved. After approval, run the exact
 \`agentguard approve --action-id ... --once\` command and retry the original
 action once. If the id is unavailable, inspect \`agentguard approvals list --json\`;
 use \`agentguard approve --last --once\` only when there is exactly one relevant
