@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.1.27] - 2026-05-29
 
 ### Changed
 - Shell metacharacter-only runtime findings now stay below the approval threshold: benign commands with redirects or simple shell metacharacters are scored as low risk, auto-allowed locally, and no longer generate audit events, Cloud sync, or pending approvals on that signal alone.
@@ -11,7 +11,7 @@
 - Repeated matching protected actions now reuse the existing pending approval id instead of creating duplicate pending approvals.
 - AgentGuard approval/self commands wrapped through simple shell launchers such as `/bin/zsh -lc` are now treated as self-commands and skipped by runtime protection.
 
-## [1.1.25] - 2026-05-28
+## [1.1.26] - 2026-05-28
 
 ### Added
 - Added local one-time runtime approval grants: `agentguard approve --action-id <id> --once`, `agentguard approve --last --once`, and `agentguard approvals list` let agents retry a previously intercepted protected action after explicit user approval, with short-lived pending approvals and audited approved retries.
