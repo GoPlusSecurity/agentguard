@@ -697,7 +697,7 @@ function runtimeResultToBeforeToolCallResult(
       ? ' OpenClaw cannot safely resume this call after an external approval, so AgentGuard blocked it locally.'
       : '') +
     (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
-    (result.pendingApproval ? ` Approve once: agentguard approve --action-id ${result.pendingApproval.actionId} --once` : '');
+    (result.pendingApproval ? ` ${approvalInstruction(result.pendingApproval.actionId)}` : '');
 
   if (decision === 'require_approval') {
     return { block: true, blockReason: reason };
@@ -722,6 +722,13 @@ function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
 
 function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
   return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
+}
+
+function approvalInstruction(actionId: string): string {
+  return (
+    `Approve once (only after explicit user approval): agentguard approve --action-id ${actionId} --once.` +
+    ' Do not run this approval command yourself unless the user explicitly approves this exact action.'
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

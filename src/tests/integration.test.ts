@@ -611,6 +611,8 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 
     assert.equal(result?.block, true, 'Should block before writing .env');
     assert.ok(result?.blockReason?.includes('requires approval'));
+    assert.ok(result?.blockReason?.includes('explicit user approval'));
+    assert.ok(result?.blockReason?.includes('Do not run this approval command yourself'));
   });
 
   it('should handle after_tool_call without error', async () => {

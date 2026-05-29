@@ -56,8 +56,9 @@ approval. The block reason includes:
 agentguard approve --action-id act_local_... --once
 ```
 
-Run that command only after the user explicitly approves, then retry the
-original action once. If the action id was not visible in the OpenClaw message,
+Show that command to the user before running it. Run it only after the user
+explicitly approves that exact action; do not let the agent approve its own
+blocked command proactively. Then retry the original action once. If the action id was not visible in the OpenClaw message,
 inspect pending approvals first:
 
 ```bash

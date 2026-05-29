@@ -933,6 +933,24 @@ describe('Runtime Cloud bridge', () => {
       policySource: 'cloud',
       approvalChannel: 'agent',
       event: { ...sampleEvent(), agentHost: 'claude-code' as const },
+      pendingApproval: {
+        actionId: 'act_confirm',
+        status: 'pending',
+        once: true,
+        actionFingerprint: 'fingerprint',
+        sessionId: 'sess_test',
+        agentHost: 'claude-code',
+        actionType: 'shell',
+        toolName: 'Bash',
+        inputPreview: 'cat ~/.ssh/id_rsa.pub',
+        cwd: '/tmp/project',
+        reasonTitles: ['Protected path'],
+        riskScore: 70,
+        riskLevel: 'high',
+        policyVersion: 'runtime-test',
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
       decision: {
         actionId: 'act_confirm',
         decision: 'require_approval' as const,
@@ -953,6 +971,8 @@ describe('Runtime Cloud bridge', () => {
     const formatted = JSON.parse(formatProtectResult(result, false));
     assert.equal(formatted.hookSpecificOutput.permissionDecision, 'ask');
     assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /Protected path/);
+    assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /explicit user approval/);
+    assert.match(formatted.hookSpecificOutput.permissionDecisionReason, /Do not run this approval command yourself/);
   });
 });
 
