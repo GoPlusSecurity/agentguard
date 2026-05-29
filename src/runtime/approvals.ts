@@ -55,12 +55,19 @@ export function writePendingApproval(
   now = new Date()
 ): ApprovalRecord {
   const store = readApprovalStore(storePath, now);
+  const fingerprint = actionFingerprint(action);
+  const existing = store.records.find((record) =>
+    record.status === 'pending' &&
+    record.actionFingerprint === fingerprint
+  );
+  if (existing) return existing;
+
   const expiresAt = new Date(now.getTime() + DEFAULT_PENDING_APPROVAL_TTL_MS).toISOString();
   const record: ApprovalRecord = {
     actionId: decision.actionId,
     status: 'pending',
     once: true,
-    actionFingerprint: actionFingerprint(action),
+    actionFingerprint: fingerprint,
     sessionId: redactPreview(action.sessionId, 160),
     agentHost: action.agentHost,
     actionType: action.actionType,

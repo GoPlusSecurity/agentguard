@@ -348,6 +348,29 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ]);
   });
 
+  it('should classify alternate OpenClaw tool name fields before runtime protection', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const calls: unknown[] = [];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async (options) => {
+        calls.push({ toolName: options.toolName, actionType: options.actionType });
+        return null;
+      },
+    });
+
+    await handlers['before_tool_call']({
+      tool_name: 'execute_code',
+      params: { command: 'cat ~/.ssh/id_ed25519.pub' },
+    });
+
+    assert.deepEqual(calls, [
+      { toolName: 'execute_code', actionType: 'shell' },
+    ]);
+  });
+
   it('should fail closed for security-sensitive OpenClaw actions when runtime protection fails', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();

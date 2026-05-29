@@ -804,6 +804,36 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(listPendingApprovals(config.approvalStorePath!).length, 0);
   });
 
+  it('reuses pending approval ids for repeated matching actions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-dedupe-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+    const firstStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_dedupe_first',
+    });
+    const retryStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_dedupe_first',
+    });
+
+    const first = await protectAction({ config, agentHost: 'codex', stdinText: firstStdinText });
+    const retry = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
+
+    assert.equal(first?.decision.decision, 'require_approval');
+    assert.equal(retry?.decision.decision, 'require_approval');
+    assert.equal(retry?.pendingApproval?.actionId, first?.pendingApproval?.actionId);
+    assert.equal(listPendingApprovals(config.approvalStorePath!).length, 1);
+  });
+
   it('approves one pending action once and consumes the grant on retry', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-once-'));
     const config: AgentGuardConfig = {
@@ -819,6 +849,11 @@ describe('Runtime Cloud bridge', () => {
       tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
       session_id: 'sess_approval_once',
     });
+    const retryStdinText = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cat ~/.ssh/id_rsa.pub' },
+      session_id: 'sess_approval_once',
+    });
 
     const blocked = await protectAction({ config, agentHost: 'codex', stdinText });
     assert.equal(blocked?.decision.decision, 'require_approval');
@@ -829,14 +864,38 @@ describe('Runtime Cloud bridge', () => {
     });
     assert.equal(approved.status, 'approved');
 
-    const allowedRetry = await protectAction({ config, agentHost: 'codex', stdinText });
+    const allowedRetry = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
     assert.equal(allowedRetry?.decision.decision, 'allow');
     assert.equal(allowedRetry?.event.decision, 'allow');
     assert.equal(allowedRetry?.event.metadata?.approvedByLocalGrant, true);
     assert.match(readFileSync(config.auditPath, 'utf8'), /approvedByLocalGrant/);
 
-    const blockedAgain = await protectAction({ config, agentHost: 'codex', stdinText });
+    const blockedAgain = await protectAction({ config, agentHost: 'codex', stdinText: retryStdinText });
     assert.equal(blockedAgain?.decision.decision, 'require_approval');
+  });
+
+  it('does not protect AgentGuard approval commands wrapped by a shell', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-self-command-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+      approvalStorePath: join(dir, 'approvals.json'),
+    };
+
+    const result = await protectAction({
+      config,
+      agentHost: 'codex',
+      stdinText: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: "/bin/zsh -lc 'agentguard approve --action-id act_local_1 --once'" },
+        session_id: 'sess_approval_self_command',
+      }),
+    });
+
+    assert.equal(result, null);
   });
 
   it('does not collapse internal whitespace when fingerprinting approved actions', () => {
@@ -851,6 +910,21 @@ describe('Runtime Cloud bridge', () => {
     assert.notEqual(
       actionFingerprint({ ...base, input: 'printf "a  b"' }),
       actionFingerprint({ ...base, input: 'printf "a b"' })
+    );
+  });
+
+  it('scopes approval fingerprints to the runtime session', () => {
+    const base = {
+      agentHost: 'codex' as const,
+      actionType: 'shell' as const,
+      toolName: 'Bash',
+      input: 'cat ~/.ssh/id_rsa.pub',
+      cwd: '/workspace',
+    };
+
+    assert.notEqual(
+      actionFingerprint({ ...base, sessionId: 'sess_first' }),
+      actionFingerprint({ ...base, sessionId: 'sess_retry' })
     );
   });
 

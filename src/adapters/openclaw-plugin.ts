@@ -429,8 +429,8 @@ export function registerOpenClawPlugin(
   api.on('before_tool_call', async (event: unknown, ctx?: unknown) => {
     try {
       // Try to infer plugin from tool name
-      const toolEvent = event as { toolName?: string };
-      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+      const toolName = readOpenClawToolName(event);
+      const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
 
       // Check if plugin is untrusted
       if (pluginId) {
@@ -444,14 +444,14 @@ export function registerOpenClawPlugin(
       }
 
       if (runtimeProtectionEnabled) {
-        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolEvent.toolName, event);
+        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolName, event);
         try {
           const runtimeResult = await runProtectAction({
             config,
             rawInput: event,
             agentHost: 'openclaw',
             actionType: runtimeActionType,
-            toolName: toolEvent.toolName,
+            toolName,
             sessionId: readOpenClawSessionId(event, ctx),
             decisionMode: options.decisionMode ?? 'local-first',
           });
@@ -509,8 +509,8 @@ export function registerOpenClawPlugin(
   api.on('after_tool_call', async (event: unknown) => {
     try {
       const input = adapter.parseInput(event);
-      const toolEvent = event as { toolName?: string };
-      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+      const toolName = readOpenClawToolName(event);
+      const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
       writeAuditLog(input, null, pluginId);
     } catch {
       // Non-critical
@@ -544,6 +544,8 @@ function mapOpenClawToolToRuntimeAction(
     normalized === 'command' ||
     normalized === 'terminal' ||
     normalized === 'run' ||
+    normalized.includes('exec') ||
+    normalized.includes('execute') ||
     normalized.includes('shell') ||
     normalized.includes('terminal') ||
     normalized.includes('command') ||
@@ -617,6 +619,12 @@ function mapOpenClawToolToRuntimeAction(
   }
 
   return 'other';
+}
+
+function readOpenClawToolName(event: unknown): string | undefined {
+  const record = isRecord(event) ? event : undefined;
+  const value = record?.toolName ?? record?.tool_name ?? record?.name ?? record?.id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
