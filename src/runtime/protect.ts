@@ -59,7 +59,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
-  if (isEmptySafeDecision(decision)) return null;
+  if (shouldSuppressRuntimeReport(decision)) return null;
 
   const event: RuntimeAuditEvent = {
     ...action,
@@ -120,8 +120,8 @@ function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
   return decision;
 }
 
-function isEmptySafeDecision(decision: RuntimeDecision): boolean {
-  return decision.riskScore === 0 && decision.riskLevel === 'safe' && decision.reasons.length === 0;
+function shouldSuppressRuntimeReport(decision: RuntimeDecision): boolean {
+  return decision.riskScore < 20 || decision.riskLevel === 'safe';
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {

@@ -52,9 +52,11 @@ const AUDIT_COMMAND_PREFIXES = [
 ];
 
 /**
- * Shell metacharacters that disqualify a command from the safe list
+ * Shell metacharacters that disqualify a command from the safe list.
+ * Runtime policy scores these as low-risk signals so benign commands with
+ * metacharacters do not enter an approval flow on this signal alone.
  */
-const SHELL_METACHAR_PATTERN = /[;|&`$(){}<>!#\n\t]/;
+const SHELL_METACHAR_PATTERN = /\$\(|&&|\|\||>>|[|&;^!`%$<>"'*?\\\n\r\t]/;
 
 /**
  * Fork bomb patterns (regex-based for variants with spaces)
@@ -275,27 +277,15 @@ export function analyzeExecCommand(
     }
   }
 
-  // Check for shell injection patterns
-  const shellInjectionPatterns = [
-    /;\s*\w+/,      // ; command
-    /\|\s*\w+/,     // | command
-    /`[^`]+`/,      // `command`
-    /\$\([^)]+\)/,  // $(command)
-    /&&\s*\w+/,     // && command
-    /\|\|\s*\w+/,   // || command
-  ];
-
-  for (const pattern of shellInjectionPatterns) {
-    if (pattern.test(fullCommand)) {
-      riskTags.push('SHELL_INJECTION_RISK');
-      evidence.push({
-        type: 'shell_injection',
-        field: 'command',
-        description: 'Command contains shell metacharacters',
-      });
-      if (riskLevel === 'low') riskLevel = 'medium';
-      break;
-    }
+  // Check for shell metacharacters. These are advisory by themselves; combined
+  // with dangerous commands or sensitive access, the stronger finding controls.
+  if (SHELL_METACHAR_PATTERN.test(fullCommand)) {
+    riskTags.push('SHELL_INJECTION_RISK');
+    evidence.push({
+      type: 'shell_injection',
+      field: 'command',
+      description: 'Command contains shell metacharacters',
+    });
   }
 
   // Check environment variables for secrets

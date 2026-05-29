@@ -46,6 +46,15 @@ describe('Exec Command Detector', () => {
     assert.ok(result.risk_tags.includes('SHELL_INJECTION_RISK') || result.risk_tags.includes('DANGEROUS_COMMAND'));
   });
 
+  it('should treat shell metacharacters alone as low risk', () => {
+    for (const command of ['echo a>b', 'echo a&b', 'echo test!', 'echo a^b']) {
+      const result = analyzeExecCommand({ command }, true);
+      assert.equal(result.risk_level, 'low', command);
+      assert.ok(result.risk_tags.includes('SHELL_INJECTION_RISK'), command);
+      assert.ok(!result.should_block, command);
+    }
+  });
+
   it('should allow safe commands even when exec not allowed', () => {
     const result = analyzeExecCommand({ command: 'ls -la' }, false);
     assert.equal(result.risk_level, 'low');

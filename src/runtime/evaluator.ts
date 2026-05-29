@@ -52,7 +52,9 @@ export async function evaluateLocalAction(
   const reasons = redactReasons([...customReasons, ...ossReasons]);
   const riskScore = riskScoreFor(reasons, ossDecision?.risk_level || 'safe');
   const riskLevel = riskLevelFor(riskScore);
-  const decision = decisionFor(policy, reasons, riskLevel, ossDecision?.decision);
+  const decision = shouldAutoAllowRuntimeDecision(riskScore, riskLevel)
+    ? 'allow'
+    : decisionFor(policy, reasons, riskLevel, ossDecision?.decision);
 
   return {
     actionId: `act_local_${Date.now()}_${process.pid}`,
@@ -211,7 +213,7 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
     return reason('NETWORK_RISK', 'medium', 'Network action', 'The local OSS runtime detected network activity.', evidenceText);
   }
   if (tag === 'SHELL_INJECTION_RISK') {
-    return reason('SHELL_INJECTION_RISK', 'medium', 'Shell metacharacters', 'The local OSS runtime detected shell metacharacters.', evidenceText);
+    return reason('SHELL_INJECTION_RISK', 'low', 'Shell metacharacters', 'The local OSS runtime detected shell metacharacters.', evidenceText);
   }
   return reason(tag, 'medium', tag.replace(/_/g, ' ').toLowerCase(), 'The local OSS runtime detected a risky action.', evidenceText);
 }
@@ -245,7 +247,7 @@ function riskScoreFor(reasons: PolicyReason[], ossRiskLevel: RuntimeRiskLevel): 
   if (reasons.some((item) => item.severity === 'critical') || ossRiskLevel === 'critical') return 95;
   if (reasons.some((item) => item.severity === 'high') || ossRiskLevel === 'high') return 55;
   if (reasons.some((item) => item.severity === 'medium') || ossRiskLevel === 'medium') return 20;
-  if (reasons.length > 0 || ossRiskLevel === 'low') return reasons.length > 0 ? 5 : 0;
+  if (reasons.length > 0 || ossRiskLevel === 'low') return reasons.length > 0 ? 10 : 0;
   return 0;
 }
 
@@ -255,6 +257,10 @@ function riskLevelFor(score: number): RuntimeRiskLevel {
   if (score >= 20) return 'medium';
   if (score > 0) return 'low';
   return 'safe';
+}
+
+function shouldAutoAllowRuntimeDecision(riskScore: number, riskLevel: RuntimeRiskLevel): boolean {
+  return riskScore < 20 || riskLevel === 'safe';
 }
 
 function matchesPattern(input: string, pattern: string): boolean {

@@ -383,6 +383,25 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(multiline.decision, 'block');
   });
 
+  it('scores shell metacharacters below the approval threshold', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+
+    for (const command of ['echo a>b', 'echo a&b', 'echo test!', 'echo a^b']) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_metachar_score',
+        agentHost: 'codex',
+        actionType: 'shell',
+        toolName: 'Bash',
+        input: command,
+      });
+
+      assert.equal(decision.decision, 'allow', command);
+      assert.equal(decision.riskScore, 10, command);
+      assert.equal(decision.riskLevel, 'low', command);
+      assert.ok(decision.reasons.some((reason) => reason.code === 'SHELL_INJECTION_RISK'), command);
+    }
+  });
+
   it('skips supported agent CLI commands before local audit or Cloud reporting', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-agent-cli-'));
@@ -584,6 +603,59 @@ describe('Runtime Cloud bridge', () => {
       assert.deepEqual(requests, ['https://agentguard.example/api/v1/policies/effective']);
       assert.equal(existsSync(config.auditPath), false);
       assert.equal(existsSync(config.eventSpoolPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not audit, sync, or request approval for low-risk metacharacter-only commands', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-metachar-low-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const requests: string[] = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/api/v1/policies/effective')) {
+        return jsonResponse({ success: true, data: policy });
+      }
+      if (url.endsWith('/api/v1/events/ingest')) {
+        throw new Error('low-risk metacharacter decisions should not be synced');
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+        approvalStorePath: join(dir, 'approvals.json'),
+      };
+
+      for (const command of ['echo a>b', 'echo a&b', 'echo test!', 'echo a^b']) {
+        const result = await protectAction({
+          config,
+          agentHost: 'codex',
+          stdinText: JSON.stringify({
+            tool_name: 'Bash',
+            tool_input: { command },
+            session_id: 'sess_metachar_low',
+          }),
+        });
+
+        assert.equal(result, null, command);
+      }
+
+      assert.deepEqual(requests, Array(4).fill('https://agentguard.example/api/v1/policies/effective'));
+      assert.equal(existsSync(config.auditPath), false);
+      assert.equal(existsSync(config.eventSpoolPath), false);
+      assert.equal(existsSync(config.approvalStorePath!), false);
     } finally {
       globalThis.fetch = originalFetch;
     }
