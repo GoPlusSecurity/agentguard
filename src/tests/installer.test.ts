@@ -36,6 +36,24 @@ describe('Agent template installers', () => {
     assert.ok(config.includes('hooks_auto_accept: false'));
   });
 
+  it('uses HERMES_HOME for explicit Hermes installs without a workspace cwd', () => {
+    const hermesHome = mkdtempSync(join(tmpdir(), 'agentguard-hermes-home-'));
+    const originalHermesHome = process.env.HERMES_HOME;
+    process.env.HERMES_HOME = hermesHome;
+    try {
+      const result = installAgentTemplates('hermes');
+      const config = readFileSync(join(hermesHome, 'config.yaml'), 'utf8');
+
+      assert.equal(result.agent, 'hermes');
+      assert.ok(result.files.includes(join(hermesHome, 'config.yaml')));
+      assert.ok(existsSync(join(hermesHome, 'skills', 'agentguard', 'SKILL.md')));
+      assert.ok(config.includes('hermes-hook.js'));
+    } finally {
+      if (originalHermesHome === undefined) delete process.env.HERMES_HOME;
+      else process.env.HERMES_HOME = originalHermesHome;
+    }
+  });
+
   it('merges Hermes hooks into an existing config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-existing-'));
     const configPath = join(dir, '.hermes', 'config.yaml');
@@ -69,6 +87,25 @@ describe('Agent template installers', () => {
     assert.ok(profileConfig.includes('profile: agent2'));
     assert.ok(profileConfig.includes('pre_tool_call:'));
     assert.ok(profileConfig.includes('hermes-hook.js'));
+  });
+
+  it('does not scan unrelated nested Hermes home config files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-nested-home-'));
+    const rootConfigPath = join(dir, '.hermes', 'config.yaml');
+    const nestedConfigPath = join(dir, '.hermes', 'home', 'project', 'config.yaml');
+    mkdirSync(dirname(rootConfigPath), { recursive: true });
+    mkdirSync(dirname(nestedConfigPath), { recursive: true });
+    writeFileSync(rootConfigPath, 'theme: dark\n');
+    writeFileSync(nestedConfigPath, 'project: keep\n');
+
+    const result = installAgentTemplates('hermes', { cwd: dir });
+
+    const rootConfig = readFileSync(rootConfigPath, 'utf8');
+    const nestedConfig = readFileSync(nestedConfigPath, 'utf8');
+    assert.ok(result.files.includes(rootConfigPath));
+    assert.ok(!result.files.includes(nestedConfigPath));
+    assert.ok(rootConfig.includes('hermes-hook.js'));
+    assert.equal(nestedConfig, 'project: keep\n');
   });
 
   it('updates every top-level Hermes hooks section when duplicate keys exist', () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- `agentguard init --agent hermes` now targets `HERMES_HOME` or `~/.hermes` for explicit installs instead of creating a nested `.hermes` directory under the current working directory, while only updating the root Hermes config and profile configs.
+
 ## [1.1.27] - 2026-05-29
 
 ### Changed

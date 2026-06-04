@@ -229,31 +229,41 @@ describe('init CLI', () => {
     for (const agent of ['hermes', 'qclaw']) {
       const home = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-home-`));
       const cwd = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-cwd-`));
+      const hermesHome = join(home, '.hermes');
       const cliPath = resolve('dist', 'cli.js');
 
       await execFileAsync(process.execPath, [cliPath, 'init', '--agent', agent, '--force'], {
         cwd,
-        env: { ...process.env, AGENTGUARD_HOME: home },
+        env: {
+          ...process.env,
+          AGENTGUARD_HOME: home,
+          ...(agent === 'hermes' ? { HERMES_HOME: hermesHome } : {}),
+        },
       });
 
       const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
       assert.equal(config.agentHost, agent);
+      if (agent === 'hermes') {
+        assert.ok(readFileSync(join(hermesHome, 'config.yaml'), 'utf8').includes('hermes-hook.js'));
+      }
     }
   });
 
   it('normalizes --agent values to lowercase', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-init-uppercase-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-uppercase-cwd-'));
+    const hermesHome = join(home, '.hermes');
     const cliPath = resolve('dist', 'cli.js');
 
     const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'Hermes', '--force'], {
       cwd,
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, AGENTGUARD_HOME: home, HERMES_HOME: hermesHome },
     });
 
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
     assert.equal(config.agentHost, 'hermes');
     assert.match(stdout, /Installed hermes template:/);
+    assert.ok(stdout.includes(join(hermesHome, 'config.yaml')));
   });
 
   it('auto-initializes detected agents in detection order', async () => {

@@ -19,7 +19,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force));
   if (agent === 'codex') return installCodex(root, Boolean(options.force));
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
-  if (agent === 'hermes') return installHermes(root, Boolean(options.force));
+  if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force));
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
@@ -67,8 +67,13 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
   return { agent: 'openclaw', files: uniqueStrings(files) };
 }
 
-function installHermes(root: string, force: boolean): InstallResult {
-  const hermesRoot = join(root, '.hermes');
+function installHermes(cwd: string | undefined, force: boolean): InstallResult {
+  const configuredHome = process.env.HERMES_HOME?.trim();
+  const hermesRoot = cwd
+    ? join(cwd, '.hermes')
+    : configuredHome
+      ? (isAbsolute(configuredHome) ? configuredHome : resolve(configuredHome))
+      : join(homedir(), '.hermes');
   const skillDir = join(hermesRoot, 'skills', 'agentguard');
   const configExamplePath = join(hermesRoot, 'agentguard-hooks.example.yaml');
   copyBundledSkill(skillDir, force);
@@ -485,22 +490,18 @@ function findHermesConfigPaths(hermesRoot: string): string[] {
   const found = new Set<string>([primary]);
   if (!existsSync(hermesRoot)) return [...found];
 
-  const visit = (dir: string): void => {
-    for (const name of readdirSync(dir).sort()) {
-      const path = join(dir, name);
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) {
-        visit(path);
-        continue;
-      }
-      if (stat.isFile() && name === 'config.yaml') {
-        found.add(path);
-      }
-    }
-  };
+  const profilesDir = join(hermesRoot, 'profiles');
+  if (!existsSync(profilesDir)) return [...found];
 
-  visit(hermesRoot);
+  for (const name of readdirSync(profilesDir).sort()) {
+    const profileDir = join(profilesDir, name);
+    const stat = lstatSync(profileDir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    const profileConfigPath = join(profileDir, 'config.yaml');
+    if (existsSync(profileConfigPath) && lstatSync(profileConfigPath).isFile()) {
+      found.add(profileConfigPath);
+    }
+  }
   return [...found];
 }
 

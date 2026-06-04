@@ -28,8 +28,9 @@ AI Agent Security Guard — protect your AI agents from dangerous commands, data
 
 When installed from SkillHub, Hermes sees the contents of this
 `skills/agentguard` directory first. Runtime hooks are not loaded from
-`SKILL.md` automatically; copy `hermes-hooks.yaml` into `~/.hermes/config.yaml`
-and replace `AGENTGUARD_SKILL_DIR` with this skill's absolute path.
+`SKILL.md` automatically. Run `agentguard init --agent hermes` to install this
+skill into `HERMES_HOME` or `~/.hermes` and merge the hook entries into
+`config.yaml`. The `hermes-hooks.yaml` file remains available for manual setups.
 
 The hook runner is `scripts/hermes-hook.js`. It uses the published
 `@goplus/agentguard` package, so run `npm install` inside this skill directory
