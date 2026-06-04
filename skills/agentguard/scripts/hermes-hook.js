@@ -182,6 +182,7 @@ function runtimeActionTypeFrom(toolName) {
     case 'read_file':
       return 'file_read';
     case 'web_search':
+      return 'web_search';
     case 'web_extract':
     case 'browser_navigate':
     case 'browser_open':

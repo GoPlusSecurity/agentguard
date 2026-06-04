@@ -57,7 +57,7 @@ const ActionEnvelopeSchema = z.object({
   }),
   action: z.object({
     type: z.enum([
-      'network_request', 'exec_command', 'read_file',
+      'network_request', 'web_search', 'exec_command', 'read_file',
       'write_file', 'secret_access', 'web3_tx', 'web3_sign',
     ]),
     data: z.record(z.unknown()),
@@ -245,7 +245,7 @@ function createServer(options?: { registryPath?: string }): Server {
                 properties: {
                   type: {
                     type: 'string',
-                    enum: ['network_request', 'exec_command', 'read_file', 'write_file', 'secret_access', 'web3_tx', 'web3_sign'],
+                    enum: ['network_request', 'web_search', 'exec_command', 'read_file', 'write_file', 'secret_access', 'web3_tx', 'web3_sign'],
                   },
                   data: { type: 'object', description: 'Action-specific data' },
                 },

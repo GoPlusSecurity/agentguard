@@ -7,6 +7,7 @@ export type RuntimeActionType =
   | 'file_read'
   | 'file_write'
   | 'network'
+  | 'web_search'
   | 'mcp_tool'
   | 'browser'
   | 'skill_install'

@@ -74,8 +74,8 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal(adapter.mapToolToActionType('WebFetch'), 'network_request');
     });
 
-    it('should map WebSearch to network_request', () => {
-      assert.equal(adapter.mapToolToActionType('WebSearch'), 'network_request');
+    it('should map WebSearch to web_search', () => {
+      assert.equal(adapter.mapToolToActionType('WebSearch'), 'web_search');
     });
 
     it('should return null for unknown tools', () => {
@@ -124,7 +124,7 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'https://example.com');
     });
 
-    it('should build network_request envelope from WebSearch', () => {
+    it('should build web_search envelope from WebSearch', () => {
       const input = adapter.parseInput({
         hook_event_name: 'PreToolUse',
         tool_name: 'WebSearch',
@@ -132,8 +132,8 @@ describe('ClaudeCodeAdapter', () => {
       });
       const envelope = adapter.buildEnvelope(input);
       assert.ok(envelope);
-      assert.equal(envelope!.action.type, 'network_request');
-      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'test query');
+      assert.equal(envelope!.action.type, 'web_search');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).query, 'test query');
     });
 
     it('should return null for unmapped tools', () => {
@@ -390,8 +390,8 @@ describe('HermesAdapter', () => {
       assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
     });
 
-    it('should map URL-bearing web and browser tools to network_request', () => {
-      assert.equal(adapter.mapToolToActionType('web_search'), 'network_request');
+    it('should split search queries from URL-bearing web and browser tools', () => {
+      assert.equal(adapter.mapToolToActionType('web_search'), 'web_search');
       assert.equal(adapter.mapToolToActionType('web_extract'), 'network_request');
       assert.equal(adapter.mapToolToActionType('browser_navigate'), 'network_request');
     });
@@ -454,6 +454,18 @@ describe('HermesAdapter', () => {
       assert.ok(envelope);
       assert.equal(envelope!.action.type, 'network_request');
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'https://example.com/page');
+    });
+
+    it('should build web_search envelope from web_search query', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'web_search',
+        tool_input: { query: 'MiniMax model list' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'web_search');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).query, 'MiniMax model list');
     });
 
     it('should return null for unmapped tools', () => {
@@ -617,6 +629,10 @@ describe('Adapter Common Utilities', () => {
 
     it('should block network when can_network is false', () => {
       assert.ok(!isActionAllowedByCapabilities('network_request', { can_network: false }));
+    });
+
+    it('should block web search when can_network is false', () => {
+      assert.ok(!isActionAllowedByCapabilities('web_search', { can_network: false }));
     });
 
     it('should block write when can_write is false', () => {

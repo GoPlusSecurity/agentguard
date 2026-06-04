@@ -150,6 +150,12 @@ function buildEnvelope() {
       };
       break;
 
+    case 'web_search':
+      data = {
+        query: getArg('query') || getArg('q') || '',
+      };
+      break;
+
     case 'secret_access':
       data = {
         secret_name: getArg('secret-name') || '',

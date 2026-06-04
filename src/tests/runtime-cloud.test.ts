@@ -58,6 +58,36 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
   });
 
+  it('allows ordinary web search queries without treating them as URLs', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'web_search',
+      toolName: 'web_search',
+      input: 'MiniMax model list 2026',
+    });
+
+    assert.equal(decision.decision, 'allow');
+    assert.equal(decision.riskLevel, 'safe');
+    assert.equal(decision.reasons.length, 0);
+  });
+
+  it('warns but does not require approval for ordinary GET web fetches', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/models',
+      metadata: { method: 'GET' },
+    });
+
+    assert.equal(decision.decision, 'warn');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_RISK'));
+  });
+
   it('rejects malformed keys and non-HTTPS Cloud URLs', () => {
     const previousHome = process.env.AGENTGUARD_HOME;
     process.env.AGENTGUARD_HOME = mkdtempSync(join(tmpdir(), 'agentguard-config-'));
@@ -925,6 +955,25 @@ describe('Runtime Cloud bridge', () => {
     assert.notEqual(
       actionFingerprint({ ...base, sessionId: 'sess_first' }),
       actionFingerprint({ ...base, sessionId: 'sess_retry' })
+    );
+  });
+
+  it('ignores generated OpenClaw session ids when fingerprinting approval retries', () => {
+    const base = {
+      agentHost: 'openclaw' as const,
+      actionType: 'shell' as const,
+      toolName: 'exec',
+      input: 'cat ~/.ssh/id_rsa.pub',
+      cwd: '/workspace',
+    };
+
+    assert.equal(
+      actionFingerprint({ ...base, sessionId: 'sess_local_1' }),
+      actionFingerprint({ ...base, sessionId: 'sess_local_2' })
+    );
+    assert.notEqual(
+      actionFingerprint({ ...base, sessionId: 'sess_openclaw_first' }),
+      actionFingerprint({ ...base, sessionId: 'sess_openclaw_retry' })
     );
   });
 

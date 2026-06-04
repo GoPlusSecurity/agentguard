@@ -29,7 +29,10 @@ hooks:
     - matcher: "write_file|patch|skill_manage"
       command: "node \"/path/to/agentguard/skills/agentguard/scripts/hermes-hook.js\""
       timeout: 10
-    - matcher: "web_search|web_extract|browser_navigate"
+    - matcher: "web_search"
+      command: "node \"/path/to/agentguard/skills/agentguard/scripts/hermes-hook.js\""
+      timeout: 10
+    - matcher: "web_extract|browser_navigate"
       command: "node \"/path/to/agentguard/skills/agentguard/scripts/hermes-hook.js\""
       timeout: 10
 
@@ -55,7 +58,8 @@ or set `hooks_auto_accept: true` in `~/.hermes/config.yaml`.
 | `terminal`, `execute_code` | `exec_command` |
 | `write_file`, `patch`, `skill_manage` | `write_file` |
 | `read_file` | `read_file` |
-| `web_search`, `web_extract`, `browser_navigate` | `network_request` |
+| `web_search` | `web_search` |
+| `web_extract`, `browser_navigate` | `network_request` |
 
 ## Decisions
 

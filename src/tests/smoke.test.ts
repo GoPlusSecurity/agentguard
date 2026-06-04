@@ -325,10 +325,18 @@ describe('Smoke: hermes-hook.js E2E', () => {
   });
 
   it('should evaluate Hermes open-style URL tools', async () => {
-    const { exitCode, stdout } = await runHermesHook({
+    const getResult = await runHermesHook({
       hook_event_name: 'pre_tool_call',
       tool_name: 'open',
       tool_input: { url: 'https://www.tiktok.com' },
+    });
+    assert.equal(getResult.exitCode, 0);
+    assert.deepEqual(JSON.parse(getResult.stdout), {});
+
+    const { exitCode, stdout } = await runHermesHook({
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'open',
+      tool_input: { url: 'https://www.tiktok.com', method: 'POST' },
     });
     assert.equal(exitCode, 0);
     const payload = JSON.parse(stdout) as { action?: string; message?: string };

@@ -16,7 +16,7 @@ function runCli(
   return new Promise((resolvePromise) => {
     const child = spawn('node', [CLI_PATH, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...env, AGENTGUARD_HOME: home },
+      env: { ...process.env, HOME: home, ...env, AGENTGUARD_HOME: home },
     });
     let stdout = '';
     let stderr = '';

@@ -5,6 +5,7 @@ import type {
   Web3Intent,
   Web3SimulationResult,
   NetworkRequestData,
+  WebSearchData,
   ExecCommandData,
   Web3TxData,
   Web3SignData,
@@ -63,6 +64,9 @@ export class ActionScanner {
 
     // Route to appropriate handler based on action type
     switch (action.type) {
+      case 'web_search':
+        return this.handleWebSearch(action.data as WebSearchData, context.user_present);
+
       case 'network_request':
         return this.handleNetworkRequest(
           action.data as NetworkRequestData,
@@ -121,6 +125,50 @@ export class ActionScanner {
   }
 
   /**
+   * Handle web search query actions
+   */
+  private handleWebSearch(
+    search: WebSearchData,
+    userPresent: boolean
+  ): PolicyDecision {
+    if (containsCriticalSecrets(search.query)) {
+      return {
+        decision: 'deny',
+        risk_level: 'critical',
+        risk_tags: ['CRITICAL_SECRET_EXFIL'],
+        evidence: [
+          {
+            type: 'critical_secret',
+            field: 'query',
+            description: 'Search query contains a private key or mnemonic',
+          },
+        ],
+        explanation: 'Critical secret in search query blocked',
+      };
+    }
+
+    const secretLeak = detectSecretLeak(search.query);
+    if (secretLeak.found) {
+      return {
+        decision: userPresent ? 'confirm' : 'deny',
+        risk_level: secretLeak.risk_level,
+        risk_tags: ['POTENTIAL_SECRET_EXFIL'],
+        evidence: secretLeak.evidence,
+        explanation: userPresent
+          ? 'Search query may contain sensitive data'
+          : 'Search query with sensitive data denied',
+      };
+    }
+
+    return {
+      decision: 'allow',
+      risk_level: 'low',
+      risk_tags: [],
+      evidence: [],
+    };
+  }
+
+  /**
    * Handle network request actions
    */
   private async handleNetworkRequest(
@@ -168,16 +216,15 @@ export class ActionScanner {
       };
     }
 
-    // Untrusted domain - require confirmation
+    // Untrusted read-only fetches are useful enough to allow, but still audit.
+    // Mutating requests are elevated by the detector and handled above.
     if (analysis.risk_tags.includes('UNTRUSTED_DOMAIN')) {
       return {
-        decision: userPresent ? 'confirm' : 'deny',
+        decision: 'allow',
         risk_level: analysis.risk_level,
         risk_tags: analysis.risk_tags,
         evidence: analysis.evidence,
-        explanation: userPresent
-          ? 'Request to untrusted domain requires confirmation'
-          : 'Request to untrusted domain denied (user not present)',
+        explanation: 'Request to untrusted domain allowed with audit',
       };
     }
 

@@ -15,9 +15,14 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   patch: 'write_file',
   skill_manage: 'write_file',
   read_file: 'read_file',
-  web_search: 'network_request',
+  web_search: 'web_search',
   web_extract: 'network_request',
   browser_navigate: 'network_request',
+  browser_open: 'network_request',
+  web_open: 'network_request',
+  open_url: 'network_request',
+  visit_url: 'network_request',
+  open: 'network_request',
 };
 
 function firstString(...values: unknown[]): string {
@@ -128,11 +133,16 @@ export class HermesAdapter implements HookAdapter {
           method: firstString(input.toolInput.method) || 'GET',
           url: firstString(
             input.toolInput.url,
-            input.toolInput.query,
             input.toolInput.href,
             input.toolInput.target
           ),
           body_preview: input.toolInput.body as string | undefined,
+        };
+        break;
+
+      case 'web_search':
+        actionData = {
+          query: firstString(input.toolInput.query, input.toolInput.q, input.toolInput.search),
         };
         break;
 

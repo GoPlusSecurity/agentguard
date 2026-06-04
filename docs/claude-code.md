@@ -31,7 +31,8 @@ Recommended matchers:
 - `Bash` → `shell`
 - `Read` → `file_read`
 - `Write`, `Edit`, `MultiEdit` → `file_write`
-- `WebFetch`, `WebSearch` → `network`
+- `WebFetch` → `network`
+- `WebSearch` → `web_search`
 
 ## Decisions
 

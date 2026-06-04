@@ -142,7 +142,8 @@ template at `hermes-hooks.yaml`.
 | `pre_tool_call` | `terminal`, `execute_code` | `exec_command` |
 | `pre_tool_call` | `write_file`, `patch`, `skill_manage` | `write_file` |
 | `pre_tool_call` | `read_file` | `read_file` |
-| `pre_tool_call` | `web_search`, `web_extract`, `browser_navigate`, `browser_open`, `web_open`, `open_url`, `visit_url`, `open` | `network_request` |
+| `pre_tool_call` | `web_search` | `web_search` |
+| `pre_tool_call` | `web_extract`, `browser_navigate`, `browser_open`, `web_open`, `open_url`, `visit_url`, `open` | `network_request` |
 | `post_tool_call` | Same tools | Audit-only |
 
 Hermes `pre_tool_call` supports allow/block only. If AgentGuard returns `ask`,

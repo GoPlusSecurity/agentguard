@@ -229,7 +229,10 @@ hooks:
     - matcher: "read_file"
       command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
       timeout: 10
-    - matcher: "web_search|web_extract|browser_navigate"
+    - matcher: "web_search"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "web_extract|browser_navigate"
       command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
       timeout: 10
 
@@ -520,7 +523,10 @@ function hermesHookEventBlock(skillDir: string): string {
     - matcher: "read_file"
       command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
       timeout: 10
-    - matcher: "web_search|web_extract|browser_navigate"
+    - matcher: "web_search"
+      command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
+      timeout: 10
+    - matcher: "web_extract|browser_navigate"
       command: "node \\"${skillDir}/scripts/hermes-hook.js\\""
       timeout: 10
 

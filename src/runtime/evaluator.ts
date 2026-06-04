@@ -192,10 +192,29 @@ function mapRuntimeAction(action: RuntimeAction): { type: ActionType; data: Acti
   if (action.actionType === 'file_write') {
     return { type: 'write_file', data: { path: action.input } };
   }
+  if (action.actionType === 'web_search') {
+    return { type: 'web_search', data: { query: action.input } };
+  }
   if (action.actionType === 'network' || action.actionType === 'browser') {
-    return { type: 'network_request', data: { method: 'GET', url: action.input } };
+    return {
+      type: 'network_request',
+      data: {
+        method: methodFromMetadata(action.metadata?.method),
+        url: action.input,
+        body_preview: stringFromMetadata(action.metadata?.bodyPreview),
+      },
+    };
   }
   return null;
+}
+
+function methodFromMetadata(value: unknown): 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' {
+  if (value === 'POST' || value === 'PUT' || value === 'DELETE' || value === 'PATCH') return value;
+  return 'GET';
+}
+
+function stringFromMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, action: RuntimeAction): PolicyReason {

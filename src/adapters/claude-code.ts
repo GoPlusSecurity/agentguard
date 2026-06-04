@@ -10,7 +10,7 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   Write: 'write_file',
   Edit: 'write_file',
   WebFetch: 'network_request',
-  WebSearch: 'network_request',
+  WebSearch: 'web_search',
 };
 
 /**
@@ -81,7 +81,13 @@ export class ClaudeCodeAdapter implements HookAdapter {
       case 'network_request':
         actionData = {
           method: 'GET',
-          url: (input.toolInput.url as string) || (input.toolInput.query as string) || '',
+          url: (input.toolInput.url as string) || '',
+        };
+        break;
+
+      case 'web_search':
+        actionData = {
+          query: (input.toolInput.query as string) || '',
         };
         break;
 

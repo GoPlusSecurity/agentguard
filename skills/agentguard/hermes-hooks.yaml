@@ -19,7 +19,10 @@ hooks:
     - matcher: "read_file"
       command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
       timeout: 10
-    - matcher: "web_search|web_extract|browser_navigate|browser_open|web_open|open_url|visit_url|open"
+    - matcher: "web_search"
+      command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
+      timeout: 10
+    - matcher: "web_extract|browser_navigate|browser_open|web_open|open_url|visit_url|open"
       command: "node \"AGENTGUARD_SKILL_DIR/scripts/hermes-hook.js\""
       timeout: 10
 

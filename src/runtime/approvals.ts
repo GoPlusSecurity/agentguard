@@ -38,7 +38,7 @@ export interface ApprovalStore {
 
 export function actionFingerprint(action: RuntimeAction): string {
   const canonical = JSON.stringify({
-    sessionId: action.sessionId,
+    sessionId: fingerprintSessionId(action),
     agentHost: action.agentHost,
     actionType: action.actionType,
     toolName: action.toolName,
@@ -46,6 +46,13 @@ export function actionFingerprint(action: RuntimeAction): string {
     cwd: action.cwd || '',
   });
   return createHash('sha256').update(canonical).digest('hex');
+}
+
+function fingerprintSessionId(action: RuntimeAction): string {
+  if (action.agentHost === 'openclaw' && action.sessionId.startsWith('sess_local_')) {
+    return '';
+  }
+  return action.sessionId;
 }
 
 export function writePendingApproval(

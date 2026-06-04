@@ -182,6 +182,7 @@ export function isActionAllowedByCapabilities(
     case 'exec_command':
       return capabilities.can_exec !== false;
     case 'network_request':
+    case 'web_search':
       return capabilities.can_network !== false;
     case 'write_file':
       return capabilities.can_write !== false;

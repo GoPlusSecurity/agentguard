@@ -538,6 +538,15 @@ function mapOpenClawToolToRuntimeAction(
 ): RuntimeActionType {
   const normalized = (toolName || '').toLowerCase();
   if (
+    normalized === 'web_search' ||
+    normalized === 'websearch' ||
+    normalized.includes('web_search') ||
+    normalized.includes('web search') ||
+    normalized.includes('search_query')
+  ) {
+    return 'web_search';
+  }
+  if (
     normalized === 'exec' ||
     normalized === 'bash' ||
     normalized === 'cmd' ||
@@ -598,10 +607,12 @@ function mapOpenClawToolToRuntimeAction(
   }
   if (
     typeof params?.url === 'string' ||
-    typeof params?.uri === 'string' ||
-    typeof params?.query === 'string'
+    typeof params?.uri === 'string'
   ) {
     return 'network';
+  }
+  if (typeof params?.query === 'string' || typeof params?.q === 'string') {
+    return 'web_search';
   }
   if (
     typeof params?.content === 'string' ||
@@ -640,7 +651,7 @@ function readOpenClawParams(event: unknown): Record<string, unknown> | undefined
 }
 
 function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
-  return actionType !== 'other';
+  return actionType !== 'other' && actionType !== 'web_search';
 }
 
 function readOpenClawSessionId(event: unknown, ctx: unknown): string | undefined {

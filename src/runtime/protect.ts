@@ -236,16 +236,20 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const envAgentHost = process.env.AGENTGUARD_AGENT_HOST as RuntimeAgentHost | undefined;
   const toolName = options.toolName || process.env.AGENTGUARD_TOOL_NAME || pickToolName(raw);
   const actionType = options.actionType || envActionType || mapToolToRuntimeAction(toolName, raw);
+  const toolInput = pickToolInput(raw);
 
   return {
     sessionId: options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw),
     agentHost: options.agentHost || envAgentHost || 'claude-code',
     actionType,
     toolName,
-    input: process.env.TOOL_INPUT || pickInput(raw, actionType),
+    input: process.env.TOOL_INPUT || pickInput(raw, actionType, toolInput),
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
-    metadata: { rawProtocol: raw ? 'stdin-json' : 'env' },
+    metadata: {
+      rawProtocol: raw ? 'stdin-json' : 'env',
+      ...pickNetworkMetadata(toolInput),
+    },
   };
 }
 
@@ -271,13 +275,18 @@ function mapToolToRuntimeAction(toolName: string, raw: Record<string, unknown> |
   if (toolName === 'Bash' || lower.includes('shell') || lower.includes('exec')) return 'shell';
   if (toolName === 'Read' || lower.includes('read')) return 'file_read';
   if (['Write', 'Edit', 'MultiEdit'].includes(toolName) || lower.includes('write')) return 'file_write';
+  if (lower.includes('websearch') || lower.includes('web_search') || lower.includes('search_query')) return 'web_search';
   if (lower.includes('web') || lower.includes('browser')) return 'network';
   if (raw?.actionType && typeof raw.actionType === 'string') return raw.actionType as RuntimeActionType;
   if (raw?.action_type && typeof raw.action_type === 'string') return raw.action_type as RuntimeActionType;
   return 'other';
 }
 
-function pickInput(raw: Record<string, unknown> | null, actionType: RuntimeActionType): string {
+function pickInput(
+  raw: Record<string, unknown> | null,
+  actionType: RuntimeActionType,
+  toolInput = pickToolInput(raw)
+): string {
   if (!raw) return '';
   if (typeof raw.input === 'string') return raw.input;
   if (typeof raw.content === 'string') return raw.content;
@@ -285,13 +294,6 @@ function pickInput(raw: Record<string, unknown> | null, actionType: RuntimeActio
     const command = firstString(raw.command, raw.cmd);
     if (command) return command;
   }
-  const toolInput = firstRecord(
-    raw.tool_input,
-    raw.toolInput,
-    raw.params,
-    raw.args,
-    raw.input
-  );
   if (toolInput) {
     if (actionType === 'shell') {
       const command = firstString(toolInput.command, toolInput.cmd);
@@ -299,11 +301,35 @@ function pickInput(raw: Record<string, unknown> | null, actionType: RuntimeActio
     }
     const filePath = toolInput.file_path || toolInput.filePath || toolInput.path || toolInput.target;
     if ((actionType === 'file_read' || actionType === 'file_write') && typeof filePath === 'string') return filePath;
-    const url = toolInput.url || toolInput.uri || toolInput.href || toolInput.query;
+    if (actionType === 'web_search') {
+      const query = firstString(toolInput.query, toolInput.q, toolInput.search, toolInput.url);
+      if (query) return query;
+    }
+    const url = toolInput.url || toolInput.uri || toolInput.href;
     if (typeof url === 'string') return url;
     return JSON.stringify(toolInput);
   }
   return JSON.stringify(raw);
+}
+
+function pickToolInput(raw: Record<string, unknown> | null): Record<string, unknown> | undefined {
+  return firstRecord(
+    raw?.tool_input,
+    raw?.toolInput,
+    raw?.params,
+    raw?.args,
+    raw?.input
+  );
+}
+
+function pickNetworkMetadata(toolInput: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!toolInput) return {};
+  const method = firstString(toolInput.method).toUpperCase();
+  const bodyPreview = firstString(toolInput.body, toolInput.body_preview, toolInput.bodyPreview);
+  return {
+    ...(method ? { method } : {}),
+    ...(bodyPreview ? { bodyPreview } : {}),
+  };
 }
 
 function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {

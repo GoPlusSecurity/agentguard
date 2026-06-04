@@ -8,6 +8,7 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   exec: 'exec_command',
   write: 'write_file',
   read: 'read_file',
+  web_search: 'web_search',
   web_fetch: 'network_request',
   browser: 'network_request',
 };
@@ -107,6 +108,12 @@ export class OpenClawAdapter implements HookAdapter {
           method: (input.toolInput.method as string) || 'GET',
           url: (input.toolInput.url as string) || '',
           body_preview: input.toolInput.body as string | undefined,
+        };
+        break;
+
+      case 'web_search':
+        actionData = {
+          query: (input.toolInput.query as string) || '',
         };
         break;
 

@@ -6,6 +6,7 @@ import type { RiskLevel } from './scanner.js';
  */
 export type ActionType =
   | 'network_request'
+  | 'web_search'
   | 'exec_command'
   | 'read_file'
   | 'write_file'
@@ -58,6 +59,13 @@ export interface NetworkRequestData {
   url: string;
   headers?: Record<string, string>;
   body_preview?: string;
+}
+
+/**
+ * Web search action data
+ */
+export interface WebSearchData {
+  query: string;
 }
 
 /**
@@ -115,6 +123,7 @@ export interface Web3SignData {
  */
 export type ActionData =
   | NetworkRequestData
+  | WebSearchData
   | ExecCommandData
   | FileOperationData
   | SecretAccessData

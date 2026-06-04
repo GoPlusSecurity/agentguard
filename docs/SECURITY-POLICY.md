@@ -392,7 +392,7 @@ interface CapabilityModel {
 | `Write` | `write_file` |
 | `Edit` | `write_file` |
 | `WebFetch` | `network_request` |
-| `WebSearch` | `network_request` |
+| `WebSearch` | `web_search` |
 
 **Configuration** (`~/.claude/settings.json`):
 
