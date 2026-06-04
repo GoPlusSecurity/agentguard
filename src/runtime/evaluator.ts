@@ -1,6 +1,7 @@
 import { ActionScanner } from '../action/index.js';
 import { homedir } from 'node:os';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
+import { domainMatchesPattern, extractDomain } from '../utils/patterns.js';
 import type { ActionData, ActionEvidence, ActionType } from '../types/action.js';
 import type {
   CloudPolicyDecision,
@@ -109,6 +110,30 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
           domain
         ));
       }
+    }
+  }
+
+  if (action.actionType === 'network' || action.actionType === 'browser') {
+    for (const domain of policy.network.blockedDomains) {
+      if (matchesNetworkTarget(input, domain)) {
+        reasons.push(reason(
+          'CUSTOM_BLOCKED_DOMAIN',
+          'high',
+          'Custom blocked domain',
+          'The action references a domain blocked by runtime policy.',
+          domain
+        ));
+      }
+    }
+
+    if (policy.network.defaultOutbound !== 'allow') {
+      reasons.push(reason(
+        'NETWORK_OUTBOUND',
+        'medium',
+        'Network outbound policy',
+        'The action makes an outbound network request covered by runtime policy.',
+        input
+      ));
     }
   }
 
@@ -244,11 +269,17 @@ function decisionFor(
   ossDecision?: string
 ): CloudPolicyDecision {
   for (const item of reasons) {
+    if (item.code === 'NETWORK_OUTBOUND') continue;
     const decision = policyDecisionFor(item.code, policy);
     if (decision) return decision;
   }
   if (ossDecision === 'deny') return riskLevel === 'critical' ? 'block' : 'require_approval';
   if (ossDecision === 'confirm') return 'require_approval';
+  for (const item of reasons) {
+    if (item.code !== 'NETWORK_OUTBOUND') continue;
+    const decision = policyDecisionFor(item.code, policy);
+    if (decision) return decision;
+  }
   if (reasons.length > 0) return 'warn';
   return 'allow';
 }
@@ -257,6 +288,7 @@ function policyDecisionFor(code: string, policy: EffectiveRuntimePolicy): CloudP
   if (code === 'CUSTOM_BLOCKED_COMMAND' || code === 'DESTRUCTIVE_COMMAND') return policy.decisions.destructiveCommand;
   if (code === 'REMOTE_CODE_EXECUTION') return policy.decisions.remoteCodeExecution;
   if (code === 'CUSTOM_BLOCKED_DOMAIN' || code === 'DATA_EXFILTRATION') return policy.decisions.dataExfiltration;
+  if (code === 'NETWORK_OUTBOUND') return policy.network.defaultOutbound;
   if (code === 'SECRET_ACCESS') return policy.decisions.secretAccess;
   if (code === 'DEPLOYMENT_ACTION') return policy.decisions.deployAction;
   return null;
@@ -308,6 +340,30 @@ function matchesAllowedCommand(input: string, pattern: string): boolean {
 
   return normalizedInput === normalizedPattern ||
     (!inputHasControl && normalizedInput.startsWith(`${normalizedPattern} `));
+}
+
+function matchesNetworkTarget(input: string, pattern: string): boolean {
+  const normalizedPattern = pattern.trim().toLowerCase();
+  if (!normalizedPattern) return false;
+
+  const normalizedInput = input.trim().toLowerCase();
+  if (normalizedInput.includes(normalizedPattern)) return true;
+
+  const domain = extractDomain(input);
+  if (!domain) return false;
+
+  if (!normalizedPattern.includes('/')) {
+    return domainMatchesPattern(domain.toLowerCase(), normalizedPattern);
+  }
+
+  try {
+    const parsed = new URL(input);
+    const hostAndPath = `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+    return hostAndPath === normalizedPattern ||
+      hostAndPath.startsWith(`${normalizedPattern.replace(/\/+$/, '')}/`);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeCommand(value: string): string {

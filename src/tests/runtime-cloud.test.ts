@@ -85,7 +85,70 @@ describe('Runtime Cloud bridge', () => {
     });
 
     assert.equal(decision.decision, 'warn');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_OUTBOUND'));
     assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_RISK'));
+  });
+
+  it('enforces defaultOutbound block for direct network fetches', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'block';
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/models',
+      metadata: { method: 'GET' },
+    });
+
+    assert.equal(decision.decision, 'block');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_OUTBOUND'));
+  });
+
+  it('enforces blocked domains for direct network fetches', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.blockedDomains = ['example.com/models'];
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/models/latest',
+      metadata: { method: 'GET' },
+    });
+
+    assert.equal(decision.decision, 'block');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
+  });
+
+  it('does not downgrade scanner-denied network requests to outbound warnings', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'not-a-url',
+      metadata: { method: 'GET' },
+    });
+
+    assert.equal(decision.decision, 'require_approval');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'INVALID_URL'));
+  });
+
+  it('does not apply defaultOutbound block to web search queries', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'block';
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'web_search',
+      toolName: 'web_search',
+      input: 'MiniMax model list 2026',
+    });
+
+    assert.equal(decision.decision, 'allow');
+    assert.equal(decision.reasons.length, 0);
   });
 
   it('rejects malformed keys and non-HTTPS Cloud URLs', () => {
