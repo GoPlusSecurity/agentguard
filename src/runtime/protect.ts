@@ -54,8 +54,6 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
     policySource = source;
   }
-  if (postToolCall) decision = normalizePostToolDecision(decision);
-
   const approvedGrant = !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
@@ -119,13 +117,6 @@ function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
   const rawDecision = (decision as unknown as { decision?: string }).decision;
   if (rawDecision === 'require_approve') {
     return { ...decision, decision: 'require_approval' };
-  }
-  return decision;
-}
-
-function normalizePostToolDecision(decision: RuntimeDecision): RuntimeDecision {
-  if (decision.decision === 'block' || decision.decision === 'require_approval') {
-    return { ...decision, decision: 'warn' };
   }
   return decision;
 }

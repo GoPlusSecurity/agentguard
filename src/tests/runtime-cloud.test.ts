@@ -381,7 +381,7 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
   });
 
-  it('audits post-tool response anomalies without blocking completed tool calls', async () => {
+  it('preserves post-tool response anomaly decisions without creating approvals', async () => {
     __resetNetworkBehaviorForTests();
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-post-response-'));
     const policy = getDefaultEffectiveRuntimePolicy();
@@ -412,11 +412,48 @@ describe('Runtime Cloud bridge', () => {
       },
     });
 
-    assert.equal(result?.decision.decision, 'warn');
+    assert.equal(result?.decision.decision, 'block');
     assert.equal(result?.approvalChannel, undefined);
     assert.equal(result?.pendingApproval, undefined);
     assert.ok(result?.decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
     assert.match(readFileSync(config.auditPath, 'utf8'), /RESPONSE_MALICIOUS_SCRIPT/);
+  });
+
+  it('preserves post-tool behavior anomaly approval decisions without creating approvals', async () => {
+    __resetNetworkBehaviorForTests();
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-post-behavior-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(policy));
+
+    let result;
+    for (let index = 0; index < 101; index += 1) {
+      result = await protectAction({
+        config,
+        phase: 'post',
+        agentHost: 'openclaw',
+        actionType: 'network',
+        toolName: 'web_fetch',
+        rawInput: {
+          tool_name: 'web_fetch',
+          tool_input: { url: `https://example.com/models/${index}`, method: 'GET' },
+          session_id: 'sess_post_rate_limit',
+        },
+      });
+    }
+
+    assert.equal(result?.decision.decision, 'require_approval');
+    assert.equal(result?.approvalChannel, undefined);
+    assert.equal(result?.pendingApproval, undefined);
+    assert.ok(result?.decision.reasons.some((reason) => reason.code === 'NETWORK_RATE_LIMIT'));
+    assert.match(readFileSync(config.auditPath, 'utf8'), /NETWORK_RATE_LIMIT/);
   });
 
   it('rejects malformed keys and non-HTTPS Cloud URLs', () => {
