@@ -86,7 +86,22 @@ describe('Runtime Cloud bridge', () => {
 
     assert.equal(decision.decision, 'warn');
     assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_OUTBOUND'));
-    assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_RISK'));
+    assert.ok(!decision.reasons.some((reason) => reason.code === 'NETWORK_RISK'));
+  });
+
+  it('requires approval for DELETE network requests', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://api.example.com/models/1',
+      metadata: { method: 'DELETE' },
+    });
+
+    assert.equal(decision.decision, 'require_approval');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'DESTRUCTIVE_HTTP_METHOD'));
   });
 
   it('enforces defaultOutbound block for direct network fetches', async () => {
@@ -119,6 +134,54 @@ describe('Runtime Cloud bridge', () => {
 
     assert.equal(decision.decision, 'block');
     assert.ok(decision.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
+  });
+
+  it('matches blocked network domains structurally instead of by substring', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.blockedDomains = ['example.com'];
+    const clean = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://notexample.com/models/latest',
+      metadata: { method: 'GET' },
+    });
+    const blocked = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/models/latest',
+      metadata: { method: 'GET' },
+    });
+
+    assert.ok(!clean.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
+    assert.equal(blocked.decision, 'block');
+    assert.ok(blocked.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
+  });
+
+  it('matches blocked host/path prefixes in shell network references without substring false positives', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.blockedDomains = ['example.com/models'];
+    const clean = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: 'curl https://notexample.com/models/latest',
+    });
+    const blocked = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'shell',
+      toolName: 'exec',
+      input: 'curl https://example.com/models/latest',
+    });
+
+    assert.ok(!clean.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
+    assert.equal(blocked.decision, 'block');
+    assert.ok(blocked.reasons.some((reason) => reason.code === 'CUSTOM_BLOCKED_DOMAIN'));
   });
 
   it('does not downgrade scanner-denied network requests to outbound warnings', async () => {

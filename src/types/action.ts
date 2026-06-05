@@ -55,7 +55,7 @@ export interface PolicyDecision {
  * Network request action data
  */
 export interface NetworkRequestData {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  method: 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   url: string;
   headers?: Record<string, string>;
   body_preview?: string;

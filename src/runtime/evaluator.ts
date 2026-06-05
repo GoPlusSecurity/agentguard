@@ -101,7 +101,7 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
       }
     }
     for (const domain of policy.network.blockedDomains) {
-      if (domain && lower.includes(domain.toLowerCase())) {
+      if (domain && matchesNetworkReference(input, domain)) {
         reasons.push(reason(
           'CUSTOM_BLOCKED_DOMAIN',
           'high',
@@ -233,8 +233,19 @@ function mapRuntimeAction(action: RuntimeAction): { type: ActionType; data: Acti
   return null;
 }
 
-function methodFromMetadata(value: unknown): 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' {
-  if (value === 'POST' || value === 'PUT' || value === 'DELETE' || value === 'PATCH') return value;
+function methodFromMetadata(value: unknown): 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' {
+  const method = typeof value === 'string' ? value.toUpperCase() : '';
+  if (
+    method === 'GET' ||
+    method === 'HEAD' ||
+    method === 'OPTIONS' ||
+    method === 'POST' ||
+    method === 'PUT' ||
+    method === 'DELETE' ||
+    method === 'PATCH'
+  ) {
+    return method;
+  }
   return 'GET';
 }
 
@@ -343,27 +354,76 @@ function matchesAllowedCommand(input: string, pattern: string): boolean {
 }
 
 function matchesNetworkTarget(input: string, pattern: string): boolean {
-  const normalizedPattern = pattern.trim().toLowerCase();
-  if (!normalizedPattern) return false;
+  const target = parseNetworkTarget(input);
+  const matcher = parseNetworkPattern(pattern);
+  if (!target || !matcher) return false;
 
-  const normalizedInput = input.trim().toLowerCase();
-  if (normalizedInput.includes(normalizedPattern)) return true;
+  if (!domainMatchesPattern(target.hostname, matcher.hostname)) return false;
+  if (!matcher.pathname) return true;
 
-  const domain = extractDomain(input);
-  if (!domain) return false;
+  return target.pathname === matcher.pathname ||
+    target.pathname.startsWith(`${matcher.pathname.replace(/\/+$/, '')}/`);
+}
 
-  if (!normalizedPattern.includes('/')) {
-    return domainMatchesPattern(domain.toLowerCase(), normalizedPattern);
-  }
+function matchesNetworkReference(input: string, pattern: string): boolean {
+  if (matchesNetworkTarget(input, pattern)) return true;
+  return extractNetworkReferences(input).some((reference) => matchesNetworkTarget(reference, pattern));
+}
+
+function parseNetworkTarget(value: string): { hostname: string; pathname: string } | null {
+  const trimmed = trimNetworkToken(value);
+  if (!trimmed) return null;
+  const urlLike = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
 
   try {
-    const parsed = new URL(input);
-    const hostAndPath = `${parsed.hostname}${parsed.pathname}`.toLowerCase();
-    return hostAndPath === normalizedPattern ||
-      hostAndPath.startsWith(`${normalizedPattern.replace(/\/+$/, '')}/`);
+    const parsed = new URL(urlLike);
+    return {
+      hostname: parsed.hostname.toLowerCase(),
+      pathname: normalizeNetworkPath(parsed.pathname),
+    };
   } catch {
-    return false;
+    return null;
   }
+}
+
+function parseNetworkPattern(value: string): { hostname: string; pathname: string | null } | null {
+  const trimmed = trimNetworkToken(value).toLowerCase();
+  if (!trimmed) return null;
+  const urlLike = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(urlLike);
+    return {
+      hostname: parsed.hostname.toLowerCase(),
+      pathname: parsed.pathname && parsed.pathname !== '/' ? normalizeNetworkPath(parsed.pathname) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractNetworkReferences(input: string): string[] {
+  const references = new Set<string>();
+  for (const match of input.matchAll(/https?:\/\/[^\s'"<>`]+/gi)) {
+    references.add(trimNetworkToken(match[0]));
+  }
+  for (const match of input.matchAll(/\b[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}(?:\/[^\s'"<>`]*)?/gi)) {
+    references.add(trimNetworkToken(match[0]));
+  }
+  return [...references].filter(Boolean);
+}
+
+function trimNetworkToken(value: string): string {
+  return value.trim().replace(/[),.;\]]+$/g, '');
+}
+
+function normalizeNetworkPath(pathname: string): string {
+  if (!pathname || pathname === '/') return '/';
+  return pathname.replace(/\/+$/g, '') || '/';
 }
 
 function normalizeCommand(value: string): string {

@@ -82,6 +82,32 @@ describe('policy CLI', () => {
     assert.equal(result.policy.policyVersion, 'runtime-local-v0.1');
   });
 
+  it('surfaces a warning when cached network outbound policy interrupts ordinary fetches', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-show-network-warning-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'block';
+    const cachePath = join(home, 'policy-cache.json');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      version: 1,
+      level: 'balanced',
+      cloudUrl: 'https://agentguard.example',
+      policyCachePath: cachePath,
+      auditPath: join(home, 'audit.jsonl'),
+      eventSpoolPath: join(home, 'events-spool.jsonl'),
+    }));
+    writeFileSync(cachePath, JSON.stringify(policy));
+
+    const cliPath = resolve('dist/cli.js');
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'show', '--json'], {
+      env: { ...process.env, ...ISOLATED_OPENCLAW_ENV, AGENTGUARD_HOME: home },
+    });
+
+    const result = JSON.parse(stdout) as {
+      networkPolicyWarning?: string;
+    };
+    assert.match(result.networkPolicyWarning ?? '', /ordinary external GET\/HEAD\/OPTIONS requests may be interrupted/);
+  });
+
   it('pulls the effective Cloud policy into the local cache', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-policy-cli-'));
     const policy = getDefaultEffectiveRuntimePolicy();
