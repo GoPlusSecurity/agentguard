@@ -127,10 +127,10 @@ async function main() {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
       if (!apiKey) {
         let config = ensureConfig();
-        if (!isOpenClawAgentConfigured(config)) {
-          throw new Error('AgentGuard Cloud connect supports API-key auth or OpenClaw Agent JWT registration. No API key was provided, and OpenClaw has not been initialized. Run `agentguard init --agent openclaw`, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
+        if (!isAgentJwtHostConfigured(config)) {
+          throw new Error('AgentGuard Cloud connect supports API-key auth or Agent JWT registration for OpenClaw and Hermes. No API key was provided, and no supported Agent JWT host has been initialized. Run `agentguard init --agent openclaw` or `agentguard init --agent hermes`, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
         }
-        config = withDetectedOpenClawAgentHost(config);
+        config = withDetectedAgentJwtHost(config);
         const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
         if (config.agentId && config.agentJwt) {
           const existingConfig = { ...config, cloudUrl };
@@ -465,8 +465,8 @@ async function main() {
 
       let registration: AgentCredentialRegistration | null = null;
       if (!client.connected) {
-        if (!isOpenClawAgentConfigured(config)) {
-          const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first, or run `agentguard init --agent openclaw` to use Agent JWT registration.';
+        if (!isAgentJwtHostConfigured(config)) {
+          const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first, or run `agentguard init --agent openclaw` or `agentguard init --agent hermes` to use Agent JWT registration.';
           if (cronNotifyRun) {
             console.log('NO_REPLY');
           } else if (options.json) {
@@ -502,7 +502,7 @@ async function main() {
           await client.subscribeFeed();
         } catch (err) {
           if (err instanceof CloudRequestError && err.status === 401) {
-            if (!isOpenClawAgentConfigured(config)) {
+            if (!isAgentJwtHostConfigured(config)) {
               console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
               process.exitCode = 1;
               return;
@@ -544,7 +544,7 @@ async function main() {
             process.exitCode = 1;
             return;
           }
-          if (!isOpenClawAgentConfigured(config)) {
+          if (!isAgentJwtHostConfigured(config)) {
             console.error('! AgentGuard Cloud credential was rejected. Run `agentguard connect --key <key>` again.');
             process.exitCode = 1;
             return;
@@ -1381,7 +1381,7 @@ async function runCloudRequestWithAgentJwtReauth<T>(options: {
     if (
       !(err instanceof CloudRequestError && err.status === 401) ||
       !options.config.agentJwt ||
-      !isOpenClawAgentConfigured(options.config)
+      !isAgentJwtHostConfigured(options.config)
     ) {
       throw err;
     }
@@ -1465,12 +1465,26 @@ function isOpenClawAgentConfigured(config: AgentGuardConfig): boolean {
   return config.agentHost === 'openclaw' || config.agentHosts?.includes('openclaw') === true || detectOpenClawRuntime();
 }
 
-function withDetectedOpenClawAgentHost(config: AgentGuardConfig): AgentGuardConfig {
-  if (hasSavedAgentHost(config) || !detectOpenClawRuntime()) return config;
+function isHermesAgentConfigured(config: AgentGuardConfig): boolean {
+  return config.agentHost === 'hermes' || config.agentHosts?.includes('hermes') === true || detectHermesRuntime();
+}
+
+function isAgentJwtHostConfigured(config: AgentGuardConfig): boolean {
+  return isOpenClawAgentConfigured(config) || isHermesAgentConfigured(config);
+}
+
+function withDetectedAgentJwtHost(config: AgentGuardConfig): AgentGuardConfig {
+  if (hasSavedAgentHost(config)) return config;
+  if (detectOpenClawRuntime()) return withDetectedAgentHost(config, 'openclaw');
+  if (detectHermesRuntime()) return withDetectedAgentHost(config, 'hermes');
+  return config;
+}
+
+function withDetectedAgentHost(config: AgentGuardConfig, agentHost: AgentGuardAgentHost): AgentGuardConfig {
   const next: AgentGuardConfig = {
     ...config,
-    agentHost: 'openclaw',
-    agentHosts: appendAgentHost(config.agentHosts, 'openclaw'),
+    agentHost,
+    agentHosts: appendAgentHost(config.agentHosts, agentHost),
   };
   saveConfig(next);
   return next;
@@ -1484,6 +1498,14 @@ function detectOpenClawRuntime(): boolean {
   if (stateDir && (existsSync(stateDir) || existsSync(join(stateDir, 'openclaw.json')))) return true;
 
   return existsSync(join(homedir(), '.openclaw', 'openclaw.json'));
+}
+
+function detectHermesRuntime(): boolean {
+  const hermesHome = process.env.HERMES_HOME?.trim();
+  if (hermesHome && (existsSync(hermesHome) || existsSync(join(hermesHome, 'config.yaml')))) return true;
+
+  const defaultHome = join(homedir(), '.hermes');
+  return existsSync(join(defaultHome, 'config.yaml')) || existsSync(defaultHome);
 }
 
 function resolveOpenClawGatewayOptionsFromEnv(): OpenClawGatewayOptions {

@@ -12,12 +12,13 @@ const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 const ISOLATED_OPENCLAW_ENV = {
   AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '127.0.0.1',
   AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '9',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '200',
   OPENCLAW_CONFIG_PATH: '',
   OPENCLAW_STATE_DIR: '',
+  HERMES_HOME: '',
 };
 
 function runCli(
@@ -219,6 +220,89 @@ describe('CLI subscribe command modes', () => {
         'POST /api/v1/feed/subscribe',
         'GET /api/v1/feed/advisories',
       ]);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('registers a Hermes local agent before subscribing when no Cloud credential exists', async () => {
+    const requests: Array<{ url?: string; method?: string; authorization?: string; body?: any }> = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        requests.push({
+          url: req.url,
+          method: req.method,
+          authorization: req.headers.authorization,
+          body: body ? JSON.parse(body) : undefined,
+        });
+        res.setHeader('content-type', 'application/json');
+        if (req.method === 'POST' && req.url === '/api/agent/register') {
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              agentId: 'agt_hermes_subscribe',
+              jwt: 'agent.jwt.hermes-subscribe',
+              registerUrl: 'https://agentguard.example/activate?token=hermes-subscribe',
+            },
+          }));
+          return;
+        }
+        if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+          res.end(JSON.stringify({ success: true, data: { id: 'sub_hermes', status: 'active' } }));
+          return;
+        }
+        if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
+          res.end(JSON.stringify({ success: true, data: { advisories: [] } }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-hermes-register-'));
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'hermes',
+        agentHosts: ['hermes'],
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json'], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
+        'POST /api/agent/register',
+        'POST /api/v1/feed/subscribe',
+        'GET /api/v1/feed/advisories',
+      ]);
+      assert.equal(requests[0].body.metadata.agentHost, 'hermes');
+      assert.equal(requests[1].authorization, 'Bearer agent.jwt.hermes-subscribe');
+      assert.equal(requests[2].authorization, 'Bearer agent.jwt.hermes-subscribe');
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+        agentRegisterUrl?: string;
+        agentHost?: string;
+      };
+      assert.equal(config.agentHost, 'hermes');
+      assert.equal(config.agentId, 'agt_hermes_subscribe');
+      assert.equal(config.agentJwt, 'agent.jwt.hermes-subscribe');
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=hermes-subscribe');
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }
