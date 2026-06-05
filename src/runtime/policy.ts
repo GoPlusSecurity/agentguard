@@ -38,6 +38,7 @@ export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
         'api.telegram.org/bot',
       ],
       approvalDomains: [],
+      behaviorAnomaly: 'require_approval',
     },
     updatedAt: new Date(0).toISOString(),
   };

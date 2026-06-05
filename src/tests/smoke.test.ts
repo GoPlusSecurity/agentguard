@@ -339,9 +339,7 @@ describe('Smoke: hermes-hook.js E2E', () => {
       tool_input: { url: 'https://www.tiktok.com', method: 'POST' },
     });
     assert.equal(exitCode, 0);
-    const payload = JSON.parse(stdout) as { action?: string; message?: string };
-    assert.equal(payload.action, 'block');
-    assert.ok(payload.message?.includes('requires confirmation'));
+    assert.deepEqual(JSON.parse(stdout), {});
   });
 
   it('should block invalid stdin without waiting for the stdin timeout', async () => {

@@ -78,10 +78,12 @@ const DANGEROUS_COMMANDS = [
   'chmod -R 777',
   '> /dev/sda',
   'mv /* ',
-  'wget.*\\|.*sh',
-  'curl.*\\|.*sh',
-  'curl.*\\|.*bash',
-  'wget.*\\|.*bash',
+];
+
+const DOWNLOAD_AND_EXEC_PATTERNS = [
+  /\b(?:curl|wget)\b(?:(?!&&|\|\||;|\n|\r).)*\|\s*(?:sudo\s+)?(?:bash|sh)\b/i,
+  /\b(?:bash|sh)\s+<\s*\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
+  /\beval\s+["']?\$\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
 ];
 
 /**
@@ -189,6 +191,24 @@ export function analyzeExecCommand(
         riskLevel = 'critical';
         shouldBlock = true;
         blockReason = `Dangerous command: ${dangerous}`;
+        break;
+      }
+    }
+  }
+
+  if (riskLevel !== 'critical') {
+    for (const pattern of DOWNLOAD_AND_EXEC_PATTERNS) {
+      if (pattern.test(fullCommand)) {
+        riskTags.push('DANGEROUS_COMMAND');
+        evidence.push({
+          type: 'dangerous_command',
+          field: 'command',
+          match: 'download-and-execute',
+          description: 'Remote download piped or substituted into a shell',
+        });
+        riskLevel = 'critical';
+        shouldBlock = true;
+        blockReason = 'Dangerous command: remote download executed by shell';
         break;
       }
     }

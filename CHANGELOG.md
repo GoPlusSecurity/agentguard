@@ -5,11 +5,14 @@
 ### Changed
 - Web search actions now use a dedicated `web_search` runtime action across Claude Code, Hermes, OpenClaw, MCP, and the skill CLI, so query-only searches are handled separately from URL fetches and no longer trigger invalid-URL network approval flows.
 - Direct web fetch and browser navigation GET requests keep the default `network.defaultOutbound: warn` behavior as audit-only, while mutating or high-risk network requests still require confirmation or blocking.
+- Network request decisions now treat GET/HEAD/OPTIONS as low-risk reads, keep non-sensitive POST/PUT/PATCH requests at audit-level risk, require approval for DELETE, and warn when a cached policy uses an interruptive `network.defaultOutbound`.
+- Runtime network evaluation now detects local behavior and response anomalies including request bursts, token domain sweeps, replayed requests, odd-hour bursts, large responses, malicious response bodies, MIME mismatches, and credential echo.
 - `agentguard connect` and `agentguard subscribe` now support Hermes Agent JWT registration when Hermes is initialized or detected via `HERMES_HOME`/`~/.hermes`, while preserving the existing OpenClaw notification behavior.
 
 ### Fixed
 - `agentguard init --agent hermes` now targets `HERMES_HOME` or `~/.hermes` for explicit installs instead of creating a nested `.hermes` directory under the current working directory, while only updating the root Hermes config and profile configs.
 - Runtime network policies now enforce `network.defaultOutbound` and `network.blockedDomains` for direct network/browser tool calls instead of only checking shell commands.
+- Runtime blocked-domain matching now compares structured URL hosts and paths instead of raw substrings, avoiding false positives such as `notexample.com` matching `example.com`; curl/wget download-and-execute commands are detected with real regex patterns.
 - Hermes hook templates now split `web_search` from URL-bearing web/browser tools and recognize open-style URL tools consistently.
 
 ## [1.1.27] - 2026-05-29

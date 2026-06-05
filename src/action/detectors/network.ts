@@ -18,6 +18,9 @@ export interface NetworkAnalysisResult {
   block_reason?: string;
 }
 
+type NetworkRiskLevel = NetworkAnalysisResult['risk_level'];
+type NetworkMethod = NetworkRequestData['method'];
+
 /**
  * Known webhook/exfiltration domains
  */
@@ -67,9 +70,12 @@ export function analyzeNetworkRequest(
 ): NetworkAnalysisResult {
   const riskTags: string[] = [];
   const evidence: ActionEvidence[] = [];
-  let riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'low';
+  let riskLevel: NetworkRiskLevel = 'low';
   let shouldBlock = false;
   let blockReason: string | undefined;
+  const method = normalizeMethod(request.method);
+  const readOnlyMethod = isReadOnlyMethod(method);
+  const mutatingMethod = method === 'POST' || method === 'PUT' || method === 'PATCH';
 
   // Extract domain
   const domain = extractDomain(request.url);
@@ -130,7 +136,7 @@ export function analyzeNetworkRequest(
   }
 
   // Check for untrusted domain
-  if (!isAllowed && !isWebhook) {
+  if (!isAllowed && !isWebhook && !readOnlyMethod) {
     riskTags.push('UNTRUSTED_DOMAIN');
     evidence.push({
       type: 'untrusted_domain',
@@ -173,13 +179,26 @@ export function analyzeNetworkRequest(
     }
   }
 
-  // POST/PUT to untrusted domain is higher risk
-  if (
-    (request.method === 'POST' || request.method === 'PUT') &&
-    !isAllowed &&
-    riskLevel === 'medium'
-  ) {
-    riskLevel = 'high';
+  if (method === 'DELETE') {
+    riskTags.push('DESTRUCTIVE_HTTP_METHOD');
+    evidence.push({
+      type: 'destructive_http_method',
+      field: 'method',
+      match: method,
+      description: 'DELETE requests can remove remote resources',
+    });
+    riskLevel = maxRisk(riskLevel, 'high');
+  }
+
+  if (mutatingMethod && !isAllowed && !riskTags.includes('CRITICAL_SECRET_EXFIL')) {
+    riskTags.push('MUTATING_UNTRUSTED_REQUEST');
+    evidence.push({
+      type: 'mutating_untrusted_request',
+      field: 'method',
+      match: method,
+      description: `${method} request to a non-allowlisted domain`,
+    });
+    riskLevel = maxRisk(riskLevel, 'medium');
   }
 
   return {
@@ -189,4 +208,35 @@ export function analyzeNetworkRequest(
     should_block: shouldBlock,
     block_reason: blockReason,
   };
+}
+
+function normalizeMethod(method: string | undefined): NetworkMethod {
+  const normalized = method?.toUpperCase();
+  switch (normalized) {
+    case 'GET':
+    case 'HEAD':
+    case 'OPTIONS':
+    case 'POST':
+    case 'PUT':
+    case 'DELETE':
+    case 'PATCH':
+      return normalized;
+    default:
+      return 'GET';
+  }
+}
+
+function isReadOnlyMethod(method: NetworkMethod): boolean {
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+}
+
+const RISK_ORDER: Record<NetworkRiskLevel, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
+
+function maxRisk(current: NetworkRiskLevel, next: NetworkRiskLevel): NetworkRiskLevel {
+  return RISK_ORDER[next] > RISK_ORDER[current] ? next : current;
 }

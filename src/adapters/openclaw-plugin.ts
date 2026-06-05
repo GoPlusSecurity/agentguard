@@ -511,6 +511,19 @@ export function registerOpenClawPlugin(
       const input = adapter.parseInput(event);
       const toolName = readOpenClawToolName(event);
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
+      if (runtimeProtectionEnabled) {
+        const runtimeResult = await runProtectAction({
+          config,
+          rawInput: event,
+          agentHost: 'openclaw',
+          actionType: mapOpenClawToolToRuntimeAction(toolName, event),
+          toolName,
+          sessionId: readOpenClawSessionId(event, undefined),
+          decisionMode: options.decisionMode ?? 'local-first',
+          phase: 'post',
+        });
+        if (runtimeResult) return;
+      }
       writeAuditLog(input, null, pluginId);
     } catch {
       // Non-critical

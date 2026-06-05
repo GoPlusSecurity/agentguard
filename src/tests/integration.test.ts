@@ -629,6 +629,31 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     });
     // No error = pass
   });
+
+  it('should run post-phase runtime evaluation for OpenClaw network responses', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    let captured: Record<string, unknown> | undefined;
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ctx.agentguard as never,
+      protectAction: async (options) => {
+        captured = options as unknown as Record<string, unknown>;
+        return null;
+      },
+    });
+
+    await handlers['after_tool_call']({
+      toolName: 'web_fetch',
+      params: { url: 'https://example.com' },
+      response: { contentType: 'image/png', body: '<script>eval(atob("x"))</script>' },
+      sessionId: 'sess-post',
+    });
+
+    assert.equal(captured?.phase, 'post');
+    assert.equal(captured?.agentHost, 'openclaw');
+    assert.equal(captured?.actionType, 'network');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

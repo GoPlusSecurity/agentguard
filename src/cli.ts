@@ -298,6 +298,7 @@ async function main() {
           source,
           cachePath: config.policyCachePath,
           policy: shownPolicy,
+          networkPolicyWarning: networkDefaultOutboundWarning(shownPolicy.network.defaultOutbound),
         }, null, 2));
         return;
       }
@@ -318,6 +319,8 @@ async function main() {
       console.log(`Network default outbound: ${shownPolicy.network.defaultOutbound}`);
       console.log(`Blocked domains: ${shownPolicy.network.blockedDomains.length}`);
       console.log(`Approval domains: ${shownPolicy.network.approvalDomains.length}`);
+      const networkWarning = networkDefaultOutboundWarning(shownPolicy.network.defaultOutbound);
+      if (networkWarning) console.log(`! ${networkWarning}`);
     });
 
   program
@@ -982,6 +985,11 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
   console.log('Cloud auth: not connected');
   console.log('API key: not configured');
   console.log('Agent JWT: not configured');
+}
+
+function networkDefaultOutboundWarning(value: string): string | undefined {
+  if (value !== 'block' && value !== 'require_approval') return undefined;
+  return `network.defaultOutbound is ${value}; ordinary external GET/HEAD/OPTIONS requests may be interrupted unless domains are explicitly allowed.`;
 }
 
 async function printSubscribeConnectRequired(
