@@ -1,7 +1,11 @@
 import { ActionScanner } from '../action/index.js';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
 import { domainMatchesPattern, extractDomain } from '../utils/patterns.js';
+import { getAgentGuardPaths } from '../config.js';
 import type { ActionData, ActionEvidence, ActionType } from '../types/action.js';
 import type {
   CloudPolicyDecision,
@@ -13,6 +17,49 @@ import type {
   RuntimeSeverity,
 } from './types.js';
 import { redactPreview, redactReasons } from './redaction.js';
+
+const ONE_MINUTE_MS = 60_000;
+const TEN_MINUTES_MS = 10 * ONE_MINUTE_MS;
+const HIGH_FREQUENCY_THRESHOLD = 100;
+const ODD_HOUR_FREQUENCY_THRESHOLD = 20;
+const TOKEN_DOMAIN_THRESHOLD = 10;
+const REPLAY_THRESHOLD = 5;
+const DOS_STATUS_THRESHOLD = 5;
+const SINGLE_RESPONSE_BYTES_THRESHOLD = 10 * 1024 * 1024;
+const WINDOW_RESPONSE_BYTES_THRESHOLD = 100 * 1024 * 1024;
+const MAX_PERSISTED_BEHAVIOR_EVENTS = 1_000;
+
+interface NetworkTarget {
+  hostname: string;
+  pathname: string;
+}
+
+interface NetworkBehaviorEvent {
+  timestamp: number;
+  sessionId: string;
+  hostname: string;
+  method: string;
+  fingerprint?: string;
+  tokenHashes: string[];
+  responseBytes?: number;
+  responseStatus?: number;
+}
+
+const networkBehaviorEvents: NetworkBehaviorEvent[] = [];
+let networkBehaviorStateLoaded = false;
+
+export function __resetNetworkBehaviorForTests(): void {
+  networkBehaviorEvents.length = 0;
+  networkBehaviorStateLoaded = true;
+  const statePath = process.env.AGENTGUARD_BEHAVIOR_STATE_PATH;
+  if (statePath) {
+    try {
+      rmSync(statePath, { force: true });
+    } catch {
+      // Test cleanup only.
+    }
+  }
+}
 
 function reason(
   code: string,
@@ -137,6 +184,12 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
     }
   }
 
+  const networkTargets = networkTargetsFromAction(action);
+  if (networkTargets.length > 0) {
+    reasons.push(...networkBehaviorReasons(action, networkTargets));
+    reasons.push(...networkResponseReasons(action, networkTargets[0]));
+  }
+
   if (action.actionType === 'file_read' || action.actionType === 'file_write') {
     for (const pathPattern of policy.protectedPaths) {
       if (matchesPath(input, pathPattern)) {
@@ -253,6 +306,38 @@ function stringFromMetadata(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function firstStringFromMetadata(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function numberFromMetadata(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function timeFromMetadata(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function recordFromMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, action: RuntimeAction): PolicyReason {
   const evidenceText = evidence?.match || evidence?.description || action.input;
   if (tag === 'DANGEROUS_COMMAND') {
@@ -273,35 +358,309 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
   return reason(tag, 'medium', tag.replace(/_/g, ' ').toLowerCase(), 'The local OSS runtime detected a risky action.', evidenceText);
 }
 
+const BEHAVIOR_ANOMALY_CODES = new Set([
+  'NETWORK_RATE_LIMIT',
+  'NETWORK_TOKEN_DOMAIN_SWEEP',
+  'NETWORK_ODD_HOUR_ACTIVITY',
+  'NETWORK_REPLAY',
+  'NETWORK_LARGE_RESPONSE',
+  'NETWORK_DOS_RESPONSE',
+]);
+
+const RESPONSE_ANOMALY_CODES = new Set([
+  'RESPONSE_XSS_ECHO',
+  'RESPONSE_ERROR_DISCLOSURE',
+  'RESPONSE_MALICIOUS_SCRIPT',
+  'RESPONSE_PATH_TRAVERSAL',
+  'RESPONSE_CONTENT_TYPE_MISMATCH',
+  'RESPONSE_CREDENTIAL_ECHO',
+]);
+
+function networkTargetsFromAction(action: RuntimeAction): NetworkTarget[] {
+  if (action.actionType === 'network' || action.actionType === 'browser') {
+    const target = parseNetworkTarget(action.input);
+    return target ? [target] : [];
+  }
+  if (action.actionType !== 'shell') return [];
+
+  const targets = new Map<string, NetworkTarget>();
+  for (const reference of extractNetworkReferences(action.input)) {
+    const target = parseNetworkTarget(reference);
+    if (target) targets.set(`${target.hostname}${target.pathname}`, target);
+  }
+  return [...targets.values()];
+}
+
+function networkBehaviorReasons(action: RuntimeAction, targets: NetworkTarget[]): PolicyReason[] {
+  const timestamp = timeFromMetadata(action.metadata?.timestamp) ?? Date.now();
+  loadNetworkBehaviorState(timestamp);
+  pruneNetworkBehaviorEvents(timestamp);
+
+  const method = methodFromMetadata(action.metadata?.method);
+  const headers = recordFromMetadata(action.metadata?.headers) ?? recordFromMetadata(action.metadata?.requestHeaders);
+  const bodyPreview = stringFromMetadata(action.metadata?.bodyPreview);
+  const responseBytes = numberFromMetadata(
+    action.metadata?.responseBodyBytes,
+    action.metadata?.responseBytes,
+    action.metadata?.contentLength
+  );
+  const responseStatus = numberFromMetadata(
+    action.metadata?.responseStatusCode,
+    action.metadata?.statusCode,
+    action.metadata?.status
+  );
+  const tokenHashes = extractCredentialValues(action.input, headers, bodyPreview).map(hashValue);
+  const fingerprint = requestFingerprint(action.input, targets[0], method, headers, bodyPreview);
+
+  for (const target of targets) {
+    networkBehaviorEvents.push({
+      timestamp,
+      sessionId: action.sessionId,
+      hostname: target.hostname,
+      method,
+      fingerprint,
+      tokenHashes,
+      responseBytes,
+      responseStatus,
+    });
+  }
+
+  const reasons: PolicyReason[] = [];
+  const sessionRecent = networkBehaviorEvents.filter((event) =>
+    event.sessionId === action.sessionId &&
+    timestamp - event.timestamp <= ONE_MINUTE_MS
+  );
+
+  if (sessionRecent.length > HIGH_FREQUENCY_THRESHOLD) {
+    reasons.push(reason(
+      'NETWORK_RATE_LIMIT',
+      'high',
+      'High-frequency network activity',
+      'The agent made more than 100 outbound requests in one minute.',
+      `${sessionRecent.length} requests in 60s`
+    ));
+  }
+
+  if (isOddHour(timestamp) && sessionRecent.length > ODD_HOUR_FREQUENCY_THRESHOLD) {
+    reasons.push(reason(
+      'NETWORK_ODD_HOUR_ACTIVITY',
+      'high',
+      'Odd-hour network burst',
+      'The agent made a high-frequency network burst during the 02:00-06:00 local risk window.',
+      `${sessionRecent.length} requests in 60s`
+    ));
+  }
+
+  if (fingerprint) {
+    const repeats = sessionRecent.filter((event) => event.fingerprint === fingerprint).length;
+    if (repeats >= REPLAY_THRESHOLD) {
+      reasons.push(reason(
+        'NETWORK_REPLAY',
+        'high',
+        'Repeated identical request',
+        'The same request body and headers appeared repeatedly in a short window.',
+        `${repeats} repeats in 60s`
+      ));
+    }
+  }
+
+  for (const tokenHash of tokenHashes) {
+    const domains = new Set(
+      networkBehaviorEvents
+        .filter((event) =>
+          event.sessionId === action.sessionId &&
+          timestamp - event.timestamp <= TEN_MINUTES_MS &&
+          event.tokenHashes.includes(tokenHash)
+        )
+        .map((event) => event.hostname)
+    );
+    if (domains.size > TOKEN_DOMAIN_THRESHOLD) {
+      reasons.push(reason(
+        'NETWORK_TOKEN_DOMAIN_SWEEP',
+        'high',
+        'Credential used across many domains',
+        'The same credential-like value was used against more than 10 distinct domains.',
+        `${domains.size} domains in 10m`
+      ));
+      break;
+    }
+  }
+
+  const responseBytesTotal = sessionRecent.reduce((total, event) => total + (event.responseBytes ?? 0), 0);
+  if (
+    (responseBytes !== undefined && responseBytes > SINGLE_RESPONSE_BYTES_THRESHOLD) ||
+    responseBytesTotal > WINDOW_RESPONSE_BYTES_THRESHOLD
+  ) {
+    reasons.push(reason(
+      'NETWORK_LARGE_RESPONSE',
+      'high',
+      'Large network response volume',
+      'The network response volume crossed the runtime anomaly threshold.',
+      responseBytes !== undefined ? `${responseBytes} bytes` : `${responseBytesTotal} bytes in 60s`
+    ));
+  }
+
+  if (responseStatus === 429 || responseStatus === 503) {
+    const statusRepeats = sessionRecent.filter((event) => event.responseStatus === responseStatus).length;
+    if (statusRepeats >= DOS_STATUS_THRESHOLD) {
+      reasons.push(reason(
+        'NETWORK_DOS_RESPONSE',
+        'high',
+        'Repeated throttling or service unavailable responses',
+        'The agent received repeated 429/503 responses in a short window.',
+        `${statusRepeats} responses with status ${responseStatus} in 60s`
+      ));
+    }
+  }
+
+  saveNetworkBehaviorState();
+  return dedupeReasons(reasons);
+}
+
+function networkResponseReasons(action: RuntimeAction, target: NetworkTarget): PolicyReason[] {
+  const responseBody = firstStringFromMetadata(
+    action.metadata?.responseBodyPreview,
+    action.metadata?.responsePreview,
+    action.metadata?.responseBody
+  );
+  const responseHeaders = recordFromMetadata(action.metadata?.responseHeaders);
+  const contentType = (firstStringFromMetadata(
+    action.metadata?.responseContentType,
+    contentTypeFromHeaders(responseHeaders)
+  ) ?? '').toLowerCase();
+
+  if (!responseBody) return [];
+
+  const reasons: PolicyReason[] = [];
+  if (hasSuspiciousXssResponse(responseBody)) {
+    reasons.push(reason(
+      'RESPONSE_XSS_ECHO',
+      'high',
+      'Executable markup in response',
+      'The network response contains script-like markup or JavaScript URL content.',
+      target.hostname
+    ));
+  }
+
+  if (/sql syntax|mysql_fetch|postgresql|ora-\d+|traceback|stack trace|exception|at .+:\d+:\d+/i.test(responseBody)) {
+    reasons.push(reason(
+      'RESPONSE_ERROR_DISCLOSURE',
+      'high',
+      'Server error disclosure in response',
+      'The network response contains SQL, command, or stack-trace style error output.',
+      target.hostname
+    ));
+  }
+
+  if (/eval\s*\(\s*(?:atob|unescape)|fromcharcode|document\.write\s*\(/i.test(responseBody)) {
+    reasons.push(reason(
+      'RESPONSE_MALICIOUS_SCRIPT',
+      'critical',
+      'Obfuscated script in response',
+      'The network response contains script patterns commonly used for payload staging.',
+      target.hostname
+    ));
+  }
+
+  if (/root:.*:0:0:|\/etc\/passwd|c:\\windows\\|windows\\system32/i.test(responseBody)) {
+    reasons.push(reason(
+      'RESPONSE_PATH_TRAVERSAL',
+      'critical',
+      'Path traversal content in response',
+      'The network response contains filesystem markers associated with traversal or local file disclosure.',
+      target.hostname
+    ));
+  }
+
+  if (contentType && isBinaryOrMediaContentType(contentType) && looksLikeHtmlOrScript(responseBody)) {
+    reasons.push(reason(
+      'RESPONSE_CONTENT_TYPE_MISMATCH',
+      'critical',
+      'Response content type mismatch',
+      'The response body looks executable or HTML-like while the Content-Type claims binary/media content.',
+      target.hostname
+    ));
+  }
+
+  const requestSecrets = extractCredentialValues(
+    action.input,
+    recordFromMetadata(action.metadata?.headers) ?? recordFromMetadata(action.metadata?.requestHeaders),
+    stringFromMetadata(action.metadata?.bodyPreview)
+  );
+  if (requestSecrets.some((secret) => secret.length >= 8 && responseBody.includes(secret))) {
+    reasons.push(reason(
+      'RESPONSE_CREDENTIAL_ECHO',
+      'critical',
+      'Credential echoed in response',
+      'The response appears to echo a credential-like value from the request.',
+      target.hostname
+    ));
+  }
+
+  return dedupeReasons(reasons);
+}
+
 function decisionFor(
   policy: EffectiveRuntimePolicy,
   reasons: PolicyReason[],
   riskLevel: RuntimeRiskLevel,
   ossDecision?: string
 ): CloudPolicyDecision {
+  const policyDecisions: CloudPolicyDecision[] = [];
   for (const item of reasons) {
-    if (item.code === 'NETWORK_OUTBOUND') continue;
-    const decision = policyDecisionFor(item.code, policy);
-    if (decision) return decision;
+    const decision = policyDecisionFor(item, policy);
+    if (decision) policyDecisions.push(decision);
   }
-  if (ossDecision === 'deny') return riskLevel === 'critical' ? 'block' : 'require_approval';
-  if (ossDecision === 'confirm') return 'require_approval';
-  for (const item of reasons) {
-    if (item.code !== 'NETWORK_OUTBOUND') continue;
-    const decision = policyDecisionFor(item.code, policy);
-    if (decision) return decision;
+  const strongestPolicyDecision = strongestDecision(policyDecisions);
+  const scannerDecision = scannerPolicyDecision(ossDecision, riskLevel);
+  if (strongestPolicyDecision) {
+    if (
+      scannerDecision &&
+      DECISION_ORDER[strongestPolicyDecision] <= DECISION_ORDER.warn &&
+      DECISION_ORDER[scannerDecision] > DECISION_ORDER[strongestPolicyDecision]
+    ) {
+      return scannerDecision;
+    }
+    return strongestPolicyDecision;
   }
+  if (scannerDecision) return scannerDecision;
   if (reasons.length > 0) return 'warn';
   return 'allow';
 }
 
-function policyDecisionFor(code: string, policy: EffectiveRuntimePolicy): CloudPolicyDecision | null {
+function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePolicy): CloudPolicyDecision | null {
+  const code = reasonItem.code;
   if (code === 'CUSTOM_BLOCKED_COMMAND' || code === 'DESTRUCTIVE_COMMAND') return policy.decisions.destructiveCommand;
   if (code === 'REMOTE_CODE_EXECUTION') return policy.decisions.remoteCodeExecution;
   if (code === 'CUSTOM_BLOCKED_DOMAIN' || code === 'DATA_EXFILTRATION') return policy.decisions.dataExfiltration;
   if (code === 'NETWORK_OUTBOUND') return policy.network.defaultOutbound;
+  if (BEHAVIOR_ANOMALY_CODES.has(code)) return policy.network.behaviorAnomaly ?? 'require_approval';
+  if (RESPONSE_ANOMALY_CODES.has(code)) {
+    return policy.network.responseAnomaly ?? (reasonItem.severity === 'critical' ? 'block' : 'require_approval');
+  }
   if (code === 'SECRET_ACCESS') return policy.decisions.secretAccess;
   if (code === 'DEPLOYMENT_ACTION') return policy.decisions.deployAction;
+  return null;
+}
+
+const DECISION_ORDER: Record<CloudPolicyDecision, number> = {
+  allow: 0,
+  warn: 1,
+  require_approval: 2,
+  block: 3,
+};
+
+function strongestDecision(decisions: CloudPolicyDecision[]): CloudPolicyDecision | null {
+  let strongest: CloudPolicyDecision | null = null;
+  for (const decision of decisions) {
+    if (!strongest || DECISION_ORDER[decision] > DECISION_ORDER[strongest]) strongest = decision;
+  }
+  return strongest;
+}
+
+function scannerPolicyDecision(ossDecision: string | undefined, riskLevel: RuntimeRiskLevel): CloudPolicyDecision | null {
+  if (ossDecision === 'deny') return riskLevel === 'critical' ? 'block' : 'require_approval';
+  if (ossDecision === 'confirm') return 'require_approval';
   return null;
 }
 
@@ -370,7 +729,7 @@ function matchesNetworkReference(input: string, pattern: string): boolean {
   return extractNetworkReferences(input).some((reference) => matchesNetworkTarget(reference, pattern));
 }
 
-function parseNetworkTarget(value: string): { hostname: string; pathname: string } | null {
+function parseNetworkTarget(value: string): NetworkTarget | null {
   const trimmed = trimNetworkToken(value);
   if (!trimmed) return null;
   const urlLike = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
@@ -424,6 +783,187 @@ function trimNetworkToken(value: string): string {
 function normalizeNetworkPath(pathname: string): string {
   if (!pathname || pathname === '/') return '/';
   return pathname.replace(/\/+$/g, '') || '/';
+}
+
+function behaviorStatePath(): string {
+  return process.env.AGENTGUARD_BEHAVIOR_STATE_PATH ||
+    join(getAgentGuardPaths().home, 'network-behavior.json');
+}
+
+function loadNetworkBehaviorState(now: number): void {
+  if (networkBehaviorStateLoaded) return;
+  networkBehaviorStateLoaded = true;
+  const statePath = behaviorStatePath();
+  try {
+    if (!existsSync(statePath)) return;
+    const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as unknown;
+    if (!Array.isArray(parsed)) return;
+    const events: NetworkBehaviorEvent[] = [];
+    for (const item of parsed) {
+      const event = parseNetworkBehaviorEvent(item);
+      if (event && now - event.timestamp <= TEN_MINUTES_MS) events.push(event);
+    }
+    networkBehaviorEvents.push(...events);
+  } catch {
+    networkBehaviorEvents.length = 0;
+  }
+}
+
+function saveNetworkBehaviorState(): void {
+  const statePath = behaviorStatePath();
+  try {
+    mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 });
+    const events = networkBehaviorEvents.slice(-MAX_PERSISTED_BEHAVIOR_EVENTS);
+    writeFileSync(statePath, `${JSON.stringify(events)}\n`, { mode: 0o600 });
+    chmodSync(statePath, 0o600);
+  } catch {
+    // Behavior state is best-effort; runtime protection still works without it.
+  }
+}
+
+function parseNetworkBehaviorEvent(value: unknown): NetworkBehaviorEvent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.timestamp !== 'number' ||
+    typeof record.sessionId !== 'string' ||
+    typeof record.hostname !== 'string' ||
+    typeof record.method !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    timestamp: record.timestamp,
+    sessionId: record.sessionId,
+    hostname: record.hostname,
+    method: record.method,
+    fingerprint: typeof record.fingerprint === 'string' ? record.fingerprint : undefined,
+    tokenHashes: Array.isArray(record.tokenHashes)
+      ? record.tokenHashes.filter((item): item is string => typeof item === 'string')
+      : [],
+    responseBytes: typeof record.responseBytes === 'number' ? record.responseBytes : undefined,
+    responseStatus: typeof record.responseStatus === 'number' ? record.responseStatus : undefined,
+  };
+}
+
+function pruneNetworkBehaviorEvents(now: number): void {
+  const cutoff = now - TEN_MINUTES_MS;
+  while (networkBehaviorEvents.length > 0 && networkBehaviorEvents[0].timestamp < cutoff) {
+    networkBehaviorEvents.shift();
+  }
+}
+
+function isOddHour(timestamp: number): boolean {
+  const hour = new Date(timestamp).getHours();
+  return hour >= 2 && hour < 6;
+}
+
+function requestFingerprint(
+  input: string,
+  target: NetworkTarget,
+  method: string,
+  headers: Record<string, unknown> | undefined,
+  bodyPreview: string | undefined
+): string | undefined {
+  if (!headers && !bodyPreview) return undefined;
+  return hashValue(JSON.stringify({
+    method,
+    host: target.hostname,
+    path: target.pathname,
+    input,
+    headers: stableRecordString(headers),
+    bodyPreview,
+  }));
+}
+
+function extractCredentialValues(
+  input: string,
+  headers: Record<string, unknown> | undefined,
+  bodyPreview: string | undefined
+): string[] {
+  const values = new Set<string>();
+  collectUrlCredentialValues(input, values);
+
+  if (headers) {
+    for (const [key, value] of Object.entries(headers)) {
+      if (!/(authorization|api[-_]?key|access[-_]?token|token|secret)/i.test(key)) continue;
+      const text = Array.isArray(value) ? value.join(',') : String(value ?? '');
+      for (const item of text.matchAll(/[A-Za-z0-9._~+/=-]{8,}/g)) {
+        values.add(item[0]);
+      }
+    }
+  }
+
+  if (bodyPreview) {
+    for (const match of bodyPreview.matchAll(/(?:api[-_]?key|access[-_]?token|token|authorization|secret)["':=\s]+([A-Za-z0-9._~+/=-]{8,})/gi)) {
+      values.add(match[1]);
+    }
+  }
+
+  return [...values];
+}
+
+function collectUrlCredentialValues(input: string, values: Set<string>): void {
+  for (const reference of extractNetworkReferences(input).length > 0 ? extractNetworkReferences(input) : [input]) {
+    const token = trimNetworkToken(reference);
+    if (!token) continue;
+    const urlLike = /^[a-z][a-z0-9+.-]*:\/\//i.test(token) ? token : `https://${token}`;
+    try {
+      const parsed = new URL(urlLike);
+      for (const [key, value] of parsed.searchParams.entries()) {
+        if (/(api[-_]?key|access[-_]?token|token|authorization|secret|auth|key)/i.test(key) && value.length >= 8) {
+          values.add(value);
+        }
+      }
+    } catch {
+      // Ignore malformed references.
+    }
+  }
+}
+
+function stableRecordString(record: Record<string, unknown> | undefined): string | undefined {
+  if (!record) return undefined;
+  return Object.keys(record)
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => `${key.toLowerCase()}:${String(record[key])}`)
+    .join('\n');
+}
+
+function hashValue(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function contentTypeFromHeaders(headers: Record<string, unknown> | undefined): string | undefined {
+  if (!headers) return undefined;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === 'content-type' && typeof value === 'string') return value;
+  }
+  return undefined;
+}
+
+function isBinaryOrMediaContentType(contentType: string): boolean {
+  return /^(image|audio|video)\//i.test(contentType) ||
+    /application\/(?:octet-stream|pdf|zip|gzip|x-tar)/i.test(contentType);
+}
+
+function hasSuspiciousXssResponse(body: string): boolean {
+  return /javascript:\s*(?:alert|confirm|prompt|eval|fetch|\w+\()/i.test(body) ||
+    /on(?:error|load|click|mouseover|focus)\s*=\s*["']?(?:alert|confirm|prompt|eval|fetch|javascript:)/i.test(body) ||
+    /<script\b(?![^>]*\bsrc=)[^>]*>[\s\S]{0,500}?(?:alert|confirm|prompt|document\.cookie|localStorage|eval|fetch\s*\()/i.test(body);
+}
+
+function looksLikeHtmlOrScript(body: string): boolean {
+  return /^\s*(?:<!doctype\s+html|<html\b|<script\b)/i.test(body) ||
+    /javascript:|<script\b/i.test(body);
+}
+
+function dedupeReasons(items: PolicyReason[]): PolicyReason[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.code)) return false;
+    seen.add(item.code);
+    return true;
+  });
 }
 
 function normalizeCommand(value: string): string {

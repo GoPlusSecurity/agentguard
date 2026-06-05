@@ -6,6 +6,7 @@
 - Web search actions now use a dedicated `web_search` runtime action across Claude Code, Hermes, OpenClaw, MCP, and the skill CLI, so query-only searches are handled separately from URL fetches and no longer trigger invalid-URL network approval flows.
 - Direct web fetch and browser navigation GET requests keep the default `network.defaultOutbound: warn` behavior as audit-only, while mutating or high-risk network requests still require confirmation or blocking.
 - Network request decisions now treat GET/HEAD/OPTIONS as low-risk reads, keep non-sensitive POST/PUT/PATCH requests at audit-level risk, require approval for DELETE, and warn when a cached policy uses an interruptive `network.defaultOutbound`.
+- Runtime network evaluation now detects local behavior and response anomalies including request bursts, token domain sweeps, replayed requests, odd-hour bursts, large responses, malicious response bodies, MIME mismatches, and credential echo.
 - `agentguard connect` and `agentguard subscribe` now support Hermes Agent JWT registration when Hermes is initialized or detected via `HERMES_HOME`/`~/.hermes`, while preserving the existing OpenClaw notification behavior.
 
 ### Fixed

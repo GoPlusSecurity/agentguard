@@ -233,7 +233,18 @@ async function main() {
 
   if (isPostHook(input)) {
     try {
-      if (createAgentGuard && HermesAdapter && evaluateHook) {
+      if (protectAction) {
+        const config = loadRuntimeConfig();
+        await protectAction({
+          config,
+          rawInput: input,
+          agentHost: 'hermes',
+          actionType: runtimeActionTypeFrom(toolNameFrom(input)),
+          toolName: runtimeToolNameFrom(toolNameFrom(input)),
+          sessionId: typeof input.session_id === 'string' ? input.session_id : undefined,
+          phase: 'post',
+        });
+      } else if (createAgentGuard && HermesAdapter && evaluateHook) {
         const adapter = new HermesAdapter();
         const config = loadHookConfig ? loadHookConfig() : { level: loadRuntimeConfig().level };
         const agentguard = createAgentGuard();

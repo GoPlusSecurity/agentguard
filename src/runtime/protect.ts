@@ -18,6 +18,7 @@ export interface ProtectOptions {
   toolName?: string;
   sessionId?: string;
   decisionMode?: 'local-first' | 'cloud';
+  phase?: 'pre' | 'post';
 }
 
 export interface ProtectResult {
@@ -41,6 +42,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
   let decision: RuntimeDecision;
   let policySource: ProtectResult['policySource'];
+  const postToolCall = options.phase === 'post';
   if (options.decisionMode === 'cloud' && client.connected) {
     decision = normalizeRuntimeDecision(await client.evaluateAction(action));
     policySource = 'cloud-decision';
@@ -52,8 +54,9 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
     policySource = source;
   }
+  if (postToolCall) decision = normalizePostToolDecision(decision);
 
-  const approvedGrant = decision.decision === 'require_approval'
+  const approvedGrant = !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
   if (approvedGrant) {
@@ -94,10 +97,10 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (client.connected && policySource !== 'cloud-decision') {
     await client.ingestEvents([event]).catch(() => spoolEvent(options.config.eventSpoolPath, event));
   }
-  if (decision.decision === 'require_approval') {
+  if (!postToolCall && decision.decision === 'require_approval') {
     approvalChannel = 'agent';
   }
-  const pendingApproval = decision.decision === 'require_approval' && !approvedGrant
+  const pendingApproval = !postToolCall && decision.decision === 'require_approval' && !approvedGrant
     ? writePendingApproval(approvalStorePath, action, decision)
     : undefined;
 
@@ -116,6 +119,13 @@ function normalizeRuntimeDecision(decision: RuntimeDecision): RuntimeDecision {
   const rawDecision = (decision as unknown as { decision?: string }).decision;
   if (rawDecision === 'require_approve') {
     return { ...decision, decision: 'require_approval' };
+  }
+  return decision;
+}
+
+function normalizePostToolDecision(decision: RuntimeDecision): RuntimeDecision {
+  if (decision.decision === 'block' || decision.decision === 'require_approval') {
+    return { ...decision, decision: 'warn' };
   }
   return decision;
 }
@@ -248,7 +258,8 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     sourceSkill: pickSourceSkill(raw),
     metadata: {
       rawProtocol: raw ? 'stdin-json' : 'env',
-      ...pickNetworkMetadata(toolInput),
+      ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
+      ...pickNetworkMetadata(raw, toolInput),
     },
   };
 }
@@ -322,14 +333,70 @@ function pickToolInput(raw: Record<string, unknown> | null): Record<string, unkn
   );
 }
 
-function pickNetworkMetadata(toolInput: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!toolInput) return {};
-  const method = firstString(toolInput.method).toUpperCase();
-  const bodyPreview = firstString(toolInput.body, toolInput.body_preview, toolInput.bodyPreview);
+function pickNetworkMetadata(
+  raw: Record<string, unknown> | null,
+  toolInput: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const response = firstRecord(
+    raw?.tool_response,
+    raw?.toolResponse,
+    raw?.tool_output,
+    raw?.toolOutput,
+    raw?.response,
+    raw?.result,
+    raw?.output
+  );
+  const method = firstString(toolInput?.method, raw?.method).toUpperCase();
+  const bodyPreview = firstString(toolInput?.body, toolInput?.body_preview, toolInput?.bodyPreview, raw?.body);
+  const responseBodyPreview = firstString(
+    toolInput?.responseBodyPreview,
+    toolInput?.response_body_preview,
+    toolInput?.responsePreview,
+    toolInput?.response_body,
+    toolInput?.responseBody,
+    response?.body,
+    response?.content,
+    response?.text,
+    response?.responseBody,
+    raw?.responseBodyPreview,
+    raw?.responsePreview,
+    raw?.response_body,
+    raw?.responseBody,
+    raw?.result,
+    raw?.output
+  );
+  const responseContentType = firstString(
+    toolInput?.responseContentType,
+    toolInput?.response_content_type,
+    response?.contentType,
+    response?.content_type,
+    raw?.responseContentType,
+    raw?.response_content_type,
+    toolInput?.contentType,
+    toolInput?.content_type
+  );
+  const headers = firstRecord(toolInput?.headers, toolInput?.requestHeaders, raw?.headers, raw?.requestHeaders);
+  const responseHeaders = firstRecord(toolInput?.responseHeaders, response?.headers, raw?.responseHeaders);
   return {
     ...(method ? { method } : {}),
     ...(bodyPreview ? { bodyPreview } : {}),
+    ...(headers ? { headers } : {}),
+    ...(responseBodyPreview ? { responseBodyPreview } : {}),
+    ...(responseContentType ? { responseContentType } : {}),
+    ...(responseHeaders ? { responseHeaders } : {}),
+    ...definedMetadata('responseStatusCode', toolInput?.responseStatusCode, response?.statusCode, response?.status, raw?.responseStatusCode),
+    ...definedMetadata('statusCode', toolInput?.statusCode, raw?.statusCode),
+    ...definedMetadata('responseBodyBytes', toolInput?.responseBodyBytes, response?.bodyBytes, response?.bytes, raw?.responseBodyBytes),
+    ...definedMetadata('responseBytes', toolInput?.responseBytes, raw?.responseBytes),
+    ...definedMetadata('contentLength', toolInput?.contentLength, response?.contentLength, raw?.contentLength),
   };
+}
+
+function definedMetadata(key: string, ...values: unknown[]): Record<string, unknown> {
+  for (const value of values) {
+    if (value !== undefined) return { [key]: value };
+  }
+  return {};
 }
 
 function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {

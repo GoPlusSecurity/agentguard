@@ -52,6 +52,8 @@ export interface EffectiveRuntimePolicy {
     defaultOutbound: CloudPolicyDecision;
     blockedDomains: string[];
     approvalDomains: string[];
+    behaviorAnomaly?: CloudPolicyDecision;
+    responseAnomaly?: CloudPolicyDecision;
   };
   updatedAt: string;
 }

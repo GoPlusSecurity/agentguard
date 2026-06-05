@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { evaluateLocalAction } from '../runtime/evaluator.js';
+import { __resetNetworkBehaviorForTests, evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
 import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
@@ -14,6 +14,8 @@ import { connectAgentJwt, connectCloud, disconnectCloud, getAgentGuardPaths } fr
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
+
+process.env.AGENTGUARD_BEHAVIOR_STATE_PATH = join(tmpdir(), `agentguard-runtime-behavior-${process.pid}.json`);
 
 describe('Runtime Cloud bridge', () => {
   it('redacts API keys, bearer tokens, private keys, and URL secrets', () => {
@@ -212,6 +214,209 @@ describe('Runtime Cloud bridge', () => {
 
     assert.equal(decision.decision, 'allow');
     assert.equal(decision.reasons.length, 0);
+  });
+
+  it('requires approval for short-window network request bursts', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    let decision;
+    for (let index = 0; index < 101; index += 1) {
+      decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_rate_limit',
+        agentHost: 'openclaw',
+        actionType: 'network',
+        toolName: 'web_fetch',
+        input: `https://example.com/models/${index}`,
+        metadata: { method: 'GET' },
+      });
+    }
+
+    assert.equal(decision?.decision, 'require_approval');
+    assert.ok(decision?.reasons.some((reason) => reason.code === 'NETWORK_RATE_LIMIT'));
+  });
+
+  it('requires approval when the same credential is used across many domains', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    const headers = { Authorization: 'Bearer shared-token-value-123456' };
+    let decision;
+    for (let index = 0; index < 11; index += 1) {
+      decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_token_sweep',
+        agentHost: 'openclaw',
+        actionType: 'network',
+        toolName: 'web_fetch',
+        input: `https://api-${index}.example.com/models`,
+        metadata: { method: 'GET', headers },
+      });
+    }
+
+    assert.equal(decision?.decision, 'require_approval');
+    assert.ok(decision?.reasons.some((reason) => reason.code === 'NETWORK_TOKEN_DOMAIN_SWEEP'));
+  });
+
+  it('requires approval for repeated identical network requests', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    let decision;
+    for (let index = 0; index < 5; index += 1) {
+      decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_replay',
+        agentHost: 'openclaw',
+        actionType: 'network',
+        toolName: 'web_fetch',
+        input: 'https://api.example.com/submit',
+        metadata: {
+          method: 'POST',
+          headers: { 'x-request-id': 'same-id' },
+          bodyPreview: '{"amount":100}',
+        },
+      });
+    }
+
+    assert.equal(decision?.decision, 'require_approval');
+    assert.ok(decision?.reasons.some((reason) => reason.code === 'NETWORK_REPLAY'));
+  });
+
+  it('requires approval for odd-hour network bursts and large responses', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    let decision;
+    for (let index = 0; index < 21; index += 1) {
+      decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_odd_hour',
+        agentHost: 'openclaw',
+        actionType: 'network',
+        toolName: 'web_fetch',
+        input: `https://example.com/odd-hour/${index}`,
+        metadata: { method: 'GET', timestamp: '2026-06-05T02:30:00' },
+      });
+    }
+
+    assert.equal(decision?.decision, 'require_approval');
+    assert.ok(decision?.reasons.some((reason) => reason.code === 'NETWORK_ODD_HOUR_ACTIVITY'));
+
+    __resetNetworkBehaviorForTests();
+    const largeResponse = await evaluateLocalAction(policy, {
+      sessionId: 'sess_large_response',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/large.bin',
+      metadata: { method: 'GET', responseBodyBytes: 10 * 1024 * 1024 + 1 },
+    });
+
+    assert.equal(largeResponse.decision, 'require_approval');
+    assert.ok(largeResponse.reasons.some((reason) => reason.code === 'NETWORK_LARGE_RESPONSE'));
+  });
+
+  it('blocks malicious or mismatched network response content when metadata is present', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_response_anomaly',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/image.png',
+      metadata: {
+        method: 'GET',
+        responseContentType: 'image/png',
+        responseBodyPreview: '<html><script>eval(atob("YWxlcnQoMSk="))</script></html>',
+      },
+    });
+
+    assert.equal(decision.decision, 'block');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
+    assert.ok(decision.reasons.some((reason) => reason.code === 'RESPONSE_CONTENT_TYPE_MISMATCH'));
+  });
+
+  it('does not treat ordinary HTML script tags as response anomalies', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_normal_html',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/page',
+      metadata: {
+        method: 'GET',
+        responseContentType: 'text/html',
+        responseBodyPreview: '<!doctype html><html><script src="/app.js"></script><p>../docs</p></html>',
+      },
+    });
+
+    assert.equal(decision.decision, 'allow');
+    assert.ok(!decision.reasons.some((reason) => reason.code.startsWith('RESPONSE_')));
+  });
+
+  it('uses the strongest decision when behavior and response anomalies both match', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    policy.network.behaviorAnomaly = 'require_approval';
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_strongest_network_decision',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://example.com/image.png',
+      metadata: {
+        method: 'GET',
+        responseBodyBytes: 10 * 1024 * 1024 + 1,
+        responseContentType: 'image/png',
+        responseBodyPreview: '<script>eval(atob("YWxlcnQoMSk="))</script>',
+      },
+    });
+
+    assert.equal(decision.decision, 'block');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'NETWORK_LARGE_RESPONSE'));
+    assert.ok(decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
+  });
+
+  it('audits post-tool response anomalies without blocking completed tool calls', async () => {
+    __resetNetworkBehaviorForTests();
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-post-response-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(policy));
+
+    const result = await protectAction({
+      config,
+      phase: 'post',
+      agentHost: 'openclaw',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      rawInput: {
+        tool_name: 'web_fetch',
+        tool_input: { url: 'https://example.com/image.png', method: 'GET' },
+        tool_response: {
+          contentType: 'image/png',
+          body: '<script>eval(atob("YWxlcnQoMSk="))</script>',
+        },
+        session_id: 'sess_post_response',
+      },
+    });
+
+    assert.equal(result?.decision.decision, 'warn');
+    assert.equal(result?.approvalChannel, undefined);
+    assert.equal(result?.pendingApproval, undefined);
+    assert.ok(result?.decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
+    assert.match(readFileSync(config.auditPath, 'utf8'), /RESPONSE_MALICIOUS_SCRIPT/);
   });
 
   it('rejects malformed keys and non-HTTPS Cloud URLs', () => {
