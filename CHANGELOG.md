@@ -5,6 +5,7 @@
 ### Changed
 - Web search actions now use a dedicated `web_search` runtime action across Claude Code, Hermes, OpenClaw, MCP, and the skill CLI, so query-only searches are handled separately from URL fetches and no longer trigger invalid-URL network approval flows.
 - Direct web fetch and browser navigation GET requests keep the default `network.defaultOutbound: warn` behavior as audit-only, while mutating or high-risk network requests still require confirmation or blocking.
+- `agentguard connect` and `agentguard subscribe` now support Hermes Agent JWT registration when Hermes is initialized or detected via `HERMES_HOME`/`~/.hermes`, while preserving the existing OpenClaw notification behavior.
 
 ### Fixed
 - `agentguard init --agent hermes` now targets `HERMES_HOME` or `~/.hermes` for explicit installs instead of creating a nested `.hermes` directory under the current working directory, while only updating the root Hermes config and profile configs.

@@ -12,12 +12,13 @@ const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
 const ISOLATED_OPENCLAW_ENV = {
   AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '127.0.0.1',
   AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '',
-  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '9',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '200',
   OPENCLAW_CONFIG_PATH: '',
   OPENCLAW_STATE_DIR: '',
+  HERMES_HOME: '',
 };
 
 function runCli(
@@ -338,6 +339,71 @@ describe('CLI connect Agent JWT mode', () => {
     assert.match(result.stderr, /init --agent openclaw/);
   });
 
+  it('uses Hermes Agent JWT registration when Hermes has been initialized', async () => {
+    const requests: Array<{ url?: string; method?: string; body?: any }> = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        requests.push({ url: req.url, method: req.method, body: body ? JSON.parse(body) : undefined });
+        if (req.method === 'POST' && req.url === '/api/agent/register') {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              agentId: 'agt_hermes_cli_test',
+              jwt: 'agent.jwt.hermes-cli-test',
+              registerUrl: 'https://agentguard.example/activate?token=hermes-cli-test',
+            },
+          }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-hermes-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'hermes',
+        agentHosts: ['hermes'],
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['connect', '--url', cloudUrl], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Registered local AgentGuard agent \(agt_hermes_cli_test\)/);
+      assert.match(result.stdout, /https:\/\/agentguard\.example\/activate\?token=hermes-cli-test/);
+      assert.equal(requests[0].body.metadata.agentHost, 'hermes');
+      assert.deepEqual(requests[0].body.metadata.agentHosts, ['hermes']);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+        agentRegisterUrl?: string;
+        agentHost?: string;
+      };
+      assert.equal(config.agentHost, 'hermes');
+      assert.equal(config.agentId, 'agt_hermes_cli_test');
+      assert.equal(config.agentJwt, 'agent.jwt.hermes-cli-test');
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=hermes-cli-test');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
   it('uses detected OpenClaw runtime for no-key connect before requiring an API key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-openclaw-env-'));
     const openClawState = join(home, '.openclaw');
@@ -357,5 +423,26 @@ describe('CLI connect Agent JWT mode', () => {
     assert.match(result.stderr, /Could not register AgentGuard agent/);
     assert.equal(config.agentHost, 'openclaw');
     assert.deepEqual(config.agentHosts, ['openclaw']);
+  });
+
+  it('uses detected Hermes runtime for no-key connect before requiring an API key', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-hermes-env-'));
+    const hermesHome = join(home, '.hermes');
+    mkdirSync(hermesHome, { recursive: true });
+    writeFileSync(join(hermesHome, 'config.yaml'), 'hooks: {}\n');
+
+    const result = await runCli(['connect', '--url', 'http://127.0.0.1:9'], home, {
+      HERMES_HOME: hermesHome,
+    });
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+
+    assert.equal(result.exitCode, 1);
+    assert.doesNotMatch(result.stderr, /Missing API key/);
+    assert.match(result.stderr, /Could not register AgentGuard agent/);
+    assert.equal(config.agentHost, 'hermes');
+    assert.deepEqual(config.agentHosts, ['hermes']);
   });
 });

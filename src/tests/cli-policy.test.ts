@@ -9,6 +9,15 @@ import { promisify } from 'node:util';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 
 const execFileAsync = promisify(execFile);
+const ISOLATED_OPENCLAW_ENV = {
+  AGENTGUARD_OPENCLAW_GATEWAY_URL: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_HOST: '127.0.0.1',
+  AGENTGUARD_OPENCLAW_GATEWAY_TOKEN: '',
+  AGENTGUARD_OPENCLAW_GATEWAY_PORT: '9',
+  AGENTGUARD_OPENCLAW_GATEWAY_TIMEOUT_MS: '200',
+  OPENCLAW_CONFIG_PATH: '',
+  OPENCLAW_STATE_DIR: '',
+};
 
 describe('policy CLI', () => {
   it('shows the cached effective policy as JSON', async () => {
@@ -30,7 +39,7 @@ describe('policy CLI', () => {
 
     const cliPath = resolve('dist/cli.js');
     const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'show', '--json'], {
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, ...ISOLATED_OPENCLAW_ENV, AGENTGUARD_HOME: home },
     });
 
     const result = JSON.parse(stdout) as {
@@ -60,7 +69,7 @@ describe('policy CLI', () => {
 
     const cliPath = resolve('dist/cli.js');
     const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'show', '--json'], {
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, ...ISOLATED_OPENCLAW_ENV, AGENTGUARD_HOME: home },
     });
 
     const result = JSON.parse(stdout) as {
@@ -108,7 +117,7 @@ describe('policy CLI', () => {
 
       const cliPath = resolve('dist/cli.js');
       const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'pull', '--json'], {
-        env: { ...process.env, AGENTGUARD_HOME: home },
+        env: { ...process.env, ...ISOLATED_OPENCLAW_ENV, AGENTGUARD_HOME: home },
       });
 
       const result = JSON.parse(stdout) as { success: boolean; policyVersion: string; cachePath: string };
@@ -180,7 +189,7 @@ describe('policy CLI', () => {
 
       const cliPath = resolve('dist/cli.js');
       const { stdout } = await execFileAsync(process.execPath, [cliPath, 'policy', 'pull', '--json'], {
-        env: { ...process.env, AGENTGUARD_HOME: home },
+        env: { ...process.env, ...ISOLATED_OPENCLAW_ENV, AGENTGUARD_HOME: home },
       });
 
       const result = JSON.parse(stdout) as { success: boolean; policyVersion: string };
