@@ -66,10 +66,9 @@ const SOCIAL_ACCOUNT_DOMAINS = [
   'api.x.com',
   'twitter.com',
   'x.com',
-  'xquik.com',
 ];
 
-const SOCIAL_ACCOUNT_PATH_PATTERNS = [
+const XQUIK_SOCIAL_ACCOUNT_PATH_PATTERNS = [
   /^\/api\/v1\/x\/tweets(?:\/|$)/,
   /^\/api\/v1\/x\/dm(?:\/|$)/,
   /^\/api\/v1\/x\/media(?:\/|$)/,
@@ -78,6 +77,14 @@ const SOCIAL_ACCOUNT_PATH_PATTERNS = [
   /^\/api\/v1\/monitors(?:\/|$)/,
   /^\/api\/v1\/webhooks(?:\/|$)/,
   /^\/api\/v1\/draws(?:\/|$)/,
+];
+
+const DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS = [
+  /^\/2\/tweets(?:\/|$)/,
+  /^\/2\/users\/[^/]+\/(?:following|likes|retweets)(?:\/|$)/,
+  /^\/2\/dm_conversations(?:\/|$)/,
+  /^\/1\.1\/statuses\/(?:update|destroy)(?:\/|\.json|$)/,
+  /^\/1\.1\/direct_messages(?:\/|$)/,
 ];
 
 /**
@@ -261,19 +268,19 @@ function isReadOnlyMethod(method: NetworkMethod): boolean {
 }
 
 function isSocialAccountAction(domain: string, url: string): boolean {
-  const matchesKnownSocialDomain = SOCIAL_ACCOUNT_DOMAINS.some(
-    (knownDomain) => domain === knownDomain || domain.endsWith('.' + knownDomain)
-  );
-
-  if (!matchesKnownSocialDomain) return false;
-
   try {
     const parsed = new URL(url);
     const pathname = parsed.pathname.toLowerCase();
     if (domain === 'xquik.com' || domain.endsWith('.xquik.com')) {
-      return SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+      return XQUIK_SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
     }
-    return true;
+    const matchesKnownSocialDomain = SOCIAL_ACCOUNT_DOMAINS.some(
+      (knownDomain) => domain === knownDomain || domain.endsWith('.' + knownDomain)
+    );
+    return (
+      matchesKnownSocialDomain &&
+      DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
+    );
   } catch {
     return false;
   }

@@ -269,6 +269,17 @@ describe('Network Request Detector', () => {
     assert.ok(!result.should_block);
   });
 
+  it('should require high-risk review for TweetClaw profile updates', () => {
+    const result = analyzeNetworkRequest({
+      method: 'PATCH',
+      url: 'https://xquik.com/api/v1/x/profile',
+      body_preview: '{"bio":"Approved profile update"}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
   it('should keep read-only TweetClaw searches low risk', () => {
     const result = analyzeNetworkRequest({
       method: 'GET',
@@ -287,6 +298,18 @@ describe('Network Request Detector', () => {
     });
     assert.equal(result.risk_level, 'high');
     assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should keep direct X non-social mutating requests at generic network risk', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://api.twitter.com/2/oauth2/token',
+      body_preview: '{"grant_type":"client_credentials"}',
+    });
+    assert.equal(result.risk_level, 'medium');
+    assert.ok(result.risk_tags.includes('MUTATING_UNTRUSTED_REQUEST'));
+    assert.ok(!result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
     assert.ok(!result.should_block);
   });
 
