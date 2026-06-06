@@ -79,19 +79,11 @@ const XQUIK_SOCIAL_ACCOUNT_PATH_PATTERNS = [
   /^\/api\/v1\/draws(?:\/|$)/,
 ];
 
-const DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS = [
-  /^\/2\/tweets(?:\/|$)/,
-  /^\/2\/users\/[^/]+\/(?:following|likes|retweets)(?:\/|$)/,
-  /^\/2\/dm_conversations(?:\/|$)/,
-  /^\/1\.1\/statuses\/(?:update|destroy)(?:\/|\.json|$)/,
-  /^\/1\.1\/direct_messages(?:\/|$)/,
-];
-
 const DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS = [
   /^\/2\/oauth2(?:\/|$)/,
   /^\/oauth2(?:\/|$)/,
   /^\/oauth(?:\/|$)/,
-  /^\/1\.1\/account(?:\/|$)/,
+  /^\/1\.1\/account\/verify_credentials(?:\.json|\/|$)/,
 ];
 
 /**
@@ -286,8 +278,7 @@ function isSocialAccountAction(domain: string, url: string): boolean {
     );
     return (
       matchesKnownSocialDomain &&
-      !DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS.some((pattern) => pattern.test(pathname)) &&
-      DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
+      !DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
     );
   } catch {
     return false;

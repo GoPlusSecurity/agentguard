@@ -313,7 +313,7 @@ describe('Network Request Detector', () => {
     assert.ok(!result.should_block);
   });
 
-  it('should keep direct X account-management requests out of social-action review', () => {
+  it('should keep direct X credential verification out of social-action review', () => {
     const result = analyzeNetworkRequest({
       method: 'POST',
       url: 'https://api.x.com/1.1/account/verify_credentials.json',
@@ -322,6 +322,17 @@ describe('Network Request Detector', () => {
     assert.equal(result.risk_level, 'medium');
     assert.ok(result.risk_tags.includes('MUTATING_UNTRUSTED_REQUEST'));
     assert.ok(!result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should require high-risk review for direct X account updates', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://api.x.com/1.1/account/update_profile.json',
+      body_preview: '{"description":"Approved update"}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
     assert.ok(!result.should_block);
   });
 
