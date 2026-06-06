@@ -313,6 +313,18 @@ describe('Network Request Detector', () => {
     assert.ok(!result.should_block);
   });
 
+  it('should keep direct X account-management requests out of social-action review', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://api.x.com/1.1/account/verify_credentials.json',
+      body_preview: '{}',
+    });
+    assert.equal(result.risk_level, 'medium');
+    assert.ok(result.risk_tags.includes('MUTATING_UNTRUSTED_REQUEST'));
+    assert.ok(!result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
   it('should normalize lowercase mutating request methods', () => {
     const postResult = analyzeNetworkRequest({
       method: 'post' as NetworkRequestData['method'],

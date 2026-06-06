@@ -87,6 +87,13 @@ const DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS = [
   /^\/1\.1\/direct_messages(?:\/|$)/,
 ];
 
+const DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS = [
+  /^\/2\/oauth2(?:\/|$)/,
+  /^\/oauth2(?:\/|$)/,
+  /^\/oauth(?:\/|$)/,
+  /^\/1\.1\/account(?:\/|$)/,
+];
+
 /**
  * Analyze a network request for security risks
  */
@@ -279,6 +286,7 @@ function isSocialAccountAction(domain: string, url: string): boolean {
     );
     return (
       matchesKnownSocialDomain &&
+      !DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS.some((pattern) => pattern.test(pathname)) &&
       DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
     );
   } catch {
