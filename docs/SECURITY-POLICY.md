@@ -180,6 +180,28 @@ Commands matching the safe list are allowed without restriction, **unless** they
 6. POST/PUT to untrusted domain → escalate medium → high
 7. Domain in allowlist → **ALLOW** (low)
 
+#### Social Account Actions
+
+Mutating requests to X/Twitter or TweetClaw social account endpoints receive the
+`SOCIAL_ACCOUNT_ACTION` risk tag and escalate to **high** risk. These actions can
+post tweets, post tweet replies, send direct messages, upload media, create
+monitors, register webhooks, or run giveaway draws, so balanced mode prompts the
+operator before execution instead of silently allowing the request.
+
+| Example | Risk |
+|---------|------|
+| `POST https://api.twitter.com/2/tweets` | high |
+| `POST https://xquik.com/api/v1/x/tweets` | high |
+| `POST https://xquik.com/api/v1/x/dm/12345` | high |
+| `POST https://xquik.com/api/v1/x/media` | high |
+| `POST https://xquik.com/api/v1/monitors` | high |
+| `POST https://xquik.com/api/v1/webhooks` | high |
+| `POST https://xquik.com/api/v1/draws` | high |
+
+Read-only TweetClaw requests such as tweet search, user lookup, or follower
+export remain low risk unless they hit another rule such as secret scanning,
+high-risk TLD handling, or webhook exfiltration.
+
 ---
 
 ### 4.3 File Operations (`read_file` / `write_file`)

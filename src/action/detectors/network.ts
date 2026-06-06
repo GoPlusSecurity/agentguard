@@ -61,6 +61,25 @@ const HIGH_RISK_TLDS = [
   '.link',
 ];
 
+const SOCIAL_ACCOUNT_DOMAINS = [
+  'api.twitter.com',
+  'api.x.com',
+  'twitter.com',
+  'x.com',
+  'xquik.com',
+];
+
+const SOCIAL_ACCOUNT_PATH_PATTERNS = [
+  /^\/api\/v1\/x\/tweets(?:\/|$)/,
+  /^\/api\/v1\/x\/dm(?:\/|$)/,
+  /^\/api\/v1\/x\/media(?:\/|$)/,
+  /^\/api\/v1\/x\/profile(?:\/|$)/,
+  /^\/api\/v1\/x\/users\/[^/]+\/(?:follow|remove-follower)(?:\/|$)/,
+  /^\/api\/v1\/monitors(?:\/|$)/,
+  /^\/api\/v1\/webhooks(?:\/|$)/,
+  /^\/api\/v1\/draws(?:\/|$)/,
+];
+
 /**
  * Analyze a network request for security risks
  */
@@ -201,6 +220,17 @@ export function analyzeNetworkRequest(
     riskLevel = maxRisk(riskLevel, 'medium');
   }
 
+  if (mutatingMethod && isSocialAccountAction(domain, request.url)) {
+    riskTags.push('SOCIAL_ACCOUNT_ACTION');
+    evidence.push({
+      type: 'social_account_action',
+      field: 'url',
+      match: request.url,
+      description: 'Mutating request can change an X/Twitter or TweetClaw social account state',
+    });
+    riskLevel = maxRisk(riskLevel, 'high');
+  }
+
   return {
     risk_level: riskLevel,
     risk_tags: riskTags,
@@ -228,6 +258,25 @@ function normalizeMethod(method: string | undefined): NetworkMethod {
 
 function isReadOnlyMethod(method: NetworkMethod): boolean {
   return method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+}
+
+function isSocialAccountAction(domain: string, url: string): boolean {
+  const matchesKnownSocialDomain = SOCIAL_ACCOUNT_DOMAINS.some(
+    (knownDomain) => domain === knownDomain || domain.endsWith('.' + knownDomain)
+  );
+
+  if (!matchesKnownSocialDomain) return false;
+
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname.toLowerCase();
+    if (domain === 'xquik.com' || domain.endsWith('.xquik.com')) {
+      return SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const RISK_ORDER: Record<NetworkRiskLevel, number> = {

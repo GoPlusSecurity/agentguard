@@ -235,6 +235,61 @@ describe('Network Request Detector', () => {
     assert.ok(!result.should_block);
   });
 
+  it('should require high-risk review for TweetClaw social account writes', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://xquik.com/api/v1/x/tweets',
+      body_preview: '{"text":"Launch update"}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(result.risk_tags.includes('MUTATING_UNTRUSTED_REQUEST'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should require high-risk review for TweetClaw recurring social workflows', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://xquik.com/api/v1/monitors',
+      body_preview: '{"username":"example","eventTypes":["tweet"]}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should require high-risk review for TweetClaw direct messages', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://xquik.com/api/v1/x/dm/12345',
+      body_preview: '{"text":"hello"}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should keep read-only TweetClaw searches low risk', () => {
+    const result = analyzeNetworkRequest({
+      method: 'GET',
+      url: 'https://xquik.com/api/v1/x/tweets/search?query=openclaw',
+    });
+    assert.equal(result.risk_level, 'low');
+    assert.ok(!result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should require high-risk review for direct X mutating requests', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://api.twitter.com/2/tweets',
+      body_preview: '{"text":"Agent-generated reply"}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
   it('should normalize lowercase mutating request methods', () => {
     const postResult = analyzeNetworkRequest({
       method: 'post' as NetworkRequestData['method'],
