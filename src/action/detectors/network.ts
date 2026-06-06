@@ -79,6 +79,21 @@ const XQUIK_SOCIAL_ACCOUNT_PATH_PATTERNS = [
   /^\/api\/v1\/draws(?:\/|$)/,
 ];
 
+const DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS = [
+  /^\/2\/tweets(?:\/|$)/,
+  /^\/2\/users\/[^/]+\/(?:following|likes|retweets|muting|blocking)(?:\/|$)/,
+  /^\/2\/dm_conversations(?:\/|$)/,
+  /^\/2\/dm_events(?:\/|$)/,
+  /^\/1\.1\/statuses\/(?:update|destroy|retweet|unretweet)(?:\/|\.json|$)/,
+  /^\/1\.1\/direct_messages(?:\/|$)/,
+  /^\/1\.1\/account\/(?:update_profile|update_profile_image|update_profile_banner|remove_profile_banner|settings)(?:\.json|\/|$)/,
+  /^\/1\.1\/friendships\/(?:create|destroy|update)(?:\.json|\/|$)/,
+  /^\/1\.1\/favorites\/(?:create|destroy)(?:\.json|\/|$)/,
+  /^\/1\.1\/blocks\/(?:create|destroy)(?:\.json|\/|$)/,
+  /^\/1\.1\/mutes\/users\/(?:create|destroy)(?:\.json|\/|$)/,
+  /^\/1\.1\/media\/upload(?:\.json|\/|$)/,
+];
+
 const DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS = [
   /^\/2\/oauth2(?:\/|$)/,
   /^\/oauth2(?:\/|$)/,
@@ -101,6 +116,7 @@ export function analyzeNetworkRequest(
   const method = normalizeMethod(request.method);
   const readOnlyMethod = isReadOnlyMethod(method);
   const mutatingMethod = method === 'POST' || method === 'PUT' || method === 'PATCH';
+  const stateChangingMethod = mutatingMethod || method === 'DELETE';
 
   // Extract domain
   const domain = extractDomain(request.url);
@@ -226,7 +242,7 @@ export function analyzeNetworkRequest(
     riskLevel = maxRisk(riskLevel, 'medium');
   }
 
-  if (mutatingMethod && isSocialAccountAction(domain, request.url)) {
+  if (stateChangingMethod && isSocialAccountAction(domain, request.url)) {
     riskTags.push('SOCIAL_ACCOUNT_ACTION');
     evidence.push({
       type: 'social_account_action',
@@ -278,7 +294,8 @@ function isSocialAccountAction(domain: string, url: string): boolean {
     );
     return (
       matchesKnownSocialDomain &&
-      !DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
+      !DIRECT_SOCIAL_ACCOUNT_EXCLUDED_PATH_PATTERNS.some((pattern) => pattern.test(pathname)) &&
+      DIRECT_SOCIAL_ACCOUNT_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
     );
   } catch {
     return false;

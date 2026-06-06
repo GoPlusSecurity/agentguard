@@ -336,6 +336,29 @@ describe('Network Request Detector', () => {
     assert.ok(!result.should_block);
   });
 
+  it('should require high-risk review for direct X tweet deletes', () => {
+    const result = analyzeNetworkRequest({
+      method: 'DELETE',
+      url: 'https://api.x.com/2/tweets/12345',
+      body_preview: '{}',
+    });
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
+  it('should keep direct X compliance jobs out of social-action review', () => {
+    const result = analyzeNetworkRequest({
+      method: 'POST',
+      url: 'https://api.x.com/2/compliance/jobs',
+      body_preview: '{"type":"tweets","name":"audit"}',
+    });
+    assert.equal(result.risk_level, 'medium');
+    assert.ok(result.risk_tags.includes('MUTATING_UNTRUSTED_REQUEST'));
+    assert.ok(!result.risk_tags.includes('SOCIAL_ACCOUNT_ACTION'));
+    assert.ok(!result.should_block);
+  });
+
   it('should normalize lowercase mutating request methods', () => {
     const postResult = analyzeNetworkRequest({
       method: 'post' as NetworkRequestData['method'],
