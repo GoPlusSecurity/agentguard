@@ -45,6 +45,10 @@ interface NetworkBehaviorEvent {
   responseStatus?: number;
 }
 
+export interface LocalActionEvaluationOptions {
+  filesystemAllowlist?: string[];
+}
+
 const networkBehaviorEvents: NetworkBehaviorEvent[] = [];
 let networkBehaviorStateLoaded = false;
 
@@ -79,7 +83,8 @@ function reason(
 
 export async function evaluateLocalAction(
   policy: EffectiveRuntimePolicy,
-  action: RuntimeAction
+  action: RuntimeAction,
+  options: LocalActionEvaluationOptions = {}
 ): Promise<RuntimeDecision> {
   if (isAllowedByCommandPolicy(policy, action)) {
     return {
@@ -93,7 +98,7 @@ export async function evaluateLocalAction(
   }
 
   const customReasons = customPolicyReasons(policy, action);
-  const ossDecision = await evaluateWithOssActionScanner(policy, action);
+  const ossDecision = await evaluateWithOssActionScanner(policy, action, options);
   const ossReasons = (ossDecision?.risk_tags || []).map((tag, index) =>
     normalizeOssReason(tag, ossDecision?.evidence?.[index], action)
   );
@@ -219,27 +224,32 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
 
 async function evaluateWithOssActionScanner(
   policy: EffectiveRuntimePolicy,
-  action: RuntimeAction
+  action: RuntimeAction,
+  options: LocalActionEvaluationOptions
 ) {
   const mapped = mapRuntimeAction(action);
   if (!mapped) return null;
 
+  const runtimeCapabilities = {
+    ...DEFAULT_CAPABILITY,
+    exec: 'allow' as const,
+    network_allowlist: policy.network.approvalDomains,
+    filesystem_allowlist: runtimeFilesystemAllowlist(policy, options),
+  };
   const registry = {
     async lookup() {
       return {
         record: null,
         effective_trust_level: 'trusted',
-        effective_capabilities: {
-          ...DEFAULT_CAPABILITY,
-          exec: 'allow' as const,
-          network_allowlist: policy.network.approvalDomains,
-          filesystem_allowlist: policy.protectedPaths,
-        },
+        effective_capabilities: runtimeCapabilities,
       };
     },
   };
 
-  const scanner = new ActionScanner({ registry: registry as never });
+  const scanner = new ActionScanner({
+    registry: registry as never,
+    defaultCapabilities: runtimeCapabilities,
+  });
   return scanner.decide({
     actor: {
       skill: {
@@ -258,6 +268,13 @@ async function evaluateWithOssActionScanner(
       initiating_skill: action.sourceSkill,
     },
   });
+}
+
+function runtimeFilesystemAllowlist(
+  policy: EffectiveRuntimePolicy,
+  options: LocalActionEvaluationOptions
+): string[] {
+  return options.filesystemAllowlist ?? policy.filesystemAllowlist ?? ['*'];
 }
 
 function mapRuntimeAction(action: RuntimeAction): { type: ActionType; data: ActionData } | null {

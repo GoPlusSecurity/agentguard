@@ -307,6 +307,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       actionType?: string;
       toolName?: string;
       sessionId?: string;
+      filesystemAllowlist?: string[];
       rawInput?: unknown;
     };
     assert.equal(call.agentHost, 'openclaw');
@@ -345,6 +346,35 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       { toolName: 'terminal', actionType: 'shell' },
       { toolName: 'scaffold', actionType: 'file_write' },
       { toolName: 'vendorTool', actionType: 'shell' },
+    ]);
+  });
+
+  it('should pass OpenClaw workspace paths to runtime protection', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const calls: unknown[] = [];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      workspacePaths: ['/workspace/**'],
+      protectAction: async (options) => {
+        calls.push(options);
+        return null;
+      },
+    });
+
+    await handlers['before_tool_call']({
+      toolName: 'Read',
+      params: { path: '/workspace/src/index.ts' },
+    });
+    await handlers['after_tool_call']({
+      toolName: 'Read',
+      params: { path: '/workspace/src/index.ts' },
+    });
+
+    assert.deepEqual(calls.map((call) => (call as { filesystemAllowlist?: string[] }).filesystemAllowlist), [
+      ['/workspace/**'],
+      ['/workspace/**'],
     ]);
   });
 

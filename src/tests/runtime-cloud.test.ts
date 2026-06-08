@@ -60,6 +60,37 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
   });
 
+  it('allows ordinary workspace file reads under the default runtime policy', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'codex',
+      actionType: 'file_read',
+      toolName: 'Read',
+      input: '/workspace/src/index.ts',
+    });
+
+    assert.equal(decision.decision, 'allow');
+    assert.equal(decision.riskLevel, 'safe');
+    assert.ok(!decision.reasons.some((reason) => reason.code === 'PATH_NOT_ALLOWED'));
+  });
+
+  it('uses an explicit runtime filesystem allowlist separately from protected paths', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const decision = await evaluateLocalAction(policy, {
+      sessionId: 'sess_test',
+      agentHost: 'openclaw',
+      actionType: 'file_read',
+      toolName: 'read',
+      input: '/tmp/outside-workspace.txt',
+    }, {
+      filesystemAllowlist: ['/workspace/**'],
+    });
+
+    assert.equal(decision.decision, 'require_approval');
+    assert.ok(decision.reasons.some((reason) => reason.code === 'PATH_NOT_ALLOWED'));
+  });
+
   it('allows ordinary web search queries without treating them as URLs', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     const decision = await evaluateLocalAction(policy, {
