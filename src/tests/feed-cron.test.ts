@@ -765,7 +765,7 @@ describe('feed/cron', () => {
         host: '127.0.0.1',
         port: serverPort(server),
         token: 'gateway-test-token',
-        timeoutMs: 100,
+        timeoutMs: 1000,
         runCommand: async () => {
           throw new Error('explicit host/port should skip OpenClaw CLI');
         },

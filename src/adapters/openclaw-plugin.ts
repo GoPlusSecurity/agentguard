@@ -454,6 +454,7 @@ export function registerOpenClawPlugin(
             toolName,
             sessionId: readOpenClawSessionId(event, ctx),
             decisionMode: options.decisionMode ?? 'local-first',
+            filesystemAllowlist: options.workspacePaths,
           });
           const hookDecision = runtimeResultToBeforeToolCallResult(runtimeResult);
           if (hookDecision) {
@@ -521,6 +522,7 @@ export function registerOpenClawPlugin(
           sessionId: readOpenClawSessionId(event, undefined),
           decisionMode: options.decisionMode ?? 'local-first',
           phase: 'post',
+          filesystemAllowlist: options.workspacePaths,
         });
         if (runtimeResult) return;
       }

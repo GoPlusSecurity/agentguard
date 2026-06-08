@@ -19,6 +19,7 @@ export interface ProtectOptions {
   sessionId?: string;
   decisionMode?: 'local-first' | 'cloud';
   phase?: 'pre' | 'post';
+  filesystemAllowlist?: string[];
 }
 
 export interface ProtectResult {
@@ -51,7 +52,9 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
       cachePath: options.config.policyCachePath,
       fetchPolicy: client.connected ? () => client.fetchEffectivePolicy() : undefined,
     });
-    decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action));
+    decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action, {
+      filesystemAllowlist: options.filesystemAllowlist,
+    }));
     policySource = source;
   }
   const approvedGrant = !postToolCall && decision.decision === 'require_approval'

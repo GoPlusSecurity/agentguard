@@ -45,6 +45,7 @@ export interface EffectiveRuntimePolicy {
     deployAction: CloudPolicyDecision;
   };
   protectedPaths: string[];
+  filesystemAllowlist?: string[];
   blockedCommandPatterns: string[];
   allowedCommandPatterns: string[];
   approvalActionTypes: RuntimeActionType[];
