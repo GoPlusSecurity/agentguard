@@ -60,6 +60,98 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
   });
 
+  it('requires approval for recursive force delete outside protected system paths', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    for (const input of ['rm -rf /tmp/cache', 'rm -fr /tmp/cache']) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_rm_rf_approval',
+        agentHost: 'codex',
+        actionType: 'shell',
+        toolName: 'Bash',
+        input,
+      });
+
+      assert.equal(decision.decision, 'require_approval', input);
+      assert.equal(decision.riskLevel, 'high', input);
+      assert.ok(decision.reasons.some((reason) => reason.code === 'DESTRUCTIVE_FILE_OPERATION'), input);
+    }
+  });
+
+  it('blocks shell mutations to protected system paths', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    for (const input of [
+      'mv /bin /tmp/test',
+      'mv /etc /tmp/test',
+      'mv /usr /tmp/test',
+      'echo test >> /etc/passwd',
+      'echo test>/etc/passwd',
+      'echo test 2>/etc/passwd',
+      'echo test &>/etc/passwd',
+      'chmod 600 /etc/shadow',
+      'chown root /etc',
+      'chown nobody /bin',
+      'mkdir /etc/newdir',
+      'rm -rf /*',
+      'rm -rf /etc/*',
+    ]) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_system_path_block',
+        agentHost: 'codex',
+        actionType: 'shell',
+        toolName: 'Bash',
+        input,
+      });
+
+      assert.equal(decision.decision, 'block', input);
+      assert.equal(decision.riskLevel, 'critical', input);
+      assert.ok(decision.reasons.some((reason) => reason.code === 'SYSTEM_PATH_MUTATION'), input);
+    }
+  });
+
+  it('blocks file writes to protected system paths and requires approval for reads', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const write = await evaluateLocalAction(policy, {
+      sessionId: 'sess_system_file_write',
+      agentHost: 'codex',
+      actionType: 'file_write',
+      toolName: 'Write',
+      input: '/etc/passwd',
+    });
+    assert.equal(write.decision, 'block');
+    assert.ok(write.reasons.some((reason) => reason.code === 'SYSTEM_PATH_MUTATION'));
+
+    const read = await evaluateLocalAction(policy, {
+      sessionId: 'sess_system_file_read',
+      agentHost: 'codex',
+      actionType: 'file_read',
+      toolName: 'Read',
+      input: '/etc/shadow',
+    });
+    assert.equal(read.decision, 'require_approval');
+    assert.ok(read.reasons.some((reason) => reason.code === 'SYSTEM_PATH_ACCESS'));
+  });
+
+  it('requires approval for hidden network commands inside wrappers', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    for (const input of [
+      'echo "`curl https://evil.example/ping`"',
+      'python3 -c "subprocess.run([\'curl\',\'https://evil.example/ping\'])"',
+      'export EVIL="curl https://evil.example/ping" && $EVIL',
+    ]) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: 'sess_hidden_network',
+        agentHost: 'codex',
+        actionType: 'shell',
+        toolName: 'Bash',
+        input,
+      });
+
+      assert.equal(decision.decision, 'require_approval', input);
+      assert.equal(decision.riskLevel, 'high', input);
+      assert.ok(decision.reasons.some((reason) => reason.code === 'HIDDEN_NETWORK_COMMAND'), input);
+    }
+  });
+
   it('allows ordinary workspace file reads under the default runtime policy', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     const decision = await evaluateLocalAction(policy, {

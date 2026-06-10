@@ -10,6 +10,9 @@
 - `agentguard connect` and `agentguard subscribe` now support Hermes Agent JWT registration when Hermes is initialized or detected via `HERMES_HOME`/`~/.hermes`, while preserving the existing OpenClaw notification behavior.
 
 ### Fixed
+- Runtime command protection now sends `rm -rf`/`rm -fr` on non-system paths through approval instead of hard-blocking, while root and protected system paths still block.
+- Runtime protection now blocks shell and file-tool mutations of critical system paths such as `/bin`, `/usr/bin`, `/etc/passwd`, `/etc/shadow`, device paths, and kernel paths.
+- Wrapped network commands inside command substitution, interpreter snippets, and simple variable expansion are now surfaced for approval instead of being treated as low-risk shell metacharacters.
 - Runtime file protection now keeps `protectedPaths` as a sensitive-path approval list instead of treating it as the general file allowlist, so ordinary workspace file reads and writes are no longer surfaced as `PATH_NOT_ALLOWED` under the default policy.
 - `agentguard init --agent hermes` now targets `HERMES_HOME` or `~/.hermes` for explicit installs instead of creating a nested `.hermes` directory under the current working directory, while only updating the root Hermes config and profile configs.
 - Runtime network policies now enforce `network.defaultOutbound` and `network.blockedDomains` for direct network/browser tool calls instead of only checking shell commands.
