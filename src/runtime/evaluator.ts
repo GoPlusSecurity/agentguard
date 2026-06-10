@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
 import { domainMatchesPattern, extractDomain } from '../utils/patterns.js';
+import { classifySystemPathOperation } from '../utils/system-paths.js';
 import { getAgentGuardPaths } from '../config.js';
 import type { ActionData, ActionEvidence, ActionType } from '../types/action.js';
 import type {
@@ -196,6 +197,9 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
   }
 
   if (action.actionType === 'file_read' || action.actionType === 'file_write') {
+    const systemPathReason = systemPathReasonForFileAction(action);
+    if (systemPathReason) reasons.push(systemPathReason);
+
     for (const pathPattern of policy.protectedPaths) {
       if (matchesPath(input, pathPattern)) {
         reasons.push(reason(
@@ -220,6 +224,20 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
   }
 
   return reasons;
+}
+
+function systemPathReasonForFileAction(action: RuntimeAction): PolicyReason | null {
+  const operation = action.actionType === 'file_read' ? 'read' : 'write';
+  const classification = classifySystemPathOperation(action.input, operation);
+  if (!classification) return null;
+
+  return reason(
+    classification.decision === 'block' ? 'SYSTEM_PATH_MUTATION' : 'SYSTEM_PATH_ACCESS',
+    classification.severity,
+    classification.decision === 'block' ? 'System path mutation blocked' : 'System path access requires approval',
+    `${operation} operation targets ${classification.description}.`,
+    classification.path
+  );
 }
 
 async function evaluateWithOssActionScanner(
@@ -359,6 +377,18 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
   const evidenceText = evidence?.match || evidence?.description || action.input;
   if (tag === 'DANGEROUS_COMMAND') {
     return reason('DESTRUCTIVE_COMMAND', 'critical', 'Dangerous command', 'The local OSS runtime detected a dangerous command.', evidenceText);
+  }
+  if (tag === 'DESTRUCTIVE_FILE_OPERATION') {
+    return reason('DESTRUCTIVE_FILE_OPERATION', 'high', 'Destructive file operation', 'The local OSS runtime detected a destructive file operation.', evidenceText);
+  }
+  if (tag === 'SYSTEM_PATH_MUTATION') {
+    return reason('SYSTEM_PATH_MUTATION', 'critical', 'System path mutation', 'The local OSS runtime detected a mutation of a protected system path.', evidenceText);
+  }
+  if (tag === 'SYSTEM_PATH_ACCESS') {
+    return reason('SYSTEM_PATH_ACCESS', 'high', 'System path access', 'The local OSS runtime detected access to a protected system path.', evidenceText);
+  }
+  if (tag === 'HIDDEN_NETWORK_COMMAND') {
+    return reason('HIDDEN_NETWORK_COMMAND', 'high', 'Hidden network command', 'The local OSS runtime detected a network command hidden inside a wrapper.', evidenceText);
   }
   if (tag === 'SENSITIVE_DATA_ACCESS' || tag === 'SENSITIVE_ENV_VAR') {
     return reason('SECRET_ACCESS', 'high', 'Sensitive data access', 'The local OSS runtime detected access to sensitive data.', evidenceText);
@@ -648,6 +678,10 @@ function decisionFor(
 function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePolicy): CloudPolicyDecision | null {
   const code = reasonItem.code;
   if (code === 'CUSTOM_BLOCKED_COMMAND' || code === 'DESTRUCTIVE_COMMAND') return policy.decisions.destructiveCommand;
+  if (code === 'DESTRUCTIVE_FILE_OPERATION') return 'require_approval';
+  if (code === 'SYSTEM_PATH_MUTATION') return 'block';
+  if (code === 'SYSTEM_PATH_ACCESS') return 'require_approval';
+  if (code === 'HIDDEN_NETWORK_COMMAND') return 'require_approval';
   if (code === 'REMOTE_CODE_EXECUTION') return policy.decisions.remoteCodeExecution;
   if (code === 'CUSTOM_BLOCKED_DOMAIN' || code === 'DATA_EXFILTRATION') return policy.decisions.dataExfiltration;
   if (code === 'NETWORK_OUTBOUND') return policy.network.defaultOutbound;
@@ -703,9 +737,21 @@ function shouldAutoAllowRuntimeDecision(riskScore: number, riskLevel: RuntimeRis
 
 function matchesPattern(input: string, pattern: string): boolean {
   if (!pattern) return false;
+  if (isRootRmRfPattern(pattern)) return isRootRmRfCommand(input);
   if (input.includes(pattern)) return true;
   const compact = pattern.replace(/\s*\.\.\.\s*/g, ' ');
   return compact !== pattern && input.includes(compact);
+}
+
+function isRootRmRfPattern(pattern: string): boolean {
+  return /^rm\s+-[^\s]*r[^\s]*f[^\s]*\s+\/$/.test(pattern) ||
+    /^rm\s+-[^\s]*f[^\s]*r[^\s]*\s+\/$/.test(pattern);
+}
+
+function isRootRmRfCommand(input: string): boolean {
+  const normalized = normalizeCommand(input);
+  return /^rm\s+-[^\s]*r[^\s]*f[^\s]*\s+\/\s*$/.test(normalized) ||
+    /^rm\s+-[^\s]*f[^\s]*r[^\s]*\s+\/\s*$/.test(normalized);
 }
 
 function matchesAllowedCommand(input: string, pattern: string): boolean {

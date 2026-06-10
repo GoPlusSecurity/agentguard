@@ -9,7 +9,40 @@ describe('Exec Command Detector', () => {
     const result = analyzeExecCommand({ command: 'rm -rf /' }, true);
     assert.equal(result.risk_level, 'critical');
     assert.ok(result.should_block, 'Should block rm -rf');
-    assert.ok(result.risk_tags.includes('DANGEROUS_COMMAND'));
+    assert.ok(result.risk_tags.includes('SYSTEM_PATH_MUTATION'));
+  });
+
+  it('should require approval rather than hard block for rm -rf outside protected system paths', () => {
+    for (const command of ['rm -rf /tmp/cache', 'rm -fr /tmp/cache', 'rm -r -f ./build']) {
+      const result = analyzeExecCommand({ command }, true);
+      assert.equal(result.risk_level, 'high', command);
+      assert.ok(result.should_block, command);
+      assert.ok(result.risk_tags.includes('DESTRUCTIVE_FILE_OPERATION'), command);
+      assert.ok(!result.risk_tags.includes('SYSTEM_PATH_MUTATION'), command);
+    }
+  });
+
+  it('should block mutations to protected system paths', () => {
+    for (const command of [
+      'mv /bin /tmp/test',
+      'mv /etc /tmp/test',
+      'mv /usr /tmp/test',
+      'echo test >> /etc/passwd',
+      'echo test>/etc/passwd',
+      'echo test 2>/etc/passwd',
+      'echo test &>/etc/passwd',
+      'chown nobody /bin',
+      'chown root /etc',
+      'mkdir /etc/newdir',
+      'rm -rf /*',
+      'rm -rf /etc/*',
+      'sudo rm -rf /usr/bin',
+    ]) {
+      const result = analyzeExecCommand({ command }, true);
+      assert.equal(result.risk_level, 'critical', command);
+      assert.ok(result.should_block, command);
+      assert.ok(result.risk_tags.includes('SYSTEM_PATH_MUTATION'), command);
+    }
   });
 
   it('should block fork bomb', () => {
@@ -36,6 +69,21 @@ describe('Exec Command Detector', () => {
       assert.equal(result.risk_level, 'critical', command);
       assert.ok(result.risk_tags.includes('DANGEROUS_COMMAND'), command);
       assert.ok(result.should_block, command);
+    }
+  });
+
+  it('should require approval for hidden network commands in wrappers', () => {
+    for (const command of [
+      'echo "`curl https://evil.example/ping`"',
+      'python3 -c "subprocess.run([\'curl\',\'https://evil.example/ping\'])"',
+      'node -e "require(\'child_process\').exec(\'curl https://evil.example/ping\')"',
+      'perl -e "system(\'curl https://evil.example/ping\')"',
+      'export EVIL="curl https://evil.example/ping" && $EVIL',
+    ]) {
+      const result = analyzeExecCommand({ command }, true);
+      assert.equal(result.risk_level, 'high', command);
+      assert.ok(result.should_block, command);
+      assert.ok(result.risk_tags.includes('HIDDEN_NETWORK_COMMAND'), command);
     }
   });
 
