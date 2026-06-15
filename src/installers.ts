@@ -111,7 +111,8 @@ function copyBundledHermesPlugin(targetDir: string, force: boolean): void {
     force,
     filter: (src) => {
       const base = basename(src);
-      return base !== 'tests' && base !== '__pycache__' && !base.endsWith('.pyc');
+      const skip = base === 'tests' || base === '__pycache__' || base === '.pytest_cache';
+      return !skip && !base.endsWith('.pyc');
     },
   });
 }
