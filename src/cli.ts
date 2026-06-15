@@ -116,7 +116,11 @@ async function main() {
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
         if (agent === 'hermes' && !shellHooks) {
-          console.log('Next: run `hermes plugins enable agentguard` to activate the plugin.');
+          console.log('');
+          console.log('⚠ The AgentGuard plugin is INSTALLED but INACTIVE — no protection yet.');
+          console.log('  Activate it (takes effect on the next Hermes session):');
+          console.log('      hermes plugins enable agentguard');
+          console.log('  Or re-run with --shell-hooks to wire the always-on legacy shell hooks instead.');
         }
       }
     });

@@ -73,6 +73,7 @@
     "openclaw.d.ts",
     "openclaw.js",
     "openclaw.plugin.json",
-    "skills"
+    "skills",
+    "plugins"
   ]
 }

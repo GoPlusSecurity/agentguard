@@ -52,6 +52,26 @@ TOOL_ACTION_TYPE: Dict[str, str] = {
 # (mirrors the shell-hook matchers and avoids the unknown-tool fail-closed path).
 MAPPED_TOOLS = frozenset(TOOL_ACTION_TYPE)
 
+# Required tool_input fields per mapped tool. A mapped, security-sensitive event
+# missing its required field is malformed and is blocked (fail-closed), mirroring
+# validatePreToolPayload() in skills/agentguard/scripts/hermes-hook.js.
+_REQUIRED_FIELDS: Dict[str, tuple] = {
+    "terminal": ("command",),
+    "execute_code": ("code", "command"),
+    "write_file": ("path", "file_path"),
+    "patch": ("path", "file_path"),
+    "read_file": ("path", "file_path"),
+    "skill_manage": ("path", "file_path", "target", "skill_path"),
+    "web_search": ("query", "url"),
+    "web_extract": ("url", "href", "target"),
+    "browser_navigate": ("url", "href", "target"),
+    "browser_open": ("url", "href", "target"),
+    "web_open": ("url", "href", "target"),
+    "open_url": ("url", "href", "target"),
+    "visit_url": ("url", "href", "target"),
+    "open": ("url", "href", "target"),
+}
+
 # Hermes pre_tool_call has no native "ask"; AgentGuard's confirm maps to a block.
 _BLOCK_DECISIONS = frozenset({"block", "confirm"})
 
@@ -105,6 +125,13 @@ class AgentGuardBridge:
         if tool_name not in TOOL_ACTION_TYPE:
             return None  # out of scope -> allow without invoking the engine
 
+        if phase == "pre":
+            # A malformed mapped-tool payload is blocked unconditionally (even
+            # under fail-open): we can't evaluate what we can't read.
+            missing = _validate_mapped_payload(tool_name, args or {})
+            if missing:
+                return _block("GoPlus AgentGuard: %s" % missing)
+
         argv, mode = self._invocation()
         if argv is None:
             return self._fail(
@@ -140,10 +167,10 @@ class AgentGuardBridge:
         """Run an ``agentguard`` subcommand and return stdout (for /agentguard)."""
         bin_path = os.environ.get("AGENTGUARD_BIN") or shutil.which("agentguard")
         if not bin_path:
-            if shutil.which("npx"):
+            if _env_truthy("AGENTGUARD_HERMES_ALLOW_NPX") and shutil.which("npx"):
                 cmd = ["npx", "-y", "@goplus/agentguard", *args]
             else:
-                return "AgentGuard CLI not found. Install @goplus/agentguard."
+                return "AgentGuard CLI not found. Install @goplus/agentguard (or set AGENTGUARD_BIN)."
         else:
             cmd = [bin_path, *args]
         try:
@@ -190,7 +217,9 @@ class AgentGuardBridge:
         if node and skill_hook.is_file():
             return ([node, str(skill_hook)], "hook")
 
-        if shutil.which("npx"):
+        # npx fetches an unpinned package over the network — unsafe for a
+        # security gate, so it is opt-in only.
+        if _env_truthy("AGENTGUARD_HERMES_ALLOW_NPX") and shutil.which("npx"):
             return (["npx", "-y", "@goplus/agentguard", "protect"], "protect")
 
         return (None, None)
@@ -221,6 +250,18 @@ class AgentGuardBridge:
         if _env_truthy("AGENTGUARD_HERMES_FAIL_OPEN"):
             return None
         return _block("GoPlus AgentGuard: %s; blocking fail-closed" % reason)
+
+
+def _validate_mapped_payload(tool_name: str, args: Dict[str, Any]) -> Optional[str]:
+    """Return an error string if a mapped tool's required field is missing."""
+    fields = _REQUIRED_FIELDS.get(tool_name)
+    if not fields:
+        return None
+    for field in fields:
+        value = args.get(field)
+        if isinstance(value, str) and value:
+            return None
+    return "Hermes %s payload is missing %s" % (tool_name, " / ".join(fields))
 
 
 def _build_payload(event, tool_name, args, session_id, cwd, task_id) -> Dict[str, Any]:

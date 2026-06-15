@@ -101,20 +101,33 @@ function installHermes(cwd: string | undefined, force: boolean, opts: { shellHoo
   return { agent: 'hermes', files };
 }
 
+// Entry-point files Hermes needs to load the plugin (manifest + register()).
+const HERMES_PLUGIN_REQUIRED_FILES = ['plugin.yaml', '__init__.py'];
+
 function copyBundledHermesPlugin(targetDir: string, force: boolean): void {
-  if (existsSync(targetDir) && !force) return;
   const sourceDir = resolve(__dirname, '..', 'plugins', 'hermes');
-  if (!existsSync(sourceDir)) return;
-  mkdirSync(dirname(targetDir), { recursive: true });
-  cpSync(sourceDir, targetDir, {
-    recursive: true,
-    force,
-    filter: (src) => {
-      const base = basename(src);
-      const skip = base === 'tests' || base === '__pycache__' || base === '.pytest_cache';
-      return !skip && !base.endsWith('.pyc');
-    },
-  });
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Bundled Hermes plugin not found at ${sourceDir}. Reinstall @goplus/agentguard.`);
+  }
+  if (!(existsSync(targetDir) && !force)) {
+    mkdirSync(dirname(targetDir), { recursive: true });
+    cpSync(sourceDir, targetDir, {
+      recursive: true,
+      force,
+      filter: (src) => {
+        const base = basename(src);
+        const skip = base === 'tests' || base === '__pycache__' || base === '.pytest_cache';
+        return !skip && !base.endsWith('.pyc');
+      },
+    });
+  }
+  // Verify the installed package has the layout Hermes expects, so a broken
+  // install fails loudly instead of silently failing to load at runtime.
+  for (const required of HERMES_PLUGIN_REQUIRED_FILES) {
+    if (!existsSync(join(targetDir, required))) {
+      throw new Error(`Hermes plugin install is incomplete: missing ${required} in ${targetDir}.`);
+    }
+  }
 }
 
 function installQClaw(root: string, force: boolean): InstallResult {

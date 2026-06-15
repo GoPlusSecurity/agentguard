@@ -55,11 +55,17 @@ Hermes `pre_tool_call` has no native "ask"/confirm decision, so AgentGuard's
 | `AGENTGUARD_HERMES_HOOK` | — | Explicit path to `hermes-hook.js` (used instead of the CLI). |
 | `AGENTGUARD_HERMES_TIMEOUT` | `10` | Per-call engine timeout (seconds). |
 | `AGENTGUARD_HERMES_FAIL_OPEN` | `0` | `1` allows tool calls when the engine can't be reached (default fails closed). |
+| `AGENTGUARD_HERMES_ALLOW_NPX` | `0` | `1` permits the `npx -y @goplus/agentguard` fallback when no local binary is found. Off by default — `npx` fetches an unpinned package over the network, which is unsafe for a security gate. |
 | `AGENTGUARD_HERMES_AUTOSCAN` | `1` | `0` disables the session-start skill scan. |
 
-**Fail policy:** for the security-sensitive tools above, if the engine cannot be
-reached the plugin fails **closed** (blocks) on `pre_tool_call`, matching the
-shell-hook behavior. Post-tool evaluation never blocks.
+**Activation:** installing only copies files; the plugin is **inactive** until you
+run `hermes plugins enable agentguard` (Hermes plugins are opt-in).
+
+**Fail policy:** for the security-sensitive tools above, the plugin fails
+**closed** (blocks) on `pre_tool_call` when the engine cannot be reached, and also
+when a mapped event arrives without its required field (e.g. `terminal` with no
+`command`) — matching the shell-hook behavior. Out-of-scope tools pass through
+without an engine call. Post-tool evaluation never blocks.
 
 ## Development / tests
 

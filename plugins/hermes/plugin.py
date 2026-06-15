@@ -108,7 +108,9 @@ def _make_status_command(guard: AgentGuardBridge):
         parts = (raw_args or "").split()
         sub = parts[0] if parts else "report"
         if sub not in _ALLOWED_SUBCOMMANDS:
-            return "Usage: /agentguard [%s]" % " | ".join(sorted(_ALLOWED_SUBCOMMANDS))
-        return guard.run_cli([sub]) or "(no output)"
+            return "Usage: /agentguard [%s] [args...]" % " | ".join(sorted(_ALLOWED_SUBCOMMANDS))
+        # Forward any remaining args to the subcommand (e.g. `report --json`)
+        # rather than silently dropping them.
+        return guard.run_cli([sub, *parts[1:]]) or "(no output)"
 
     return agentguard_command
