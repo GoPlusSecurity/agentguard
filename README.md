@@ -150,6 +150,7 @@ See also:
 - [OpenClaw setup](docs/openclaw.md)
 - [Hermes Agent setup](docs/hermes.md)
 - [Codex setup](docs/codex.md)
+- [Building the .mcpb bundle](docs/mcpb-build.md)
 
 <details>
 <summary><b>Manual install (skill only)</b></summary>

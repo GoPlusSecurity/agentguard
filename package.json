@@ -18,6 +18,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:mcpb": "bash scripts/build-mcpb.sh",
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w",
     "test": "node --test dist/tests/*.test.js",

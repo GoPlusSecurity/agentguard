@@ -1,0 +1,47 @@
+{
+  "manifest_version": "0.3",
+  "name": "agentguard",
+  "display_name": "GoPlus AgentGuard",
+  "version": "1.1.27",
+  "icon": "icon.png",
+  "description": "Security guard for AI agents — blocks malicious skills, prevents data leaks, protects secrets.",
+  "long_description": "GoPlus AgentGuard is an AI-agent security framework. It exposes MCP tools for scanning skills, looking up and managing a trust registry, evaluating runtime actions against policy, and simulating Web3 transactions. 20+ detection rules cover dangerous commands, secret exfiltration, and risky on-chain actions.",
+  "author": {
+    "name": "GoPlus Security",
+    "url": "https://gopluslabs.io"
+  },
+  "homepage": "https://github.com/GoPlusSecurity/agentguard",
+  "documentation": "https://github.com/GoPlusSecurity/agentguard#readme",
+  "support": "https://github.com/GoPlusSecurity/agentguard/issues",
+  "privacy_policies": ["https://agentguard.gopluslabs.io/privacy"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoPlusSecurity/agentguard"
+  },
+  "license": "MIT",
+  "keywords": ["security", "ai-agent", "web3", "scanner", "trust-registry", "mcp"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/dist/mcp-server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/dist/mcp-server.js"]
+    }
+  },
+  "tools": [
+    { "name": "skill_scanner_scan", "description": "Scan an agent skill directory for malicious or risky content." },
+    { "name": "registry_lookup", "description": "Look up a skill/package in the trust registry." },
+    { "name": "registry_attest", "description": "Attest a skill/package as trusted in the local registry." },
+    { "name": "registry_revoke", "description": "Revoke a prior attestation from the registry." },
+    { "name": "registry_list", "description": "List entries in the local trust registry." },
+    { "name": "action_scanner_decide", "description": "Evaluate a proposed runtime action against policy and return allow/deny." },
+    { "name": "action_scanner_simulate_web3", "description": "Simulate a Web3 transaction to surface risks before signing." }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

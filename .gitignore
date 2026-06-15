@@ -1,5 +1,8 @@
 node_modules/
 dist/
+build/
+dist-mcpb/
+*.mcpb
 *.log
 .env
 .env.local
