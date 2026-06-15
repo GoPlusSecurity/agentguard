@@ -23,9 +23,28 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
   });
 
-  it('writes Hermes skill and enables hook config', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
+  it('installs the native Hermes plugin by default (no config.yaml edits)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-plugin-'));
     const result = installAgentTemplates('hermes', { cwd: dir });
+    const pluginDir = join(dir, '.hermes', 'plugins', 'agentguard');
+
+    assert.equal(result.agent, 'hermes');
+    assert.ok(existsSync(join(pluginDir, 'plugin.yaml')));
+    assert.ok(existsSync(join(pluginDir, '__init__.py')));
+    assert.ok(existsSync(join(pluginDir, 'bridge.py')));
+    assert.ok(readFileSync(join(pluginDir, 'plugin.yaml'), 'utf8').includes('name: agentguard'));
+    // Tests are excluded from the bundled copy.
+    assert.ok(!existsSync(join(pluginDir, 'tests')));
+    assert.ok(result.files.includes(pluginDir));
+    // The bundled skill is still installed for the engine fallback / auto-scan.
+    assert.ok(existsSync(join(dir, '.hermes', 'skills', 'agentguard', 'SKILL.md')));
+    // Default mode must not write shell hooks into config.yaml.
+    assert.ok(!existsSync(join(dir, '.hermes', 'config.yaml')));
+  });
+
+  it('writes Hermes skill and enables hook config with --shell-hooks', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-'));
+    const result = installAgentTemplates('hermes', { cwd: dir, shellHooks: true });
     const config = readFileSync(join(dir, '.hermes', 'config.yaml'), 'utf8');
 
     assert.equal(result.agent, 'hermes');
@@ -41,7 +60,7 @@ describe('Agent template installers', () => {
     const originalHermesHome = process.env.HERMES_HOME;
     process.env.HERMES_HOME = hermesHome;
     try {
-      const result = installAgentTemplates('hermes');
+      const result = installAgentTemplates('hermes', { shellHooks: true });
       const config = readFileSync(join(hermesHome, 'config.yaml'), 'utf8');
 
       assert.equal(result.agent, 'hermes');
@@ -60,7 +79,7 @@ describe('Agent template installers', () => {
     mkdirSync(join(dir, '.hermes'), { recursive: true });
     writeFileSync(configPath, 'theme: dark\nhooks:\n  custom_event:\n    - command: "echo keep"\n');
 
-    installAgentTemplates('hermes', { cwd: dir });
+    installAgentTemplates('hermes', { cwd: dir, shellHooks: true });
 
     const config = readFileSync(configPath, 'utf8');
     assert.ok(config.includes('theme: dark'));
@@ -78,7 +97,7 @@ describe('Agent template installers', () => {
     writeFileSync(rootConfigPath, 'theme: dark\n');
     writeFileSync(profileConfigPath, 'profile: agent2\nhooks: {}\n');
 
-    const result = installAgentTemplates('hermes', { cwd: dir });
+    const result = installAgentTemplates('hermes', { cwd: dir, shellHooks: true });
 
     const rootConfig = readFileSync(rootConfigPath, 'utf8');
     const profileConfig = readFileSync(profileConfigPath, 'utf8');
@@ -98,7 +117,7 @@ describe('Agent template installers', () => {
     writeFileSync(rootConfigPath, 'theme: dark\n');
     writeFileSync(nestedConfigPath, 'project: keep\n');
 
-    const result = installAgentTemplates('hermes', { cwd: dir });
+    const result = installAgentTemplates('hermes', { cwd: dir, shellHooks: true });
 
     const rootConfig = readFileSync(rootConfigPath, 'utf8');
     const nestedConfig = readFileSync(nestedConfigPath, 'utf8');
@@ -122,7 +141,7 @@ describe('Agent template installers', () => {
       '',
     ].join('\n'));
 
-    installAgentTemplates('hermes', { cwd: dir });
+    installAgentTemplates('hermes', { cwd: dir, shellHooks: true });
 
     const config = readFileSync(configPath, 'utf8');
     assert.equal((config.match(/^hooks:$/gm) ?? []).length, 2);

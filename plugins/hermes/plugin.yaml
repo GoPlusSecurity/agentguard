@@ -1,0 +1,19 @@
+# GoPlus AgentGuard — native Hermes Agent plugin manifest.
+#
+# Installed to ~/.hermes/plugins/agentguard/ by `agentguard init --agent hermes`,
+# then enabled with `hermes plugins enable agentguard`.
+name: agentguard
+version: "1.1.28"
+description: >-
+  GoPlus AgentGuard security guardrails for Hermes. Intercepts pre_tool_call
+  events and blocks risky shell, file, and network actions using the AgentGuard
+  decision engine.
+author: GoPlusSecurity
+homepage: https://github.com/GoPlusSecurity/agentguard
+license: MIT
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_session_start
+provides_commands:
+  - agentguard

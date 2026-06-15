@@ -125,7 +125,7 @@ agentguard init --agent auto
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw
-agentguard init --agent hermes
+agentguard init --agent hermes        # native Hermes plugin (add --shell-hooks for the legacy flow)
 agentguard init --agent qclaw
 ```
 
@@ -340,7 +340,7 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard, transcript-based skill tracking |
 | **OpenClaw** | Full | Plugin hooks + **auto-scan on load** + tool→plugin mapping + **daily patrol** |
-| **Hermes Agent** | Hooks | Shell hooks for `pre_tool_call` / `post_tool_call` runtime protection |
+| **Hermes Agent** | Plugin + Hooks | Native plugin (`hermes plugins enable agentguard`) for `pre_tool_call` / `post_tool_call`, or legacy shell hooks |
 | **OpenAI Codex CLI** | Skill | Scan/action/trust commands |
 | **Gemini CLI** | Skill | Scan/action/trust commands |
 | **Cursor** | Skill | Scan/action/trust commands |
