@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.1.28] - 2026-06-16
 
 ### Added
 - Added `SOCIAL_ACCOUNT_ACTION` detection for mutating X/Twitter and TweetClaw account requests, including tweets, DMs, media, profile updates, follows, monitors, webhooks, and draws. (#102)
