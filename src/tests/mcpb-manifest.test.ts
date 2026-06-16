@@ -10,9 +10,11 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const manifestPath = path.join(repoRoot, 'mcpb', 'manifest.json');
 const iconPath = path.join(repoRoot, 'mcpb', 'icon.png');
 const packagePath = path.join(repoRoot, 'package.json');
+const buildScriptPath = path.join(repoRoot, 'scripts', 'build-mcpb.sh');
 
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const buildScript = fs.readFileSync(buildScriptPath, 'utf8');
 
 // Minimal PNG header reader: validates the signature and returns IHDR dimensions.
 function readPngSize(buf: Buffer): { width: number; height: number } {
@@ -68,5 +70,20 @@ describe('mcpb/manifest.json — MCP Directory requirements', () => {
     for (const required of ['registry_lookup', 'registry_attest', 'registry_revoke', 'registry_list']) {
       assert.ok(names.includes(required), `manifest must list ${required}`);
     }
+  });
+});
+
+describe('scripts/build-mcpb.sh — bundle hygiene', () => {
+  it('does not run package lifecycle scripts during the release build install', () => {
+    assert.match(buildScript, /\bnpm ci --ignore-scripts\b/);
+    assert.doesNotMatch(buildScript, /\bnpm ci\n/);
+  });
+
+  it('removes non-runtime TypeScript artifacts from the packaged server dist', () => {
+    assert.match(buildScript, /rm -rf "\$STAGE\/server\/dist\/tests"/);
+    assert.match(buildScript, /-name '\*\.map'/);
+    assert.match(buildScript, /-name '\*\.d\.ts'/);
+    assert.match(buildScript, /\^server\/dist\/tests\//);
+    assert.match(buildScript, /\\\.map\|\\\.d\\\.ts/);
   });
 });
