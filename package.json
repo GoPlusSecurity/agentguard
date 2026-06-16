@@ -18,6 +18,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:mcpb": "bash scripts/build-mcpb.sh",
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w",
     "test": "node --test dist/tests/*.test.js",
@@ -57,6 +58,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@types/node": "22.19.15",
     "typescript": "5.7.3"
   },

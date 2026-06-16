@@ -1,0 +1,44 @@
+name: Release .mcpb
+
+# Builds the AgentGuard .mcpb bundle and attaches it to a GitHub Release.
+# Publishing the .mcpb as a Release asset lets the Anthropic MCP Directory
+# pick up new versions automatically.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Default to no permissions; grant only what the release job needs (below).
+permissions: {}
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    # `contents: write` is the minimum scope to create a Release / upload assets.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Build .mcpb bundle
+        # On a tag push, enforce that the tag matches package.json/manifest version.
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            export EXPECTED_VERSION="${GITHUB_REF_NAME}"
+          fi
+          npm run build:mcpb
+
+      - name: Attach .mcpb to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-mcpb/*.mcpb
+          fail_on_unmatched_files: true
