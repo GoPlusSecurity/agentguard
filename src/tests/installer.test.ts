@@ -23,10 +23,12 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
   });
 
-  it('installs the native Hermes plugin by default (no config.yaml edits)', () => {
+  it('installs and enables the native Hermes plugin by default', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-plugin-'));
     const result = installAgentTemplates('hermes', { cwd: dir });
     const pluginDir = join(dir, '.hermes', 'plugins', 'agentguard');
+    const configPath = join(dir, '.hermes', 'config.yaml');
+    const config = readFileSync(configPath, 'utf8');
 
     assert.equal(result.agent, 'hermes');
     assert.ok(existsSync(join(pluginDir, 'plugin.yaml')));
@@ -36,10 +38,34 @@ describe('Agent template installers', () => {
     // Tests are excluded from the bundled copy.
     assert.ok(!existsSync(join(pluginDir, 'tests')));
     assert.ok(result.files.includes(pluginDir));
+    assert.ok(result.files.includes(configPath));
     // The bundled skill is still installed for the engine fallback / auto-scan.
     assert.ok(existsSync(join(dir, '.hermes', 'skills', 'agentguard', 'SKILL.md')));
-    // Default mode must not write shell hooks into config.yaml.
-    assert.ok(!existsSync(join(dir, '.hermes', 'config.yaml')));
+    assert.match(config, /^plugins:\n  enabled:\n    - agentguard\n$/);
+    assert.ok(!config.includes('pre_tool_call:'));
+  });
+
+  it('preserves existing Hermes native plugin config while enabling AgentGuard', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-hermes-plugin-existing-'));
+    const configPath = join(dir, '.hermes', 'config.yaml');
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, [
+      'theme: dark',
+      'plugins:',
+      '  enabled:',
+      '    - other-plugin',
+      '  disabled:',
+      '    - old-plugin',
+      '',
+    ].join('\n'));
+
+    installAgentTemplates('hermes', { cwd: dir });
+
+    const config = readFileSync(configPath, 'utf8');
+    assert.ok(config.includes('theme: dark'));
+    assert.ok(config.includes('  enabled:\n    - other-plugin\n    - agentguard'));
+    assert.ok(config.includes('  disabled:\n    - old-plugin'));
+    assert.ok(!config.includes('pre_tool_call:'));
   });
 
   it('writes Hermes skill and enables hook config with --shell-hooks', () => {

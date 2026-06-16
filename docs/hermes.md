@@ -8,8 +8,9 @@ is identical; they differ only in how they are installed and managed.
 ## Native plugin (recommended)
 
 The plugin is managed the Hermes-native way (`hermes plugins
-enable/disable/list`), runs before shell hooks, adds a `/agentguard` slash
-command, and needs no manual edits to `~/.hermes/config.yaml`.
+enable/disable/list`), runs before shell hooks, and adds a `/agentguard`
+slash command. `agentguard init --agent hermes` installs the plugin and enables
+it in `~/.hermes/config.yaml`.
 
 ```bash
 # Build the engine so the plugin can reach it
@@ -18,8 +19,7 @@ npm run build
 # Install the plugin into ~/.hermes/plugins/agentguard/
 agentguard init --agent hermes
 
-# Hermes plugins are opt-in — enable it
-hermes plugins enable agentguard
+# Confirm it is enabled
 hermes plugins list
 ```
 

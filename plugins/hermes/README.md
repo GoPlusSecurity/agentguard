@@ -24,9 +24,8 @@ place.
 # Installs the plugin into ~/.hermes/plugins/agentguard/
 agentguard init --agent hermes
 
-# Hermes plugins are opt-in — enable it:
-hermes plugins enable agentguard
-hermes plugins list           # confirm it is enabled
+# Confirm it is enabled:
+hermes plugins list
 ```
 
 Or copy this directory to `~/.hermes/plugins/agentguard/` manually.
@@ -58,8 +57,9 @@ Hermes `pre_tool_call` has no native "ask"/confirm decision, so AgentGuard's
 | `AGENTGUARD_HERMES_ALLOW_NPX` | `0` | `1` permits the `npx -y @goplus/agentguard` fallback when no local binary is found. Off by default — `npx` fetches an unpinned package over the network, which is unsafe for a security gate. |
 | `AGENTGUARD_HERMES_AUTOSCAN` | `1` | `0` disables the session-start skill scan. |
 
-**Activation:** installing only copies files; the plugin is **inactive** until you
-run `hermes plugins enable agentguard` (Hermes plugins are opt-in).
+**Activation:** `agentguard init --agent hermes` installs the plugin and enables
+it in `~/.hermes/config.yaml`. It takes effect on the next Hermes session. If you
+copy this directory manually, run `hermes plugins enable agentguard`.
 
 **Fail policy:** for the security-sensitive tools above, the plugin fails
 **closed** (blocks) on `pre_tool_call` when the engine cannot be reached, and also

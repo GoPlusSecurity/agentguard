@@ -341,7 +341,7 @@ GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standa
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard, transcript-based skill tracking |
 | **OpenClaw** | Full | Plugin hooks + **auto-scan on load** + tool→plugin mapping + **daily patrol** |
-| **Hermes Agent** | Plugin + Hooks | Native plugin (`hermes plugins enable agentguard`) for `pre_tool_call` / `post_tool_call`, or legacy shell hooks |
+| **Hermes Agent** | Plugin + Hooks | Native plugin for `pre_tool_call` / `post_tool_call` (enabled by `agentguard init --agent hermes`), or legacy shell hooks |
 | **OpenAI Codex CLI** | Skill | Scan/action/trust commands |
 | **Gemini CLI** | Skill | Scan/action/trust commands |
 | **Cursor** | Skill | Scan/action/trust commands |
