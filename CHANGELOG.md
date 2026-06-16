@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+- Added MCPB bundle assets and a reproducible MCP Desktop Extension build path, including the bundle manifest, AgentGuard directory icon, privacy policy metadata, production dependency staging, release workflow, build docs, and manifest tests. (#106)
+- Added a native Hermes plugin that `agentguard init --agent hermes` installs and enables, with pre-tool blocking, post-tool audit handling, session-start skill scans, a `/agentguard` slash command, Hermes plugin docs, and Python plugin tests. (#107)
+
 ### Changed
 - Web search actions now use a dedicated `web_search` runtime action across Claude Code, Hermes, OpenClaw, MCP, and the skill CLI, so query-only searches are handled separately from URL fetches and no longer trigger invalid-URL network approval flows.
 - Direct web fetch and browser navigation GET requests keep the default `network.defaultOutbound: warn` behavior as audit-only, while mutating or high-risk network requests still require confirmation or blocking.
@@ -18,6 +22,8 @@
 - Runtime network policies now enforce `network.defaultOutbound` and `network.blockedDomains` for direct network/browser tool calls instead of only checking shell commands.
 - Runtime blocked-domain matching now compares structured URL hosts and paths instead of raw substrings, avoiding false positives such as `notexample.com` matching `example.com`; curl/wget download-and-execute commands are detected with real regex patterns.
 - Hermes hook templates now split `web_search` from URL-bearing web/browser tools and recognize open-style URL tools consistently.
+- MCPB release builds now harden staging and packaging so the generated bundle stamps the package version, includes only production server dependencies, preserves required bundle metadata, and validates manifest expectations before publishing. (#106)
+- Native Hermes plugin packaging now excludes test cache artifacts, validates required mapped fields, preserves command arguments consistently, and only allows the unsafe `npx` fallback when explicitly enabled. (#107)
 
 ## [1.1.27] - 2026-05-29
 

@@ -98,6 +98,7 @@ async function main() {
           for (const result of results.installed) {
             console.log(`Installed ${result.agent} template:`);
             for (const file of result.files) console.log(`- ${file}`);
+            if (result.agent === 'hermes') printHermesNativePluginEnabled();
           }
           for (const failure of results.failed) {
             console.error(`! Failed to initialize ${failure.agent}: ${failure.error}`);
@@ -116,11 +117,7 @@ async function main() {
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
         if (agent === 'hermes' && !shellHooks) {
-          console.log('');
-          console.log('⚠ The AgentGuard plugin is INSTALLED but INACTIVE — no protection yet.');
-          console.log('  Activate it (takes effect on the next Hermes session):');
-          console.log('      hermes plugins enable agentguard');
-          console.log('  Or re-run with --shell-hooks to wire the always-on legacy shell hooks instead.');
+          printHermesNativePluginEnabled();
         }
       }
     });
@@ -960,6 +957,13 @@ function printInstalledGuidance(): void {
   console.log('');
   console.log('This detects installed agent directories and configures supported hooks/plugins.');
   console.log('Run `agentguard --help` to see all commands.');
+}
+
+function printHermesNativePluginEnabled(): void {
+  console.log('');
+  console.log('Hermes native plugin enabled in config.yaml.');
+  console.log('It takes effect on the next Hermes session.');
+  console.log('Use `hermes plugins list` to verify, or re-run with --shell-hooks for the legacy shell-hook flow.');
 }
 
 function printInitGuidanceIfNeeded(config: AgentGuardConfig): void {

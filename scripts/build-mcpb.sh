@@ -8,7 +8,7 @@
 #   manifest.json          <- from mcpb/manifest.json, version stamped from package.json
 #   icon.png               <- from mcpb/icon.png (512x512)
 #   server/
-#     dist/                <- compiled TypeScript (tsc output)
+#     dist/                <- compiled TypeScript runtime output
 #     node_modules/        <- production dependencies only
 #     package.json
 #     package-lock.json
@@ -47,8 +47,9 @@ if [ -n "${EXPECTED_VERSION:-}" ] && [ "${EXPECTED_VERSION#v}" != "$VERSION" ]; 
   exit 1
 fi
 
-# 1. Clean install + compile
-npm ci
+# 1. Clean install + compile. Ignore lifecycle scripts here so release builds
+#    cannot mutate user/runner AgentGuard config via postinstall.
+npm ci --ignore-scripts
 npm run build
 
 # 2. Fresh staging tree
@@ -62,6 +63,11 @@ cp mcpb/icon.png "$STAGE/icon.png"
 # 4. server/ payload
 cp -R dist "$STAGE/server/dist"
 cp README.md LICENSE package.json package-lock.json "$STAGE/server/"
+
+# Keep the desktop extension runtime-only: tests, type declarations, and source
+# maps are useful in npm/source builds but should not ship in the installed MCPB.
+rm -rf "$STAGE/server/dist/tests"
+find "$STAGE/server/dist" -type f \( -name '*.map' -o -name '*.d.ts' \) -delete
 
 # 5. Production dependencies only
 ( cd "$STAGE/server" && npm ci --omit=dev --ignore-scripts )
@@ -77,6 +83,14 @@ UNEXPECTED="$(unzip -Z1 "$OUT" | grep -v '/$' | grep -vE "$ALLOWED" || true)"
 if [ -n "$UNEXPECTED" ]; then
   echo "ERROR: unexpected files in bundle (not on allowlist):" >&2
   echo "$UNEXPECTED" >&2
+  exit 1
+fi
+
+DISALLOWED='^server/dist/tests/|^server/dist/.*(\.map|\.d\.ts)$'
+DISALLOWED_FILES="$(unzip -Z1 "$OUT" | grep -v '/$' | grep -E "$DISALLOWED" || true)"
+if [ -n "$DISALLOWED_FILES" ]; then
+  echo "ERROR: non-runtime TypeScript artifacts in bundle:" >&2
+  echo "$DISALLOWED_FILES" >&2
   exit 1
 fi
 

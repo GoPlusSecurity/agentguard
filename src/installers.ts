@@ -91,11 +91,12 @@ function installHermes(cwd: string | undefined, force: boolean, opts: { shellHoo
     }
     files.push(...configPaths);
   } else {
-    // Default path: install the native Hermes plugin (opt-in to enable via
-    // `hermes plugins enable agentguard`). No config.yaml edits.
+    // Default path: install and enable the native Hermes plugin.
     const pluginDir = join(hermesRoot, 'plugins', 'agentguard');
+    const configPath = join(hermesRoot, 'config.yaml');
     copyBundledHermesPlugin(pluginDir, force);
-    files.push(pluginDir);
+    enableHermesNativePlugin(configPath);
+    files.push(pluginDir, configPath);
   }
 
   return { agent: 'hermes', files };
@@ -128,6 +129,108 @@ function copyBundledHermesPlugin(targetDir: string, force: boolean): void {
       throw new Error(`Hermes plugin install is incomplete: missing ${required} in ${targetDir}.`);
     }
   }
+}
+
+function enableHermesNativePlugin(configPath: string): void {
+  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  const next = mergeHermesNativePluginEnabled(existing);
+  if (next === existing) return;
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, next);
+}
+
+function mergeHermesNativePluginEnabled(existing: string): string {
+  const lines = existing.replace(/\s+$/g, '').split(/\r?\n/).filter((line, index, arr) => !(arr.length === 1 && index === 0 && line === ''));
+  const merged: string[] = [];
+  let sawPlugins = false;
+
+  for (let index = 0; index < lines.length;) {
+    if (isTopLevelHermesPluginsLine(lines[index])) {
+      sawPlugins = true;
+      const pluginsEnd = findNextTopLevelIndex(lines, index + 1);
+      merged.push('plugins:');
+      merged.push(...enableHermesPluginInPluginsBlock(lines.slice(index + 1, pluginsEnd)));
+      index = pluginsEnd;
+      continue;
+    }
+    merged.push(lines[index]);
+    index += 1;
+  }
+
+  if (!sawPlugins) {
+    if (merged.length > 0) merged.push('');
+    merged.push('plugins:', '  enabled:', '    - agentguard');
+  }
+
+  return `${merged.join('\n').replace(/\s+$/g, '')}\n`;
+}
+
+function isTopLevelHermesPluginsLine(line: string): boolean {
+  return /^plugins:\s*(?:\{\}\s*)?(?:#.*)?$/.test(line);
+}
+
+function enableHermesPluginInPluginsBlock(lines: string[]): string[] {
+  const enabledPlugins = uniqueStrings([...readHermesEnabledPlugins(lines), 'agentguard']);
+  const kept = removeHermesPluginEnabled(lines);
+  return ['  enabled:', ...enabledPlugins.map((plugin) => `    - ${plugin}`), ...kept];
+}
+
+function removeHermesPluginEnabled(lines: string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    const match = /^  enabled:\s*(?:#.*)?$/.exec(lines[index]);
+    if (match) {
+      index += 1;
+      while (index < lines.length && !/^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(lines[index]) && !/^\S/.test(lines[index])) {
+        index += 1;
+      }
+      continue;
+    }
+
+    const inlineList = /^  enabled:\s*\[(.*)\]\s*(?:#.*)?$/.exec(lines[index]);
+    if (inlineList) {
+      index += 1;
+      continue;
+    }
+
+    kept.push(lines[index]);
+    index += 1;
+  }
+  return kept;
+}
+
+function readHermesEnabledPlugins(lines: string[]): string[] {
+  const names: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const inlineList = /^  enabled:\s*\[(.*)\]\s*(?:#.*)?$/.exec(lines[index]);
+    if (inlineList) {
+      for (const item of inlineList[1].split(',')) {
+        const name = parseHermesYamlScalar(item);
+        if (name) names.push(name);
+      }
+      continue;
+    }
+
+    if (!/^  enabled:\s*(?:#.*)?$/.test(lines[index])) continue;
+    index += 1;
+    while (index < lines.length && !/^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(lines[index]) && !/^\S/.test(lines[index])) {
+      const item = /^    -\s*(.+?)\s*(?:#.*)?$/.exec(lines[index]);
+      const name = item ? parseHermesYamlScalar(item[1]) : '';
+      if (name) names.push(name);
+      index += 1;
+    }
+    index -= 1;
+  }
+  return names;
+}
+
+function parseHermesYamlScalar(value: string | undefined): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return '';
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
 
 function installQClaw(root: string, force: boolean): InstallResult {

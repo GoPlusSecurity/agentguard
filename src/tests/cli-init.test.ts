@@ -245,6 +245,7 @@ describe('init CLI', () => {
       assert.equal(config.agentHost, agent);
       if (agent === 'hermes') {
         assert.ok(existsSync(join(hermesHome, 'plugins', 'agentguard', 'plugin.yaml')));
+        assert.ok(readFileSync(join(hermesHome, 'config.yaml'), 'utf8').includes('- agentguard'));
       }
     }
   });
@@ -264,7 +265,8 @@ describe('init CLI', () => {
     assert.equal(config.agentHost, 'hermes');
     assert.match(stdout, /Installed hermes template:/);
     assert.ok(stdout.includes(join(hermesHome, 'plugins', 'agentguard')));
-    assert.match(stdout, /hermes plugins enable agentguard/);
+    assert.match(stdout, /Hermes native plugin enabled in config\.yaml/);
+    assert.ok(readFileSync(join(hermesHome, 'config.yaml'), 'utf8').includes('- agentguard'));
   });
 
   it('auto-initializes detected agents in detection order', async () => {
@@ -289,10 +291,12 @@ describe('init CLI', () => {
     assert.ok(existsSync(join(cwd, '.openclaw', 'plugins', 'agentguard', 'openclaw.plugin.json')));
     assert.ok(existsSync(join(cwd, '.hermes', 'skills', 'agentguard')));
     assert.ok(existsSync(join(cwd, '.hermes', 'plugins', 'agentguard', 'plugin.yaml')));
+    assert.ok(readFileSync(join(cwd, '.hermes', 'config.yaml'), 'utf8').includes('- agentguard'));
     assert.ok(existsSync(join(cwd, '.codex', 'skills', 'agentguard', 'SKILL.md')));
     assert.ok(existsSync(join(cwd, '.codex', 'agentguard-hook.json')));
     assert.match(stdout, /Installed openclaw template:/);
     assert.match(stdout, /Installed hermes template:/);
+    assert.match(stdout, /Hermes native plugin enabled in config\.yaml/);
     assert.match(stdout, /Installed codex template:/);
   });
 
