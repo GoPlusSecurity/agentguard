@@ -14,12 +14,12 @@ interface ClawInstallTarget {
   configPath: string;
 }
 
-export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: string; force?: boolean } = {}): InstallResult {
+export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: string; force?: boolean; shellHooks?: boolean } = {}): InstallResult {
   const root = options.cwd || process.cwd();
   if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force));
   if (agent === 'codex') return installCodex(root, Boolean(options.force));
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
-  if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force));
+  if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
@@ -67,7 +67,7 @@ function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult
   return { agent: 'openclaw', files: uniqueStrings(files) };
 }
 
-function installHermes(cwd: string | undefined, force: boolean): InstallResult {
+function installHermes(cwd: string | undefined, force: boolean, opts: { shellHooks?: boolean } = {}): InstallResult {
   const configuredHome = process.env.HERMES_HOME?.trim();
   const hermesRoot = cwd
     ? join(cwd, '.hermes')
@@ -76,13 +76,58 @@ function installHermes(cwd: string | undefined, force: boolean): InstallResult {
       : join(homedir(), '.hermes');
   const skillDir = join(hermesRoot, 'skills', 'agentguard');
   const configExamplePath = join(hermesRoot, 'agentguard-hooks.example.yaml');
+  // The bundled skill ships hermes-hook.js + auto-scan.js, which the native
+  // plugin reuses (engine fallback, session-start scan) and the shell-hook flow
+  // wires directly. The example YAML is a non-invasive reference in both modes.
   copyBundledSkill(skillDir, force);
   writeIfAllowed(configExamplePath, hermesHooksTemplate(skillDir), force);
-  const configPaths = findHermesConfigPaths(hermesRoot);
-  for (const configPath of configPaths) {
-    enableHermesHooks(configPath, skillDir);
+  const files = [skillDir, configExamplePath];
+
+  if (opts.shellHooks) {
+    // Legacy path: merge AgentGuard shell hooks into ~/.hermes/config.yaml.
+    const configPaths = findHermesConfigPaths(hermesRoot);
+    for (const configPath of configPaths) {
+      enableHermesHooks(configPath, skillDir);
+    }
+    files.push(...configPaths);
+  } else {
+    // Default path: install the native Hermes plugin (opt-in to enable via
+    // `hermes plugins enable agentguard`). No config.yaml edits.
+    const pluginDir = join(hermesRoot, 'plugins', 'agentguard');
+    copyBundledHermesPlugin(pluginDir, force);
+    files.push(pluginDir);
   }
-  return { agent: 'hermes', files: [skillDir, configExamplePath, ...configPaths] };
+
+  return { agent: 'hermes', files };
+}
+
+// Entry-point files Hermes needs to load the plugin (manifest + register()).
+const HERMES_PLUGIN_REQUIRED_FILES = ['plugin.yaml', '__init__.py'];
+
+function copyBundledHermesPlugin(targetDir: string, force: boolean): void {
+  const sourceDir = resolve(__dirname, '..', 'plugins', 'hermes');
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Bundled Hermes plugin not found at ${sourceDir}. Reinstall @goplus/agentguard.`);
+  }
+  if (!(existsSync(targetDir) && !force)) {
+    mkdirSync(dirname(targetDir), { recursive: true });
+    cpSync(sourceDir, targetDir, {
+      recursive: true,
+      force,
+      filter: (src) => {
+        const base = basename(src);
+        const skip = base === 'tests' || base === '__pycache__' || base === '.pytest_cache';
+        return !skip && !base.endsWith('.pyc');
+      },
+    });
+  }
+  // Verify the installed package has the layout Hermes expects, so a broken
+  // install fails loudly instead of silently failing to load at runtime.
+  for (const required of HERMES_PLUGIN_REQUIRED_FILES) {
+    if (!existsSync(join(targetDir, required))) {
+      throw new Error(`Hermes plugin install is incomplete: missing ${required} in ${targetDir}.`);
+    }
+  }
 }
 
 function installQClaw(root: string, force: boolean): InstallResult {

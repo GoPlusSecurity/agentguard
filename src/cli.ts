@@ -66,6 +66,7 @@ async function main() {
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
     .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
+    .option('--shell-hooks', 'For Hermes: install legacy shell hooks instead of the native plugin')
     .option('--force', 'Overwrite existing hook/template files')
     .option('--no-force', 'Do not overwrite existing hook/template files')
     .action((options) => {
@@ -110,9 +111,17 @@ async function main() {
         config.agentHost = agent;
         config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
-        const result = installAgentTemplates(agent, { force: forceTemplates });
+        const shellHooks = Boolean(options.shellHooks);
+        const result = installAgentTemplates(agent, { force: forceTemplates, shellHooks });
         console.log(`Installed ${result.agent} template:`);
         for (const file of result.files) console.log(`- ${file}`);
+        if (agent === 'hermes' && !shellHooks) {
+          console.log('');
+          console.log('⚠ The AgentGuard plugin is INSTALLED but INACTIVE — no protection yet.');
+          console.log('  Activate it (takes effect on the next Hermes session):');
+          console.log('      hermes plugins enable agentguard');
+          console.log('  Or re-run with --shell-hooks to wire the always-on legacy shell hooks instead.');
+        }
       }
     });
 
