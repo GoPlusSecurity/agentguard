@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added `SOCIAL_ACCOUNT_ACTION` detection for mutating X/Twitter and TweetClaw account requests, including tweets, DMs, media, profile updates, follows, monitors, webhooks, and draws. (#102)
 - Added MCPB bundle assets and a reproducible MCP Desktop Extension build path, including the bundle manifest, AgentGuard directory icon, privacy policy metadata, production dependency staging, release workflow, build docs, and manifest tests. (#106)
 - Added a native Hermes plugin that `agentguard init --agent hermes` installs and enables, with pre-tool blocking, post-tool audit handling, session-start skill scans, a `/agentguard` slash command, Hermes plugin docs, and Python plugin tests. (#107)
 
