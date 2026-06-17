@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Relaxed OpenClaw file read/write handling so ordinary paths are allowed by default, while sensitive paths still require approval and critical system mutations still block.
+- Changed `curl/wget | bash/sh` handling to require approval by default and block only when hard indicators or multiple suspicious signals are present.
+
 ## [1.1.28] - 2026-06-16
 
 ### Added
