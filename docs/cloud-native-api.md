@@ -150,13 +150,13 @@ Response:
     "mode": "balanced",
     "decisions": {
       "destructiveCommand": "block",
-      "remoteCodeExecution": "block",
+      "remoteCodeExecution": "require_approval",
       "dataExfiltration": "block",
       "secretAccess": "require_approval",
       "deployAction": "require_approval"
     },
     "protectedPaths": ["~/.ssh/**", "~/.aws/**", "**/.env*"],
-    "blockedCommandPatterns": ["rm -rf /", "curl ... | bash"],
+    "blockedCommandPatterns": ["rm -rf /", "base64 -d | bash"],
     "allowedCommandPatterns": [],
     "approvalActionTypes": ["file_read", "file_write", "deploy"],
     "network": {

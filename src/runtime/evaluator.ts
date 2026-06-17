@@ -390,6 +390,15 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
   if (tag === 'HIDDEN_NETWORK_COMMAND') {
     return reason('HIDDEN_NETWORK_COMMAND', 'high', 'Hidden network command', 'The local OSS runtime detected a network command hidden inside a wrapper.', evidenceText);
   }
+  if (tag === 'REMOTE_SCRIPT_EXECUTION') {
+    return reason('REMOTE_CODE_EXECUTION', 'high', 'Remote script execution', 'The local OSS runtime detected a remote script executed by a shell.', evidenceText);
+  }
+  if (tag === 'SUSPICIOUS_REMOTE_SCRIPT_EXECUTION') {
+    return reason('REMOTE_CODE_EXECUTION', 'high', 'Suspicious remote script execution', 'The local OSS runtime detected a remote script executed by a shell with suspicious indicators.', evidenceText);
+  }
+  if (tag === 'MALICIOUS_REMOTE_SCRIPT_EXECUTION') {
+    return reason('REMOTE_CODE_EXECUTION', 'critical', 'Malicious remote script execution', 'The local OSS runtime detected a remote script execution pattern with high-risk indicators.', evidenceText);
+  }
   if (tag === 'SENSITIVE_DATA_ACCESS' || tag === 'SENSITIVE_ENV_VAR') {
     return reason('SECRET_ACCESS', 'high', 'Sensitive data access', 'The local OSS runtime detected access to sensitive data.', evidenceText);
   }
@@ -682,7 +691,7 @@ function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePol
   if (code === 'SYSTEM_PATH_MUTATION') return 'block';
   if (code === 'SYSTEM_PATH_ACCESS') return 'require_approval';
   if (code === 'HIDDEN_NETWORK_COMMAND') return 'require_approval';
-  if (code === 'REMOTE_CODE_EXECUTION') return policy.decisions.remoteCodeExecution;
+  if (code === 'REMOTE_CODE_EXECUTION') return reasonItem.severity === 'critical' ? 'block' : policy.decisions.remoteCodeExecution;
   if (code === 'CUSTOM_BLOCKED_DOMAIN' || code === 'DATA_EXFILTRATION') return policy.decisions.dataExfiltration;
   if (code === 'NETWORK_OUTBOUND') return policy.network.defaultOutbound;
   if (BEHAVIOR_ANOMALY_CODES.has(code)) return policy.network.behaviorAnomaly ?? 'require_approval';

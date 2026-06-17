@@ -8,7 +8,7 @@ export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
     mode: 'balanced',
     decisions: {
       destructiveCommand: 'block',
-      remoteCodeExecution: 'block',
+      remoteCodeExecution: 'require_approval',
       dataExfiltration: 'block',
       secretAccess: 'require_approval',
       deployAction: 'require_approval',
@@ -23,8 +23,6 @@ export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
     ],
     blockedCommandPatterns: [
       'rm -rf /',
-      'curl ... | bash',
-      'wget ... | sh',
       'base64 -d | bash',
       'git push --force',
     ],
