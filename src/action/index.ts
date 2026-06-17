@@ -20,6 +20,7 @@ import { analyzeExecCommand } from './detectors/exec.js';
 import { detectSecretLeak, containsCriticalSecrets } from './detectors/secret-leak.js';
 import { GoPlusClient, goplusClient } from './goplus/client.js';
 import { extractDomain } from '../utils/patterns.js';
+import { classifySystemPathOperation } from '../utils/system-paths.js';
 import * as nodePath from 'path';
 
 /**
@@ -32,6 +33,29 @@ export interface ActionScannerOptions {
   goplusClient?: GoPlusClient;
   /** Default capabilities when no registry record found */
   defaultCapabilities?: CapabilityModel;
+}
+
+function classifySensitiveFilePath(path: string): string | null {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  const parts = normalized.split('/').filter(Boolean);
+  const basename = parts[parts.length - 1] || normalized;
+
+  if (basename === '.env' || basename.startsWith('.env.')) return basename;
+  if (basename === '.npmrc' || basename === '.netrc') return basename;
+  if (basename === 'credentials.json' || basename === 'serviceaccountkey.json') return basename;
+  if (basename === 'id_rsa' || basename === 'id_ed25519') return basename;
+  if (basename.includes('private-key') || basename.includes('private_key')) return basename;
+  if (basename.includes('seed')) return basename;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const next = parts[index + 1];
+    if (part === '.ssh' || part === '.gnupg') return part;
+    if (part === '.aws' && (next === 'credentials' || next === 'config')) return `${part}/${next}`;
+    if (part === '.kube' && next === 'config') return `${part}/${next}`;
+  }
+
+  return null;
 }
 
 /**
@@ -624,7 +648,48 @@ export class ActionScanner {
       };
     }
 
+    const operation = type === 'read_file' ? 'read' : 'write';
+    const systemPath = classifySystemPathOperation(normalizedPath, operation);
+    if (systemPath) {
+      const blocked = systemPath.decision === 'block';
+      return {
+        decision: blocked ? 'deny' : 'confirm',
+        risk_level: systemPath.severity,
+        risk_tags: [blocked ? 'SYSTEM_PATH_MUTATION' : 'SYSTEM_PATH_ACCESS'],
+        evidence: [
+          {
+            type: blocked ? 'system_path_mutation' : 'system_path_access',
+            field: 'path',
+            match: systemPath.path,
+            description: `${operation} operation targets ${systemPath.description}`,
+          },
+        ],
+        explanation: blocked
+          ? `${type === 'read_file' ? 'Read' : 'Write'} access to '${file.path}' is blocked by system path policy`
+          : `${type === 'read_file' ? 'Read' : 'Write'} access to '${file.path}' requires approval`,
+      };
+    }
+
+    const sensitivePath = classifySensitiveFilePath(normalizedPath);
+    if (sensitivePath) {
+      return {
+        decision: 'confirm',
+        risk_level: 'high',
+        risk_tags: ['SENSITIVE_PATH'],
+        evidence: [
+          {
+            type: 'sensitive_path',
+            field: 'path',
+            match: sensitivePath,
+            description: 'File path matches a protected credential or secret pattern',
+          },
+        ],
+        explanation: `${type === 'read_file' ? 'Read' : 'Write'} access to '${file.path}' requires approval`,
+      };
+    }
+
     // Check if path is in allowlist (use normalized path)
+    const hasExplicitAllowlist = capabilities.filesystem_allowlist.length > 0;
     const isAllowed = capabilities.filesystem_allowlist.some((pattern) => {
       if (pattern === '*') return true;
       if (pattern.endsWith('/**')) {
@@ -648,9 +713,18 @@ export class ActionScanner {
       };
     }
 
+    if (!hasExplicitAllowlist) {
+      return {
+        decision: 'allow',
+        risk_level: 'low',
+        risk_tags: [],
+        evidence: [],
+      };
+    }
+
     return {
-      decision: 'deny',
-      risk_level: 'medium',
+      decision: 'confirm',
+      risk_level: 'high',
       risk_tags: ['PATH_NOT_ALLOWED'],
       evidence: [
         {

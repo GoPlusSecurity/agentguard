@@ -2,6 +2,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateHook } from '../adapters/engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
+import { ActionScanner } from '../action/index.js';
 import openClawEntry from '../openclaw.js';
 import { createTestContext } from './helpers/test-utils.js';
 
@@ -314,6 +315,44 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(call.actionType, 'shell');
     assert.equal(call.toolName, 'exec');
     assert.equal(call.sessionId, 'openclaw-session-1');
+  });
+
+  it('should let runtime protection allow ordinary OpenClaw file reads and writes', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    let fallbackCalls = 0;
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      agentguardFactory: () => ({
+        registry: ctx.agentguard.registry,
+        actionScanner: {
+          async decide() {
+            fallbackCalls += 1;
+            return {
+              decision: 'deny',
+              risk_level: 'medium',
+              risk_tags: ['PATH_NOT_ALLOWED'],
+              evidence: [],
+              explanation: 'fallback scanner should not handle safe OpenClaw file calls',
+            };
+          },
+        },
+      }) as never,
+      protectAction: async () => null,
+    });
+
+    const readResult = await handlers['before_tool_call']({
+      toolName: 'Read',
+      params: { path: '/tmp/test.txt' },
+    });
+    const writeResult = await handlers['before_tool_call']({
+      toolName: 'write',
+      params: { path: '/tmp/test_write_new.txt', content: 'hello' },
+    });
+
+    assert.equal(readResult, undefined);
+    assert.equal(writeResult, undefined);
+    assert.equal(fallbackCalls, 0);
   });
 
   it('should classify renamed OpenClaw shell and file tools before runtime protection', async () => {
@@ -758,5 +797,32 @@ describe('Integration: Protection Level Matrix', () => {
     ctx = createTestContext('permissive');
     const result = await evaluateHook(ctx.claudeAdapter, sensitiveWriteInput, ctx.options);
     assert.equal(result.decision, 'ask');
+  });
+
+  it('permissive: explicit filesystem allowlist miss → ASK', async () => {
+    ctx = createTestContext('permissive');
+    const actionScanner = new ActionScanner({
+      registry: ctx.agentguard.registry,
+      defaultCapabilities: {
+        network_allowlist: [],
+        filesystem_allowlist: ['/workspace/**'],
+        exec: 'deny',
+        secrets_allowlist: [],
+      },
+    });
+
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'read',
+      params: { path: '/tmp/outside-workspace.txt' },
+    }, {
+      ...ctx.options,
+      agentguard: {
+        ...ctx.agentguard,
+        actionScanner,
+      } as never,
+    });
+
+    assert.equal(result.decision, 'ask');
+    assert.ok(result.riskTags?.includes('PATH_NOT_ALLOWED'));
   });
 });

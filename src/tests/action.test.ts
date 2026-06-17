@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { ActionScanner } from '../action/index.js';
 import { analyzeExecCommand } from '../action/detectors/exec.js';
 import { analyzeNetworkRequest } from '../action/detectors/network.js';
 import type { NetworkRequestData } from '../types/action.js';
@@ -192,6 +193,152 @@ describe('Exec Command Detector', () => {
     const result = analyzeExecCommand({ command: 'some-unknown-tool --flag' }, false);
     assert.ok(result.should_block, 'Unknown command should be blocked when exec not allowed');
     assert.notEqual(result.risk_level, 'critical', 'Unknown command is not critical');
+  });
+});
+
+describe('File Operation Policy', () => {
+  it('allows ordinary file paths when no filesystem allowlist is configured', async () => {
+    const scanner = new ActionScanner();
+
+    for (const [type, path] of [
+      ['read_file', '/tmp/test.txt'],
+      ['write_file', '/tmp/test_write_new.txt'],
+      ['read_file', '/var/tmp/cache.txt'],
+      ['write_file', '/home/user/project/output.txt'],
+    ] as const) {
+      const result = await scanner.decide({
+        actor: {
+          skill: {
+            id: 'local-agent',
+            source: 'test',
+            version_ref: 'runtime',
+            artifact_hash: '',
+          },
+        },
+        action: { type, data: { path } },
+        context: {
+          session_id: 'sess_file_policy',
+          user_present: true,
+          env: 'dev',
+          time: new Date(0).toISOString(),
+        },
+      });
+
+      assert.equal(result.decision, 'allow', path);
+      assert.ok(!result.risk_tags.includes('PATH_NOT_ALLOWED'), path);
+    }
+  });
+
+  it('requires approval or blocks protected system file paths', async () => {
+    const scanner = new ActionScanner();
+
+    const readResult = await scanner.decide({
+      actor: {
+        skill: {
+          id: 'local-agent',
+          source: 'test',
+          version_ref: 'runtime',
+          artifact_hash: '',
+        },
+      },
+      action: { type: 'read_file', data: { path: '/etc/hostname' } },
+      context: {
+        session_id: 'sess_file_policy',
+        user_present: true,
+        env: 'dev',
+        time: new Date(0).toISOString(),
+      },
+    });
+
+    assert.equal(readResult.decision, 'confirm');
+    assert.ok(readResult.risk_tags.includes('SYSTEM_PATH_ACCESS'));
+
+    const writeResult = await scanner.decide({
+      actor: {
+        skill: {
+          id: 'local-agent',
+          source: 'test',
+          version_ref: 'runtime',
+          artifact_hash: '',
+        },
+      },
+      action: { type: 'write_file', data: { path: '/etc/hostname' } },
+      context: {
+        session_id: 'sess_file_policy',
+        user_present: true,
+        env: 'dev',
+        time: new Date(0).toISOString(),
+      },
+    });
+
+    assert.equal(writeResult.decision, 'deny');
+    assert.ok(writeResult.risk_tags.includes('SYSTEM_PATH_MUTATION'));
+  });
+
+  it('requires approval for sensitive project file paths even without a filesystem allowlist', async () => {
+    const scanner = new ActionScanner();
+
+    for (const [type, path] of [
+      ['read_file', '/workspace/.env'],
+      ['write_file', '/workspace/.env.local'],
+      ['read_file', '/workspace/config/private-key.pem'],
+      ['read_file', '/home/user/.aws/credentials'],
+    ] as const) {
+      const result = await scanner.decide({
+        actor: {
+          skill: {
+            id: 'local-agent',
+            source: 'test',
+            version_ref: 'runtime',
+            artifact_hash: '',
+          },
+        },
+        action: { type, data: { path } },
+        context: {
+          session_id: 'sess_file_policy',
+          user_present: true,
+          env: 'dev',
+          time: new Date(0).toISOString(),
+        },
+      });
+
+      assert.equal(result.decision, 'confirm', path);
+      assert.equal(result.risk_level, 'high', path);
+      assert.ok(result.risk_tags.includes('SENSITIVE_PATH'), path);
+    }
+  });
+
+  it('turns explicit filesystem allowlist misses into confirmation', async () => {
+    const scanner = new ActionScanner({
+      defaultCapabilities: {
+        network_allowlist: [],
+        filesystem_allowlist: ['/workspace/**'],
+        exec: 'deny',
+        secrets_allowlist: [],
+      },
+    });
+
+    const result = await scanner.decide({
+      actor: {
+        skill: {
+          id: 'local-agent',
+          source: 'test',
+          version_ref: 'runtime',
+          artifact_hash: '',
+        },
+      },
+      action: { type: 'read_file', data: { path: '/tmp/outside-workspace.txt' } },
+      context: {
+        session_id: 'sess_file_policy',
+        user_present: true,
+        env: 'dev',
+        time: new Date(0).toISOString(),
+      },
+    });
+
+    assert.equal(result.decision, 'confirm');
+    assert.equal(result.risk_level, 'high');
+    assert.ok(result.risk_tags.includes('PATH_NOT_ALLOWED'));
   });
 });
 
