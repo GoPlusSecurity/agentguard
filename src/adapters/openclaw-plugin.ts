@@ -463,6 +463,9 @@ export function registerOpenClawPlugin(
           if (isApprovedLocalRuntimeRetry(runtimeResult)) {
             return undefined;
           }
+          if (isRuntimeAuthoritativeAllow(runtimeResult, runtimeActionType, event)) {
+            return undefined;
+          }
         } catch (err) {
           if (
             options.runtimeFailureMode !== 'fallback' &&
@@ -746,6 +749,18 @@ function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
   return result?.decision.decision === 'allow' && result.event.metadata?.approvedByLocalGrant === true;
 }
 
+function isRuntimeAuthoritativeAllow(
+  result: ProtectResult | null,
+  actionType: RuntimeActionType,
+  event: unknown
+): boolean {
+  if (actionType !== 'file_read' && actionType !== 'file_write') return false;
+  if (!readOpenClawFilePath(event)) return false;
+  if (!result) return true;
+  const decision = normalizeRuntimePolicyDecision(result.decision.decision);
+  return decision === 'allow' || decision === 'warn';
+}
+
 function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['decision'] | string): ProtectResult['decision']['decision'] {
   return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
 }
@@ -766,6 +781,21 @@ function firstRecord(...values: unknown[]): Record<string, unknown> | undefined 
     if (isRecord(value)) return value;
   }
   return undefined;
+}
+
+function readOpenClawFilePath(event: unknown): string | undefined {
+  const record = isRecord(event) ? event : undefined;
+  const params = readOpenClawParams(event);
+  const value =
+    params?.path ??
+    params?.file_path ??
+    params?.filePath ??
+    params?.target ??
+    record?.path ??
+    record?.file_path ??
+    record?.filePath ??
+    record?.target;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**

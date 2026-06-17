@@ -80,10 +80,35 @@ const DANGEROUS_COMMANDS = [
 ];
 
 const DOWNLOAD_AND_EXEC_PATTERNS = [
-  /\b(?:curl|wget)\b(?:(?!&&|\|\||;|\n|\r).)*\|\s*(?:sudo\s+)?(?:bash|sh)\b/i,
+  /\b(?:curl|wget)\b(?:(?!&&|\|\||;|\n|\r).)*\|\s*(?:(?:sudo(?:\s+(?:-[^\s]+|--[^\s]+|env))*\s+))?(?:bash|sh)\b/i,
   /\b(?:bash|sh)\s+<\s*\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
   /\beval\s+["']?\$\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
 ];
+
+const SHORT_LINK_HOSTS = new Set([
+  'bit.ly',
+  'tinyurl.com',
+  't.co',
+  'goo.gl',
+  'ow.ly',
+  'is.gd',
+  'buff.ly',
+]);
+
+const HIGH_RISK_TLDS = new Set([
+  'top',
+  'xyz',
+  'icu',
+  'click',
+  'zip',
+  'mov',
+]);
+
+const BLOCKED_REMOTE_SCRIPT_HOSTS = new Set([
+  'evil.example',
+  'malware.example',
+  'phishing.example',
+]);
 
 const HIDDEN_NETWORK_PATTERNS = [
   /\$\(\s*(?:curl|wget|nc|netcat|ncat|ssh|scp|rsync|ftp|sftp)\b[^)]*\)/i,
@@ -222,20 +247,13 @@ export function analyzeExecCommand(
   }
 
   if (riskLevel !== 'critical') {
-    for (const pattern of DOWNLOAD_AND_EXEC_PATTERNS) {
-      if (pattern.test(fullCommand)) {
-        riskTags.push('DANGEROUS_COMMAND');
-        evidence.push({
-          type: 'dangerous_command',
-          field: 'command',
-          match: 'download-and-execute',
-          description: 'Remote download piped or substituted into a shell',
-        });
-        riskLevel = 'critical';
-        shouldBlock = true;
-        blockReason = 'Dangerous command: remote download executed by shell';
-        break;
-      }
+    const remoteScriptFinding = analyzeRemoteScriptExecution(fullCommand);
+    if (remoteScriptFinding) {
+      riskTags.push(remoteScriptFinding.tag);
+      evidence.push(remoteScriptFinding.evidence);
+      riskLevel = remoteScriptFinding.risk_level;
+      shouldBlock = true;
+      blockReason = remoteScriptFinding.block_reason;
     }
   }
 
@@ -383,6 +401,172 @@ export function analyzeExecCommand(
     should_block: shouldBlock,
     block_reason: blockReason,
   };
+}
+
+interface RemoteScriptExecutionFinding {
+  risk_level: 'high' | 'critical';
+  tag: 'REMOTE_SCRIPT_EXECUTION' | 'SUSPICIOUS_REMOTE_SCRIPT_EXECUTION' | 'MALICIOUS_REMOTE_SCRIPT_EXECUTION';
+  evidence: ActionEvidence;
+  block_reason: string;
+}
+
+function analyzeRemoteScriptExecution(command: string): RemoteScriptExecutionFinding | null {
+  if (!DOWNLOAD_AND_EXEC_PATTERNS.some((pattern) => pattern.test(command))) return null;
+
+  const targets = extractDownloadTargets(command);
+  const hardReasons: string[] = [];
+  const softReasons: string[] = [];
+
+  if (/\beval\s+["']?\$\(\s*(?:curl|wget)\b/i.test(command)) {
+    hardReasons.push('eval executes downloaded script output');
+  }
+  if (/\b(?:bash|sh)\s+<\s*\(\s*(?:curl|wget)\b/i.test(command)) {
+    softReasons.push('process substitution executes downloaded script');
+  }
+  if (/\|\s*sudo(?:\s+(?:-[^\s]+|--[^\s]+|env))*\s+(?:bash|sh)\b/i.test(command)) {
+    softReasons.push('downloaded script runs through sudo shell');
+  }
+
+  for (const target of targets.length > 0 ? targets : ['download-and-execute']) {
+    const assessment = assessDownloadTarget(target);
+    hardReasons.push(...assessment.hardReasons);
+    softReasons.push(...assessment.softReasons);
+  }
+
+  const uniqueHardReasons = uniqueStrings(hardReasons);
+  const uniqueSoftReasons = uniqueStrings(softReasons);
+  const critical = uniqueHardReasons.length > 0 || uniqueSoftReasons.length >= 2;
+  const tag = critical
+    ? 'MALICIOUS_REMOTE_SCRIPT_EXECUTION'
+    : uniqueSoftReasons.length > 0
+      ? 'SUSPICIOUS_REMOTE_SCRIPT_EXECUTION'
+      : 'REMOTE_SCRIPT_EXECUTION';
+  const reasons = critical ? [...uniqueHardReasons, ...uniqueSoftReasons] : uniqueSoftReasons;
+
+  return {
+    risk_level: critical ? 'critical' : 'high',
+    tag,
+    evidence: {
+      type: 'remote_script_execution',
+      field: 'command',
+      match: targets[0] || 'download-and-execute',
+      description: reasons.length > 0
+        ? `Remote download executed by shell (${reasons.join('; ')})`
+        : 'Remote download executed by shell requires approval',
+    },
+    block_reason: critical
+      ? 'Remote download executed by shell matched high-risk indicators'
+      : 'Remote download executed by shell requires approval',
+  };
+}
+
+function extractDownloadTargets(command: string): string[] {
+  const targets: string[] = [];
+  for (const match of command.matchAll(/\b(?:curl|wget)\b([^|;)\n\r]*)/gi)) {
+    const tokens = shellTokens(match[0]);
+    let skipNext = false;
+    for (const token of tokens.slice(1)) {
+      const cleaned = stripTokenQuotes(token);
+      if (!cleaned) continue;
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
+      if (optionConsumesNext(cleaned)) {
+        skipNext = true;
+        continue;
+      }
+      if (cleaned.startsWith('-')) continue;
+      if (isDownloadTarget(cleaned)) targets.push(cleaned);
+    }
+  }
+  return uniqueStrings(targets);
+}
+
+function assessDownloadTarget(target: string): { hardReasons: string[]; softReasons: string[] } {
+  const hardReasons: string[] = [];
+  const softReasons: string[] = [];
+  const cleaned = stripTokenQuotes(target);
+
+  if (containsShellVariable(cleaned)) {
+    hardReasons.push('download URL uses shell variable expansion');
+    return { hardReasons, softReasons };
+  }
+
+  const parsed = parseDownloadUrl(cleaned);
+  if (!parsed) return { hardReasons, softReasons };
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (parsed.protocol === 'http:') hardReasons.push('plain HTTP download');
+  if (isIpLiteral(hostname)) hardReasons.push('IP literal download host');
+  if (hostname.startsWith('xn--') || hostname.includes('.xn--')) hardReasons.push('punycode download host');
+  if (SHORT_LINK_HOSTS.has(hostname)) hardReasons.push('short-link download host');
+  if (BLOCKED_REMOTE_SCRIPT_HOSTS.has(hostname)) hardReasons.push('blocked remote script host');
+
+  if (parsed.port && parsed.port !== '80' && parsed.port !== '443') {
+    softReasons.push('non-standard download port');
+  }
+
+  const tld = hostname.split('.').pop() || '';
+  if (HIGH_RISK_TLDS.has(tld)) softReasons.push('high-risk download TLD');
+
+  const pathAndQuery = `${parsed.pathname}${parsed.search}`;
+  if (/(?:[?&](?:payload|cmd|command|exec|base64|token)=|\/(?:payload|cmd|base64)(?:[/?#]|$))/i.test(pathAndQuery)) {
+    softReasons.push('suspicious download URL parameter or path');
+  }
+
+  return { hardReasons, softReasons };
+}
+
+function parseDownloadUrl(target: string): URL | null {
+  try {
+    if (/^https?:\/\//i.test(target)) return new URL(target);
+    if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:[/?#].*)?$/.test(target)) {
+      return new URL(`https://${target}`);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isDownloadTarget(value: string): boolean {
+  return containsShellVariable(value) ||
+    /^https?:\/\//i.test(value) ||
+    /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:[/?#].*)?$/.test(value);
+}
+
+function stripTokenQuotes(value: string): string {
+  return value.trim().replace(/^['"]|['"]$/g, '');
+}
+
+function containsShellVariable(value: string): boolean {
+  return /(?:^|[^\\])\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/.test(value);
+}
+
+function optionConsumesNext(option: string): boolean {
+  return [
+    '-o',
+    '--output',
+    '--output-document',
+    '-d',
+    '--data',
+    '--data-raw',
+    '-H',
+    '--header',
+    '-A',
+    '--user-agent',
+    '-u',
+    '--user',
+  ].includes(option);
+}
+
+function isIpLiteral(hostname: string): boolean {
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.includes(':');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 interface PathOperationFinding {

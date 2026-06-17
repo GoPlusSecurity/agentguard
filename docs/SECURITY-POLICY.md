@@ -99,7 +99,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
 | `chmod 777` / `chmod -R 777` | World-writable permissions |
 | `> /dev/sda` | Disk overwrite |
 | `mv /* ` | Move root contents |
-| `curl\|sh` / `wget\|bash` | Download and execute |
+| High-risk `curl/wget\|sh/bash` | Download and execute with hard indicators such as HTTP, IP hosts, variable URLs, short links, punycode, `eval`, or multiple soft-risk signals |
 
 #### Sensitive Data Access (High Risk — CONFIRM)
 
@@ -496,7 +496,7 @@ import {
 
 | Category | Rules |
 |----------|-------|
-| **Destructive commands** | `rm -rf`, `mkfs`, `dd if=`, fork bomb, `chmod 777`, `curl\|bash` |
+| **Destructive commands** | `rm -rf`, `mkfs`, `dd if=`, fork bomb, `chmod 777`, high-risk `curl/wget\|sh/bash` |
 | **Key exfiltration** | Private keys (0x+64 hex), mnemonics (12-24 BIP39), SSH keys |
 | **Webhook exfil** | Discord/Telegram/Slack webhooks (unless allowlisted) |
 | **Prompt injection** | `ignore previous instructions`, jailbreak attempts |
@@ -511,6 +511,7 @@ import {
 | **Untrusted domains** | POST/PUT to non-allowlisted domains |
 | **Web3 high-risk** | Unlimited approval, unknown spender |
 | **Untrusted skills** | Skills not in trust registry |
+| **Remote script execution** | Ordinary `curl/wget\|sh/bash`, including known installer sources |
 
 ### Audit but Allow (Medium — ALLOW with logging)
 
