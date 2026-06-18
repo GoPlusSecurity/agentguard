@@ -255,7 +255,22 @@ function formatDecisionReason(result, fallback) {
 
 function normalizeForRuntime(input) {
   const toolName = toolNameFrom(input);
-  const toolInput = toolInputFrom(input);
+  const toolInput = { ...toolInputFrom(input) };
+
+  // Cline's run_commands accepts a `commands: string[]` shape. The runtime
+  // engine's input-picker only looks at `command`/`cmd`, so flatten the
+  // array into a single shell expression before handing it off.
+  if (
+    (toolName === 'run_commands' || toolName === 'execute_command') &&
+    !firstString(toolInput.command, toolInput.cmd) &&
+    Array.isArray(toolInput.commands)
+  ) {
+    const joined = toolInput.commands
+      .filter((c) => typeof c === 'string' && c.length > 0)
+      .join(' && ');
+    if (joined) toolInput.command = joined;
+  }
+
   return {
     ...input,
     tool_name: toolName,
