@@ -1,4 +1,5 @@
 import type { ActionEnvelope } from '../types/action.js';
+import { isSensitivePath } from './common.js';
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
@@ -25,6 +26,25 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   browser_action: 'network_request',
   web_search: 'web_search',
 };
+
+function collectReadFilePaths(toolInput: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const single = firstString(toolInput.path, toolInput.file_path, toolInput.filePath);
+  if (single) out.push(single);
+  const lists = [toolInput.files, toolInput.file_paths, toolInput.paths];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry === 'string' && entry.length > 0) {
+        out.push(entry);
+      } else if (entry && typeof entry === 'object') {
+        const p = (entry as Record<string, unknown>).path;
+        if (typeof p === 'string' && p.length > 0) out.push(p);
+      }
+    }
+  }
+  return out;
+}
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -153,18 +173,18 @@ export class ClineAdapter implements HookAdapter {
         break;
 
       case 'read_file': {
-        // read_files supports many shapes; pick the first path seen.
+        // Cline's read_files accepts multiple files (string | string[] |
+        // { path }[] under .files/.file_paths/.paths). The single-envelope
+        // contract forces us to pick one representative path; we prefer a
+        // path that isSensitivePath flags so multi-file reads can't smuggle
+        // a sensitive target alongside benign ones.
         const ti = input.toolInput;
-        let path = firstString(ti.path, ti.file_path, ti.filePath);
-        if (!path) {
-          const files = (ti.files || ti.file_paths || ti.paths) as unknown;
-          if (Array.isArray(files)) {
-            const first = files.find((f) => typeof f === 'string' || (f && typeof (f as Record<string, unknown>).path === 'string'));
-            if (typeof first === 'string') path = first;
-            else if (first && typeof first === 'object') path = String((first as Record<string, unknown>).path || '');
-          }
-        }
-        actionData = { path };
+        const paths = collectReadFilePaths(ti);
+        const sensitive = paths.find((p) => isSensitivePath(p));
+        const path = sensitive || paths[0] || '';
+        actionData = sensitive
+          ? { path, paths, sensitive_path: sensitive }
+          : { path, ...(paths.length > 1 ? { paths } : {}) };
         break;
       }
 

@@ -664,6 +664,42 @@ describe('ClineAdapter', () => {
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/readme.md');
     });
 
+    it('should prefer a sensitive path when read_files lists multiple files', () => {
+      // Locks in the medium-severity review fix: multi-file reads must not
+      // smuggle a sensitive target alongside benign ones into a single envelope.
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'read_files',
+          input: { files: ['/tmp/readme.md', '/project/.env', '/tmp/other.md'] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.path, '/project/.env');
+      assert.equal(data.sensitive_path, '/project/.env');
+      assert.deepEqual(data.paths, ['/tmp/readme.md', '/project/.env', '/tmp/other.md']);
+    });
+
+    it('should include the paths list for non-sensitive multi-file reads', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'read_files',
+          input: { paths: ['/tmp/a.md', '/tmp/b.md'] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.path, '/tmp/a.md');
+      assert.deepEqual(data.paths, ['/tmp/a.md', '/tmp/b.md']);
+      assert.equal(data.sensitive_path, undefined);
+    });
+
     it('should build network_request envelope from web_fetch URL', () => {
       const input = adapter.parseInput({
         hookName: 'tool_call',

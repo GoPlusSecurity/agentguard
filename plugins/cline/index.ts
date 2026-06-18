@@ -97,15 +97,17 @@ const plugin: AgentPlugin = {
     async beforeTool({ toolCall, input, taskId, workspaceRoots }): Promise<BeforeToolResult> {
       const engine = await loadEngine();
       if (!engine) {
-        // Fail-open by default — security gate is opt-in to fail-closed via env.
-        if (envBool('AGENTGUARD_CLINE_FAIL_CLOSED', false)) {
-          return {
-            skip: true,
-            reason:
-              'GoPlus AgentGuard: engine not found (install @goplus/agentguard) — blocking fail-closed.',
-          };
+        // Default: fail-closed — match the file-hook surface and the hermes
+        // plugin so users get consistent enforcement across integrations.
+        // Override with AGENTGUARD_CLINE_FAIL_OPEN=1 for local dev.
+        if (envBool('AGENTGUARD_CLINE_FAIL_OPEN', false)) {
+          return undefined;
         }
-        return undefined;
+        return {
+          skip: true,
+          reason:
+            'GoPlus AgentGuard: engine not found (install @goplus/agentguard) — blocking fail-closed. Set AGENTGUARD_CLINE_FAIL_OPEN=1 to allow.',
+        };
       }
 
       const adapter = new engine.ClineAdapter();
@@ -130,13 +132,13 @@ const plugin: AgentPlugin = {
         }
         return undefined;
       } catch (err) {
-        if (envBool('AGENTGUARD_CLINE_FAIL_CLOSED', false)) {
-          return {
-            skip: true,
-            reason: `GoPlus AgentGuard engine error: ${err instanceof Error ? err.message : 'unknown'}`,
-          };
+        if (envBool('AGENTGUARD_CLINE_FAIL_OPEN', false)) {
+          return undefined;
         }
-        return undefined;
+        return {
+          skip: true,
+          reason: `GoPlus AgentGuard engine error: ${err instanceof Error ? err.message : 'unknown'} — blocking fail-closed. Set AGENTGUARD_CLINE_FAIL_OPEN=1 to allow.`,
+        };
       }
     },
 

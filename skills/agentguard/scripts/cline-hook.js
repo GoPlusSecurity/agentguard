@@ -25,7 +25,17 @@
  * the host installed an older AgentGuard build.
  */
 
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function existsAtPath(p) {
+  try {
+    return existsSync(p);
+  } catch {
+    return false;
+  }
+}
 
 function isPostHook(input) {
   const event = typeof input?.hookName === 'string' ? input.hookName : '';
@@ -160,7 +170,12 @@ function isInScope(toolName) {
 // Load AgentGuard engine + Cline adapter
 // ---------------------------------------------------------------------------
 
-const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
+// Resolve the bundled engine path safely across platforms. The script ships as
+// `<pkg>/skills/agentguard/scripts/cline-hook.js`; the engine entry is at
+// `<pkg>/dist/index.js`. fileURLToPath handles Windows `file:///C:/...` URLs
+// correctly where a naive string replace would not.
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const bundledEnginePath = resolve(scriptDir, '..', '..', '..', 'dist', 'index.js');
 
 async function loadEngine() {
   if (process.env.AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE === '1') return null;
@@ -173,7 +188,13 @@ async function loadEngine() {
     }
   };
 
-  const gs = (await tryImport(agentguardPath)) || (await tryImport('@goplus/agentguard'));
+  // 1) Bundled engine (in-repo or installed via `npm i -g @goplus/agentguard`
+  //    where the skill folder lives next to dist/).
+  // 2) Bare specifier (resolves when the host process has @goplus/agentguard
+  //    in scope — e.g. invoked from a node_modules-aware cwd).
+  const gs =
+    (existsAtPath(bundledEnginePath) ? await tryImport(bundledEnginePath) : null) ||
+    (await tryImport('@goplus/agentguard'));
   if (!gs) return null;
 
   return {

@@ -62,7 +62,7 @@ decisions map to `review` — no lossy translation needed.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `AGENTGUARD_CLINE_FAIL_CLOSED` | `0` | `1` blocks tool calls when the engine cannot be loaded (default fails open — the security gate is opt-in). |
+| `AGENTGUARD_CLINE_FAIL_OPEN` | `0` | `1` allows tool calls when the engine cannot be loaded or errors. Default is fail-closed — both the runtime plugin and the file-hook share this single env var so enforcement is consistent across surfaces. |
 | `AGENTGUARD_LEVEL` | `balanced` | Override AgentGuard protection level (`strict` / `balanced` / `permissive`) when no on-disk config is present. |
 
 **Activation:** `agentguard init --agent cline` only writes files. The plugin is
@@ -70,10 +70,11 @@ inactive until you run `cline plugin install ~/.cline/plugins/agentguard` (Cline
 plugins are opt-in).
 
 **Fail policy:** Out-of-scope tools always pass through without an engine call.
-For the security-sensitive tools above, the default is **fail-open** to avoid
-locking the user out of Cline when AgentGuard isn't installed; set
-`AGENTGUARD_CLINE_FAIL_CLOSED=1` for production hardening (matches the Hermes
-plugin's posture).
+For the security-sensitive tools above, both the runtime plugin and the file
+hook default to **fail-closed** (a security gate that quietly turns off isn't a
+security gate). Set `AGENTGUARD_CLINE_FAIL_OPEN=1` for local development. This
+matches the Hermes plugin's posture and is a single env var across both Cline
+surfaces.
 
 ## Development
 

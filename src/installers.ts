@@ -1,4 +1,4 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -249,7 +249,6 @@ function installCline(cwd: string | undefined, force: boolean): InstallResult {
     : process.env.CLINE_HOME?.trim() || join(homedir(), '.cline');
 
   const skillDir = join(clineRoot, 'skills', 'agentguard');
-  const hookScriptPath = join(skillDir, 'scripts', 'cline-hook.js');
   const preHookPath = join(clineRoot, 'hooks', 'PreToolUse.js');
   const postHookPath = join(clineRoot, 'hooks', 'PostToolUse.js');
   const pluginDir = join(clineRoot, 'plugins', 'agentguard');
@@ -257,11 +256,17 @@ function installCline(cwd: string | undefined, force: boolean): InstallResult {
   // 1. Drop the shared skill (carries cline-hook.js and supporting scripts).
   copyBundledSkill(skillDir, force);
 
-  // 2. Write Cline file-hook shims that delegate to the bundled script.
-  const preShim = clineHookShim(hookScriptPath);
-  const postShim = clineHookShim(hookScriptPath);
-  writeIfAllowed(preHookPath, preShim, force);
-  writeIfAllowed(postHookPath, postShim, force);
+  // 2. Install Cline file hooks by copying cline-hook.js directly. The hook
+  //    branches on the incoming `hookName` (`tool_call` -> pre, `tool_result`
+  //    -> post), so the same script handles both events. Copying avoids an
+  //    extra process boundary and the stdin-inheritance footgun that comes
+  //    with shim scripts.
+  const hookSource = resolve(__dirname, '..', 'skills', 'agentguard', 'scripts', 'cline-hook.js');
+  if (!existsSync(hookSource)) {
+    throw new Error(`Bundled cline-hook.js not found at ${hookSource}. Reinstall @goplus/agentguard.`);
+  }
+  installClineHook(hookSource, preHookPath, force);
+  installClineHook(hookSource, postHookPath, force);
 
   // 3. Copy the native runtime plugin (cline plugin install ~/.cline/plugins/agentguard).
   copyBundledClinePlugin(pluginDir, force);
@@ -272,9 +277,23 @@ function installCline(cwd: string | undefined, force: boolean): InstallResult {
   };
 }
 
+function installClineHook(source: string, target: string, force: boolean): void {
+  if (existsSync(target) && !force) return;
+  mkdirSync(dirname(target), { recursive: true });
+  cpSync(source, target, { force });
+  // Cline hook files must be executable for the shebang to fire.
+  try {
+    chmodSync(target, 0o755);
+  } catch {
+    // Best-effort; Windows ignores the mode bits.
+  }
+}
+
 const CLINE_PLUGIN_REQUIRED_FILES = ['index.ts', 'package.json'];
 
 function copyBundledClinePlugin(targetDir: string, force: boolean): void {
+  // The published package ships `plugins/` (see package.json "files"), so this
+  // path is the same in-repo and in installed @goplus/agentguard.
   const sourceDir = resolve(__dirname, '..', 'plugins', 'cline');
   if (!existsSync(sourceDir)) {
     throw new Error(`Bundled Cline plugin not found at ${sourceDir}. Reinstall @goplus/agentguard.`);
@@ -288,18 +307,6 @@ function copyBundledClinePlugin(targetDir: string, force: boolean): void {
       throw new Error(`Cline plugin install is incomplete: missing ${required} in ${targetDir}.`);
     }
   }
-}
-
-function clineHookShim(hookScriptPath: string): string {
-  // Cline runs hook files matching the event name (PreToolUse / PostToolUse).
-  // The shim hands stdin straight through to the bundled engine bridge.
-  return `#!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-const child = spawnSync(process.execPath, [${JSON.stringify(hookScriptPath)}], {
-  stdio: 'inherit',
-});
-process.exit(child.status ?? 0);
-`;
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
