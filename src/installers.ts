@@ -2,7 +2,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, wr
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'cline';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,6 +21,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'cline') return installCline(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -240,10 +241,74 @@ function installQClaw(root: string, force: boolean): InstallResult {
   return { agent: 'qclaw', files: pluginResult.files };
 }
 
+function installCline(cwd: string | undefined, force: boolean): InstallResult {
+  // Cline reads file hooks from .cline/hooks/ and runtime plugins from
+  // .cline/plugins/ (project-local) or ~/.cline/* (user-global).
+  const clineRoot = cwd
+    ? join(cwd, '.cline')
+    : process.env.CLINE_HOME?.trim() || join(homedir(), '.cline');
+
+  const skillDir = join(clineRoot, 'skills', 'agentguard');
+  const hookScriptPath = join(skillDir, 'scripts', 'cline-hook.js');
+  const preHookPath = join(clineRoot, 'hooks', 'PreToolUse.js');
+  const postHookPath = join(clineRoot, 'hooks', 'PostToolUse.js');
+  const pluginDir = join(clineRoot, 'plugins', 'agentguard');
+
+  // 1. Drop the shared skill (carries cline-hook.js and supporting scripts).
+  copyBundledSkill(skillDir, force);
+
+  // 2. Write Cline file-hook shims that delegate to the bundled script.
+  const preShim = clineHookShim(hookScriptPath);
+  const postShim = clineHookShim(hookScriptPath);
+  writeIfAllowed(preHookPath, preShim, force);
+  writeIfAllowed(postHookPath, postShim, force);
+
+  // 3. Copy the native runtime plugin (cline plugin install ~/.cline/plugins/agentguard).
+  copyBundledClinePlugin(pluginDir, force);
+
+  return {
+    agent: 'cline',
+    files: [skillDir, preHookPath, postHookPath, pluginDir],
+  };
+}
+
+const CLINE_PLUGIN_REQUIRED_FILES = ['index.ts', 'package.json'];
+
+function copyBundledClinePlugin(targetDir: string, force: boolean): void {
+  const sourceDir = resolve(__dirname, '..', 'plugins', 'cline');
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Bundled Cline plugin not found at ${sourceDir}. Reinstall @goplus/agentguard.`);
+  }
+  if (!(existsSync(targetDir) && !force)) {
+    mkdirSync(dirname(targetDir), { recursive: true });
+    cpSync(sourceDir, targetDir, { recursive: true, force });
+  }
+  for (const required of CLINE_PLUGIN_REQUIRED_FILES) {
+    if (!existsSync(join(targetDir, required))) {
+      throw new Error(`Cline plugin install is incomplete: missing ${required} in ${targetDir}.`);
+    }
+  }
+}
+
+function clineHookShim(hookScriptPath: string): string {
+  // Cline runs hook files matching the event name (PreToolUse / PostToolUse).
+  // The shim hands stdin straight through to the bundled engine bridge.
+  return `#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+const child = spawnSync(process.execPath, [${JSON.stringify(hookScriptPath)}], {
+  stdio: 'inherit',
+});
+process.exit(child.status ?? 0);
+`;
+}
+
 function writeIfAllowed(path: string, content: string, force: boolean): void {
   if (existsSync(path) && !force) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, { mode: path.endsWith('.sh') ? 0o755 : undefined });
+  const isExecutable =
+    path.endsWith('.sh') ||
+    /\/(\.cline|\.hermes)\/hooks\//.test(path); // Cline / Hermes file hooks must be +x.
+  writeFileSync(path, content, { mode: isExecutable ? 0o755 : undefined });
 }
 
 function copyBundledSkill(targetDir: string, force: boolean): void {
