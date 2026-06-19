@@ -2,7 +2,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, wr
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'goose';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,6 +21,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'goose') return installGoose(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -238,6 +239,132 @@ function installQClaw(root: string, force: boolean): InstallResult {
   const configPath = join(qclawRoot, 'qclaw.json');
   const pluginResult = installClawPlugin('qclaw', qclawRoot, configPath, force);
   return { agent: 'qclaw', files: pluginResult.files };
+}
+
+/**
+ * Install AgentGuard as an MCP extension in Goose.
+ *
+ * Goose has no out-of-process plugin API — the only in-process hard gate
+ * is the Rust `ToolInspector` trait, which is compile-time. The closest
+ * supported integration today is an MCP server entry in config.yaml. The
+ * model can choose not to call AgentGuard's MCP tools, so this is an
+ * **advisory** integration, not a hard security boundary. See
+ * plugins/goose/README.md for the honest framing and
+ * plugins/goose/UPSTREAM_PROPOSAL.md for the path to a real gate.
+ */
+function installGoose(cwd: string | undefined, force: boolean): InstallResult {
+  const configDir = cwd
+    ? join(cwd, '.config', 'goose')
+    : process.env.GOOSE_CONFIG_DIR?.trim() ||
+      (process.platform === 'win32'
+        ? join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Block', 'goose', 'config')
+        : join(homedir(), '.config', 'goose'));
+  const configPath = join(configDir, 'config.yaml');
+
+  mkdirSync(configDir, { recursive: true });
+  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  const next = mergeGooseAgentGuardExtension(existing, force);
+  if (next !== existing) {
+    writeFileSync(configPath, next);
+  }
+
+  return { agent: 'goose', files: [configPath] };
+}
+
+const GOOSE_AGENTGUARD_BLOCK = [
+  '  agentguard:',
+  '    type: stdio',
+  '    command: agentguard-mcp',
+  '    args: []',
+  '    timeout: 300',
+  '    enabled: true',
+  "    description: GoPlus AgentGuard MCP — security scanner + action evaluator",
+].join('\n');
+
+function mergeGooseAgentGuardExtension(existing: string, force: boolean): string {
+  const text = existing.replace(/\r\n/g, '\n');
+
+  // Already configured — keep as-is unless force is set.
+  if (gooseHasAgentGuardEntry(text) && !force) return existing;
+
+  // If force is set and there's a previous entry, strip it first.
+  const baseline = force ? stripGooseAgentGuardEntry(text) : text;
+
+  // No `extensions:` block at all — prepend a fresh one (preserve trailing text).
+  if (!gooseHasTopLevelKey(baseline, 'extensions')) {
+    const prefix = `extensions:\n${GOOSE_AGENTGUARD_BLOCK}\n`;
+    if (baseline.trim().length === 0) return prefix;
+    return baseline.endsWith('\n') ? `${prefix}${baseline}` : `${prefix}${baseline}\n`;
+  }
+
+  // `extensions:` exists — append `agentguard:` as a child block.
+  return appendInsideGooseExtensions(baseline);
+}
+
+function gooseHasAgentGuardEntry(text: string): boolean {
+  // Match `agentguard:` under an `extensions:` top-level block.
+  const lines = text.split('\n');
+  let inExtensions = false;
+  for (const line of lines) {
+    if (/^extensions:\s*(?:#.*)?$/.test(line)) {
+      inExtensions = true;
+      continue;
+    }
+    if (inExtensions && /^[A-Za-z0-9_-]+:/.test(line)) {
+      // Hit a new top-level key — extensions block ended.
+      inExtensions = false;
+    }
+    if (inExtensions && /^\s+agentguard:\s*(?:#.*)?$/.test(line)) return true;
+  }
+  return false;
+}
+
+function gooseHasTopLevelKey(text: string, key: string): boolean {
+  const re = new RegExp(`^${key}:\\s*(?:\\{\\}\\s*)?(?:#.*)?$`, 'm');
+  return re.test(text);
+}
+
+function appendInsideGooseExtensions(text: string): string {
+  // Insert the AgentGuard block directly after the `extensions:` line. YAML
+  // doesn't care about sibling order so we don't need to walk to the end of
+  // the existing block — that walk is what introduced the trailing-blank
+  // bug. Children of `extensions:` are indented (2 spaces), so the new
+  // block slots in cleanly.
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let inserted = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    if (!inserted && /^extensions:\s*(?:#.*)?$/.test(lines[i])) {
+      out.push(GOOSE_AGENTGUARD_BLOCK);
+      inserted = true;
+    }
+  }
+
+  if (!inserted) {
+    // Defensive: extensions: existed but was malformed; append at end.
+    out.push('extensions:', GOOSE_AGENTGUARD_BLOCK);
+  }
+
+  const joined = out.join('\n');
+  return joined.endsWith('\n') ? joined : `${joined}\n`;
+}
+
+function stripGooseAgentGuardEntry(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s+agentguard:\s*(?:#.*)?$/.test(lines[i])) {
+      i++;
+      while (i < lines.length && /^\s{4,}/.test(lines[i])) i++;
+      continue;
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  return out.join('\n');
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {

@@ -40,15 +40,18 @@ import {
   type CronBackend,
   type ThreatFeedCronRemovalResult,
   type OpenClawGatewayOptions,
+  type CronAgentHost,
 } from './feed/cron.js';
 
-const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'];
+const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw', 'goose'];
 const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
   { agent: 'claude-code', dir: '.claude' },
   { agent: 'openclaw', dir: '.openclaw' },
   { agent: 'hermes', dir: '.hermes' },
   { agent: 'qclaw', dir: '.qclaw' },
   { agent: 'codex', dir: '.codex' },
+  // 'goose' is intentionally NOT in auto-detection: config lives at
+  // ~/.config/goose/ (outside cwd), and an MCP install is advisory-only.
 ];
 const REQUIRED_INIT_COMMAND = 'agentguard init --agent auto';
 
@@ -64,7 +67,7 @@ async function main() {
     .command('init')
     .description('Create ~/.agentguard/config.json and local runtime paths')
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
-    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
+    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, qclaw, or goose (MCP advisory)')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--shell-hooks', 'For Hermes: install legacy shell hooks instead of the native plugin')
     .option('--force', 'Overwrite existing hook/template files')
@@ -106,7 +109,7 @@ async function main() {
           return;
         }
         if (!SUPPORTED_AGENT_INSTALLERS.includes(normalizedAgent as AgentInstaller)) {
-          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, or qclaw.');
+          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, qclaw, or goose.');
         }
         const agent = normalizedAgent as AgentInstaller;
         config.agentHost = agent;
@@ -1062,8 +1065,12 @@ function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
   console.log('No AgentGuard subscribe cron job was found.');
 }
 
-function resolveCronAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
-  return config.agentHost ?? config.agentHosts?.[0];
+function resolveCronAgentHost(config: AgentGuardConfig): CronAgentHost | undefined {
+  const host = config.agentHost ?? config.agentHosts?.[0];
+  if (host === 'claude-code' || host === 'codex' || host === 'openclaw' || host === 'hermes' || host === 'qclaw') {
+    return host;
+  }
+  return undefined;
 }
 
 function readStdinIfAvailable(): string {
