@@ -116,11 +116,13 @@ export class ContinueAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        // Continue's multi_edit accepts an `edits: [{filePath, ...}]` list.
-        // Apply the same worst-case-path rule as the Cline adapter: any
-        // sensitive target in the batch should be the envelope's primary
-        // path so it can't be smuggled past the engine alongside benign
-        // edits.
+        // Continue's multi_edit accepts an `edits: [{filePath, old_string,
+        // new_string, ...}]` list. Apply the same worst-case-path rule as the
+        // Cline adapter (sensitive target wins) AND surface the per-edit
+        // operations to the policy engine, so a multi_edit batch is
+        // distinguishable from a single-path write and the engine can reason
+        // about the actual change (e.g. count of operations, presence of
+        // delete-style edits with empty new_string).
         const ti = input.toolInput;
         const paths = collectWritePaths(ti);
         const sensitive = paths.find((p) => isSensitivePath(p));
@@ -128,9 +130,15 @@ export class ContinueAdapter implements HookAdapter {
           sensitive ||
           paths[0] ||
           firstString(ti.filepath, ti.file_path, ti.filePath, ti.path, ti.target);
-        actionData = sensitive
-          ? { path: primary, paths, sensitive_path: sensitive }
-          : { path: primary, ...(paths.length > 1 ? { paths } : {}) };
+
+        const operations = collectWriteOperations(ti, primary);
+
+        actionData = {
+          path: primary,
+          ...(paths.length > 1 ? { paths } : {}),
+          ...(sensitive ? { sensitive_path: sensitive } : {}),
+          ...(operations.length > 0 ? { operations } : {}),
+        };
         break;
       }
 
@@ -179,6 +187,69 @@ export class ContinueAdapter implements HookAdapter {
       firstString(raw.initiating_skill, raw.sourceSkill, raw.skill) || null
     );
   }
+}
+
+/**
+ * Normalize a Continue write-tool input into a list of `{ path, kind,
+ * old_preview, new_preview, is_delete }` operations the engine can reason
+ * about. Strings are previewed at ≤256 chars to keep the envelope bounded.
+ */
+function collectWriteOperations(
+  toolInput: Record<string, unknown>,
+  fallbackPath: string
+): Array<Record<string, unknown>> {
+  const preview = (v: unknown): string => {
+    if (typeof v !== 'string') return '';
+    return v.length <= 256 ? v : `${v.slice(0, 256)}…`;
+  };
+
+  const out: Array<Record<string, unknown>> = [];
+  const edits = toolInput.edits;
+  if (Array.isArray(edits)) {
+    for (const entry of edits) {
+      if (!entry || typeof entry !== 'object') continue;
+      const e = entry as Record<string, unknown>;
+      const editPath =
+        firstString(e.filepath, e.file_path, e.filePath, e.path) || fallbackPath;
+      const oldStr = typeof e.old_string === 'string' ? e.old_string : '';
+      const newStr = typeof e.new_string === 'string' ? e.new_string : '';
+      out.push({
+        path: editPath,
+        kind: 'edit',
+        old_preview: preview(oldStr),
+        new_preview: preview(newStr),
+        is_delete: oldStr.length > 0 && newStr.length === 0,
+      });
+    }
+  }
+
+  // single_find_and_replace exposes one op as flat fields on toolInput.
+  if (
+    out.length === 0 &&
+    (typeof toolInput.old_string === 'string' || typeof toolInput.new_string === 'string')
+  ) {
+    const oldStr = typeof toolInput.old_string === 'string' ? toolInput.old_string : '';
+    const newStr = typeof toolInput.new_string === 'string' ? toolInput.new_string : '';
+    out.push({
+      path: fallbackPath,
+      kind: 'edit',
+      old_preview: preview(oldStr),
+      new_preview: preview(newStr),
+      is_delete: oldStr.length > 0 && newStr.length === 0,
+    });
+  }
+
+  // create_new_file exposes the new content as `contents` or `content`.
+  const newContent = firstString(toolInput.contents, toolInput.content);
+  if (out.length === 0 && newContent) {
+    out.push({
+      path: fallbackPath,
+      kind: 'create',
+      new_preview: preview(newContent),
+    });
+  }
+
+  return out;
 }
 
 function collectWritePaths(toolInput: Record<string, unknown>): string[] {

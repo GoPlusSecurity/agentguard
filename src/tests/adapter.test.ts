@@ -640,6 +640,66 @@ describe('ContinueAdapter', () => {
       ]);
     });
 
+    it('should surface multi_edit operations (path/kind/previews/is_delete) for policy', () => {
+      // Locks in the medium-severity review fix: the envelope must include
+      // the actual edits so policy can distinguish a benign path list from
+      // a destructive batch (e.g. empty new_string deletes).
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'multi_edit',
+        tool_input: {
+          edits: [
+            { filepath: '/repo/src/foo.ts', old_string: 'a', new_string: 'b' },
+            { filepath: '/repo/src/secret.ts', old_string: 'EVERYTHING', new_string: '' },
+          ],
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      const ops = data.operations as Array<Record<string, unknown>>;
+      assert.equal(ops.length, 2);
+      assert.equal(ops[0].path, '/repo/src/foo.ts');
+      assert.equal(ops[0].kind, 'edit');
+      assert.equal(ops[0].is_delete, false);
+      assert.equal(ops[1].path, '/repo/src/secret.ts');
+      assert.equal(ops[1].is_delete, true, 'old_string non-empty + new_string empty == delete');
+    });
+
+    it('should preview large multi_edit strings without ballooning the envelope', () => {
+      const huge = 'X'.repeat(10_000);
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'multi_edit',
+        tool_input: {
+          edits: [{ filepath: '/repo/a.txt', old_string: huge, new_string: huge }],
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const ops = (envelope!.action.data as unknown as Record<string, unknown>).operations as Array<
+        Record<string, unknown>
+      >;
+      const old = ops[0].old_preview as string;
+      assert.ok(old.length <= 257, `preview must be ≤256 chars + ellipsis, got ${old.length}`);
+      assert.ok(old.endsWith('…'));
+    });
+
+    it('should surface create_new_file content as a create operation', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'create_new_file',
+        tool_input: { filepath: '/repo/.env', contents: 'SECRET=1' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const ops = (envelope!.action.data as unknown as Record<string, unknown>).operations as Array<
+        Record<string, unknown>
+      >;
+      assert.equal(ops[0].kind, 'create');
+      assert.equal(ops[0].new_preview, 'SECRET=1');
+    });
+
     it('should build read_file envelope', () => {
       const input = adapter.parseInput({
         hook_event_name: 'PreToolUse',

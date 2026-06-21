@@ -287,7 +287,7 @@ function mergeContinueSettings(
     ? (existing.hooks as Record<string, unknown>)
     : {});
 
-  const command = `node ${JSON.stringify(hookScriptPath)}`;
+  const command = continueHookCommand(hookScriptPath);
   const pre = ensureContinueHookEvent(hooks.PreToolUse, command, force);
   const post = ensureContinueHookEvent(hooks.PostToolUse, command, force);
 
@@ -304,9 +304,53 @@ function mergeContinueSettings(
   writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', { mode: 0o600 });
 }
 
+/**
+ * Build a Continue hook command string that survives shell parsing of paths
+ * with spaces, single quotes, or backslashes.
+ *
+ * Continue's hook runner (`extensions/cli/src/hooks/hookRunner.ts`) executes
+ * `command` as a shell command, so JSON-quoting is wrong — JSON escapes are
+ * not shell escapes. POSIX-style single-quoting works on macOS/Linux; for
+ * Windows we wrap in `"..."` because cmd.exe does not honor single quotes.
+ *
+ * Embedded single quotes are handled by the POSIX trick `'\''` (close the
+ * single-quoted string, emit an escaped quote, re-open). Embedded double
+ * quotes on Windows are not allowed in paths by NTFS so we don't escape
+ * them — but we do guard with a clear error.
+ */
+function continueHookCommand(hookScriptPath: string): string {
+  if (process.platform === 'win32') {
+    if (hookScriptPath.includes('"')) {
+      throw new Error(
+        `Continue hook script path may not contain a double quote on Windows: ${hookScriptPath}`
+      );
+    }
+    return `node "${hookScriptPath}"`;
+  }
+  // POSIX-safe single-quote escaping: any ' in the path becomes '\''
+  const escaped = hookScriptPath.replace(/'/g, "'\\''");
+  return `node '${escaped}'`;
+}
+
 function ensureContinueHookEvent(existing: unknown, command: string, force: boolean): unknown[] {
   const list = Array.isArray(existing) ? [...existing] : [];
-  const alreadyPresent = list.some((entry) => {
+
+  // Dedup by substring ("continue-hook.js"), not exact equality, so a prior
+  // entry written by an older AgentGuard version (e.g. with JSON quoting
+  // instead of shell quoting) is recognized as ours and replaced, not
+  // appended-alongside.
+  const isAgentGuardEntry = (entry: unknown): boolean => {
+    if (!entry || typeof entry !== 'object') return false;
+    const hooks = (entry as Record<string, unknown>).hooks;
+    if (!Array.isArray(hooks)) return false;
+    return hooks.some((h) => {
+      if (!h || typeof h !== 'object') return false;
+      const cmd = (h as Record<string, unknown>).command;
+      return typeof cmd === 'string' && cmd.includes('continue-hook.js');
+    });
+  };
+
+  const hasExactMatch = list.some((entry) => {
     if (!entry || typeof entry !== 'object') return false;
     const hooks = (entry as Record<string, unknown>).hooks;
     if (!Array.isArray(hooks)) return false;
@@ -315,18 +359,14 @@ function ensureContinueHookEvent(existing: unknown, command: string, force: bool
       return (h as Record<string, unknown>).command === command;
     });
   });
-  if (alreadyPresent && !force) return list;
-  // Remove any prior AgentGuard entries before re-adding (force case).
-  const filtered = list.filter((entry) => {
-    if (!entry || typeof entry !== 'object') return true;
-    const hooks = (entry as Record<string, unknown>).hooks;
-    if (!Array.isArray(hooks)) return true;
-    return !hooks.some((h) => {
-      if (!h || typeof h !== 'object') return false;
-      const cmd = (h as Record<string, unknown>).command;
-      return typeof cmd === 'string' && cmd.includes('continue-hook.js');
-    });
-  });
+
+  // Idempotent fast path: exact-match entry already present and we're not
+  // being asked to rewrite — leave the list untouched.
+  if (hasExactMatch && !force) return list;
+
+  // Otherwise (forced, or stale-format AgentGuard entry present, or no entry
+  // at all): strip any prior AgentGuard entries and re-add canonically.
+  const filtered = list.filter((entry) => !isAgentGuardEntry(entry));
   filtered.push({
     matcher: '.*',
     hooks: [{ type: 'command', command }],

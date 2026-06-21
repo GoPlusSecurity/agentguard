@@ -126,40 +126,72 @@ function validatePreToolPayload(input) {
   const toolInput = toolInputFrom(input);
 
   switch (toolName) {
-    case 'run_terminal_command':
-      if (!firstString(toolInput.command, toolInput.cmd)) {
-        return `Continue ${toolName} hook payload is missing command`;
-      }
+    case 'run_terminal_command': {
+      const command = firstString(toolInput.command, toolInput.cmd);
+      if (!command) return `Continue ${toolName} hook payload is missing command`;
+      if (command.length > 1024 * 64) return `Continue ${toolName} command exceeds 64 KiB`;
       return null;
+    }
     case 'create_new_file':
     case 'edit_existing_file':
     case 'single_find_and_replace':
     case 'read_file':
     case 'read_file_range':
-    case 'read_currently_open_file':
-      if (!firstString(toolInput.filepath, toolInput.file_path, toolInput.filePath, toolInput.path, toolInput.target)) {
-        return `Continue ${toolName} hook payload is missing filepath`;
-      }
+    case 'read_currently_open_file': {
+      const path = firstString(
+        toolInput.filepath,
+        toolInput.file_path,
+        toolInput.filePath,
+        toolInput.path,
+        toolInput.target
+      );
+      if (!path) return `Continue ${toolName} hook payload is missing filepath`;
+      if (path.includes('\0')) return `Continue ${toolName} filepath contains NUL byte`;
       return null;
-    case 'multi_edit':
-      // Accept either a single filepath or an edits[] list with paths.
-      if (
-        !firstString(toolInput.filepath, toolInput.file_path, toolInput.filePath, toolInput.path) &&
-        !(Array.isArray(toolInput.edits) && toolInput.edits.length > 0)
-      ) {
+    }
+    case 'multi_edit': {
+      const topPath = firstString(toolInput.filepath, toolInput.file_path, toolInput.filePath, toolInput.path);
+      const edits = Array.isArray(toolInput.edits) ? toolInput.edits : null;
+      if (!topPath && (!edits || edits.length === 0)) {
         return `Continue multi_edit hook payload is missing edits / filepath`;
       }
-      return null;
-    case 'fetch_url_content':
-      if (!firstString(toolInput.url, toolInput.uri, toolInput.href)) {
-        return `Continue fetch_url_content hook payload is missing URL`;
+      // Validate every edit entry — each must be an object with a non-empty
+      // filepath/path or contribute at least an old_string/new_string when
+      // a top-level filepath is provided.
+      if (edits) {
+        for (let i = 0; i < edits.length; i++) {
+          const entry = edits[i];
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return `Continue multi_edit edits[${i}] is not an object`;
+          }
+          const editPath = firstString(entry.filepath, entry.file_path, entry.filePath, entry.path);
+          if (!editPath && !topPath) {
+            return `Continue multi_edit edits[${i}] is missing filepath and no top-level filepath was provided`;
+          }
+          if (editPath && editPath.includes('\0')) {
+            return `Continue multi_edit edits[${i}].filepath contains NUL byte`;
+          }
+        }
       }
       return null;
-    case 'search_web':
-      if (!firstString(toolInput.query, toolInput.q, toolInput.search)) {
-        return `Continue search_web hook payload is missing query`;
+    }
+    case 'fetch_url_content': {
+      const url = firstString(toolInput.url, toolInput.uri, toolInput.href);
+      if (!url) return `Continue fetch_url_content hook payload is missing URL`;
+      // Cheap shape check — full URL validation lives in the engine.
+      try {
+        // eslint-disable-next-line no-new
+        new URL(url);
+      } catch {
+        return `Continue fetch_url_content URL is not parseable`;
       }
       return null;
+    }
+    case 'search_web': {
+      const query = firstString(toolInput.query, toolInput.q, toolInput.search);
+      if (!query) return `Continue search_web hook payload is missing query`;
+      return null;
+    }
     default:
       // Out-of-scope tools pass through without engine evaluation.
       return null;
@@ -299,7 +331,10 @@ function normalizeForRuntime(input) {
 async function main() {
   const input = await readStdin();
   if (!input) {
-    if (FAIL_OPEN) outputAllow();
+    // Unparseable stdin — we have no way to know if it's an in-scope tool, so
+    // this is always fail-closed regardless of AGENTGUARD_CONTINUE_FAIL_OPEN.
+    // The override exists for engine-load failures, not for "we have no idea
+    // what we're being asked to allow".
     outputBlock('GoPlus AgentGuard: invalid or missing Continue hook payload');
   }
 
@@ -313,7 +348,10 @@ async function main() {
 
   const validationError = isPreHook(input) ? validatePreToolPayload(input) : null;
   if (validationError) {
-    if (FAIL_OPEN) outputAllow();
+    // Malformed payload for an in-scope (security-sensitive) tool. Block
+    // regardless of fail-open — the override is for cases where AgentGuard
+    // itself is unavailable, not for "we got a half-formed shell command
+    // and aren't sure what it is."
     outputBlock(`GoPlus AgentGuard: ${validationError}`);
   }
 

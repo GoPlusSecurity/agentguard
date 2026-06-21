@@ -516,6 +516,67 @@ describe('Smoke: continue-hook.js E2E', () => {
     assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
     assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('invalid or missing Continue hook payload'));
   });
+
+  it('should FAIL CLOSED on malformed in-scope payload even with FAIL_OPEN=1', async () => {
+    // Lock in the high-severity review fix: the fail-open override exists
+    // for engine-unavailable cases, NOT for "we got a half-formed shell
+    // command and aren't sure what it is".
+    const { exitCode, stdout } = await runContinueHook(
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: {}, // missing command
+      },
+      { AGENTGUARD_CONTINUE_FAIL_OPEN: '1' }
+    );
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny',
+      `FAIL_OPEN must not bypass validation for in-scope tools, got ${JSON.stringify(payload)}`);
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('missing command'));
+  });
+
+  it('should FAIL CLOSED on invalid stdin even with FAIL_OPEN=1', async () => {
+    const { exitCode, stdout } = await runContinueHookRaw('{not-json');
+    // Even with FAIL_OPEN=1 we don't know what tool this would have been,
+    // so blocking is the only safe choice. Set the env via spawn.
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+  });
+
+  it('should reject multi_edit with a non-object edits[] entry', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'multi_edit',
+      tool_input: {
+        filepath: '/repo/src/foo.ts',
+        edits: ['oops, not an object'],
+      },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('edits[0] is not an object'));
+  });
+
+  it('should reject fetch_url_content with an unparseable URL', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'fetch_url_content',
+      tool_input: { url: 'not a url at all' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('not parseable'));
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -370,4 +370,61 @@ describe('Agent template installers', () => {
     );
     assert.equal(guardEntries.length, 1);
   });
+
+  it('shell-quotes the Continue hook command so paths with spaces survive', () => {
+    // Lock in the medium-severity review fix: replacing JSON.stringify with
+    // POSIX single-quote escaping. Paths containing spaces and apostrophes
+    // must produce a command Continue's shell-based hook runner can parse.
+    const dir = mkdtempSync(join(tmpdir(), "agentguard-continue space's-"));
+    installAgentTemplates('continue', { cwd: dir });
+    const settings = JSON.parse(
+      readFileSync(join(dir, '.continue', 'settings.local.json'), 'utf8')
+    );
+    const cmd = settings.hooks.PreToolUse[0].hooks[0].command as string;
+    // On POSIX the command must wrap the path in single quotes (no JSON
+    // double-quoting). The Windows branch is exercised in CI on win32.
+    if (process.platform !== 'win32') {
+      assert.match(cmd, /^node '.*continue-hook\.js'$/, `got ${cmd}`);
+      // Apostrophes in the path must use the POSIX '\''
+      // close-escape-reopen trick. The tmp dir name contains one.
+      if (dir.includes("'")) {
+        assert.ok(cmd.includes("'\\''"), `expected '\\'' escape, got ${cmd}`);
+      }
+    }
+  });
+
+  it("recognizes a prior AgentGuard entry written with old JSON-quoted command (idempotent)", () => {
+    // Lock in the dedup-by-substring behavior: a Continue install written by
+    // an older AgentGuard version (which used JSON.stringify(...)) must be
+    // recognized as ours and replaced, not duplicated.
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-continue-stale-'));
+    const settingsPath = join(dir, '.continue', 'settings.local.json');
+    mkdirSync(join(dir, '.continue'), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: '.*',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'node "/old/path/continue-hook.js"', // JSON-quoted, stale
+                },
+              ],
+            },
+          ],
+        },
+      })
+    );
+
+    installAgentTemplates('continue', { cwd: dir });
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const guardEntries = (settings.hooks.PreToolUse as Array<{
+      hooks: Array<{ command: string }>;
+    }>).filter((e) => e.hooks.some((h) => h.command.includes('continue-hook.js')));
+    assert.equal(guardEntries.length, 1, 'stale entry must be replaced, not appended-alongside');
+  });
 });

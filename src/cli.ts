@@ -204,10 +204,11 @@ async function main() {
     .description('Disconnect local AgentGuard from AgentGuard Cloud')
     .action(async () => {
       const currentConfig = ensureConfig();
+      noteCronBackendFallbackIfNeeded(currentConfig);
       const cronRemoval = await removeThreatFeedCron({
         name: currentConfig.threatFeedCronName || 'agentguard-threat-feed',
         backend: 'auto',
-        agentHost: resolveCronAgentHost(currentConfig),
+        agentHost: resolveCronBackendHost(currentConfig),
         agentGuardHome: getAgentGuardPaths().home,
       });
       const config = disconnectCloud();
@@ -705,13 +706,14 @@ async function main() {
       if (options.cron && !options.cronRun) {
         summary.cron.requested = true;
         try {
+          noteCronBackendFallbackIfNeeded(config);
           summary.cron.result = await installThreatFeedCron({
             name: options.cronName as string,
             cronExpression: cronExpression!,
             quiet,
             force: Boolean(options.force),
             backend: cronTarget,
-            agentHost: resolveCronAgentHost(config),
+            agentHost: resolveCronBackendHost(config),
             agentGuardHome: getAgentGuardPaths().home,
           }, {
             gateway: resolveOpenClawGatewayOptionsFromEnv(),
@@ -1064,12 +1066,60 @@ function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
   console.log('No AgentGuard subscribe cron job was found.');
 }
 
+/**
+ * Hosts that have a cron-targeted backend (OpenClaw / Hermes use agent-managed
+ * cron; the rest fall through to system cron). Hosts not in this set still
+ * accept cron commands — they just default to the system backend.
+ */
+const CRON_CAPABLE_HOSTS = new Set<AgentGuardAgentHost>([
+  'claude-code',
+  'codex',
+  'openclaw',
+  'hermes',
+  'qclaw',
+]);
+
+/**
+ * Return the host configured for this AgentGuard install. Always returns the
+ * raw host (never silently strips) so messaging code can name it correctly.
+ */
+function resolveConfiguredAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
+  return config.agentHost ?? config.agentHosts?.[0];
+}
+
+/**
+ * Narrow the configured host to one of the cron-capable backends used by
+ * `installThreatFeedCron` / `removeThreatFeedCron`. Returns undefined when
+ * the host has no specific cron backend — callers should treat that as
+ * "fall back to system cron" rather than as "no host configured".
+ */
+function resolveCronBackendHost(config: AgentGuardConfig): CronAgentHost | undefined {
+  const host = resolveConfiguredAgentHost(config);
+  return host && CRON_CAPABLE_HOSTS.has(host) ? (host as CronAgentHost) : undefined;
+}
+
+/**
+ * If the user has a host configured that has no agent-specific cron backend
+ * (e.g. `continue`, `goose`), print a one-line stderr note so they know cron
+ * is falling back to the system scheduler rather than silently doing nothing
+ * surprising. Idempotent per-process — fires once.
+ */
+let cronFallbackNoteShown = false;
+function noteCronBackendFallbackIfNeeded(config: AgentGuardConfig): void {
+  if (cronFallbackNoteShown) return;
+  const host = resolveConfiguredAgentHost(config);
+  if (!host || CRON_CAPABLE_HOSTS.has(host)) return;
+  cronFallbackNoteShown = true;
+  console.error(
+    `Note: agent host "${host}" has no agent-managed cron backend. Cron commands will use the system scheduler. ` +
+      `Run \`agentguard init --agent openclaw\` or \`agentguard init --agent hermes\` if you'd like an agent-managed schedule instead.`
+  );
+}
+
+// Back-compat name retained so existing call sites compile without churn.
+// New code should use `resolveCronBackendHost` for clarity.
 function resolveCronAgentHost(config: AgentGuardConfig): CronAgentHost | undefined {
-  const host = config.agentHost ?? config.agentHosts?.[0];
-  if (host === 'claude-code' || host === 'codex' || host === 'openclaw' || host === 'hermes' || host === 'qclaw') {
-    return host;
-  }
-  return undefined;
+  return resolveCronBackendHost(config);
 }
 
 function readStdinIfAvailable(): string {
