@@ -1,3 +1,5 @@
+import type { CapabilityModel } from '../types/skill.js';
+
 export type CloudPolicyDecision = 'allow' | 'warn' | 'require_approval' | 'block';
 export type RuntimeRiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
 export type RuntimeSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
@@ -49,6 +51,13 @@ export interface EffectiveRuntimePolicy {
   blockedCommandPatterns: string[];
   allowedCommandPatterns: string[];
   approvalActionTypes: RuntimeActionType[];
+  /**
+   * Per-skill capability scopes keyed by initiating skill id. When an entry
+   * exists for an action's sourceSkill, the skill is "declared" and confined
+   * to the listed capabilities (least privilege; omitted fields fall back to
+   * DEFAULT_CAPABILITY). Skills with no entry keep the permissive default.
+   */
+  skillCapabilities?: Record<string, Partial<CapabilityModel>>;
   network: {
     defaultOutbound: CloudPolicyDecision;
     blockedDomains: string[];
