@@ -40,5 +40,5 @@ jobs:
       - name: Attach .mcpb to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist-mcpb/*.mcpb
+          files: dist-mcpb/agentguard.mcpb
           fail_on_unmatched_files: true

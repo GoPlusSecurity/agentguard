@@ -2,7 +2,7 @@
 #
 # build-mcpb.sh — reproducibly build the AgentGuard .mcpb (MCP Bundle / Desktop Extension).
 #
-# Output: dist-mcpb/agentguard-<version>.mcpb
+# Output: dist-mcpb/agentguard.mcpb
 #
 # Bundle layout produced (matches what the MCP Directory expects):
 #   manifest.json          <- from mcpb/manifest.json, version stamped from package.json
@@ -29,7 +29,7 @@ VERSION="$(node -p "require('./package.json').version")"
 MANIFEST_VERSION="$(jq -r '.version' mcpb/manifest.json)"
 STAGE="$ROOT/build/mcpb"
 OUT_DIR="$ROOT/dist-mcpb"
-OUT="$OUT_DIR/agentguard-$VERSION.mcpb"
+OUT="$OUT_DIR/agentguard.mcpb"
 MCPB="$ROOT/node_modules/.bin/mcpb"
 
 echo "==> Building AgentGuard .mcpb v$VERSION"
