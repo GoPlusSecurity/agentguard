@@ -146,4 +146,54 @@ describe('MCP broker — stdio proxy', () => {
     assert.ok(blockedLine, 'a JSON-RPC veto should be returned to the client');
     assert.match(blockedLine as string, /"id":2/);
   });
+
+  it('propagates the downstream non-zero exit code to the caller', async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+
+    const code = await runMcpBrokerStdio({
+      command: process.execPath,
+      args: ['-e', 'process.exit(3)'],
+      evaluate: async () => null,
+      stdin,
+      stdout,
+      stderr,
+    });
+
+    assert.equal(code, 3, 'the child exit code must surface unchanged');
+  });
+
+  it('flushes a synthesized block response before resolving even when the child exits at once', async () => {
+    // Child exits immediately on its first line; the broker must still emit the
+    // veto for a blocked call rather than dropping it on early child exit.
+    const childScript =
+      "const rl=require('readline').createInterface({input:process.stdin});" +
+      "rl.on('line',()=>process.exit(0));";
+
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let out = '';
+    stdout.on('data', (chunk: Buffer) => {
+      out += chunk.toString('utf8');
+    });
+
+    const done = runMcpBrokerStdio({
+      command: process.execPath,
+      args: ['-e', childScript],
+      evaluate: async () => protectResult('block'),
+      stdin,
+      stdout,
+      stderr,
+    });
+
+    stdin.write(`${toolCall(9, 'run_shell', { command: 'rm -rf /' })}\n`);
+    stdin.end();
+
+    await done;
+
+    assert.match(out, /"code":-32001/, 'the veto must reach the client despite quick child exit');
+    assert.match(out, /"id":9/);
+  });
 });

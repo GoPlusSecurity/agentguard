@@ -183,6 +183,29 @@ describe('Capability manifest loading', () => {
     assert.deepEqual(loadSkillCapabilityManifest(join(tmpdir(), 'does-not-exist-caps.json')), {});
   });
 
+  it('surfaces a stderr warning for a present-but-malformed manifest instead of swallowing it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-caps-bad-'));
+    const path = join(dir, 'capabilities.json');
+    writeFileSync(path, '{ this is not valid json ');
+
+    const original = process.stderr.write.bind(process.stderr);
+    let captured = '';
+    (process.stderr as { write: unknown }).write = (chunk: string | Uint8Array): boolean => {
+      captured += chunk.toString();
+      return true;
+    };
+    try {
+      const manifest = loadSkillCapabilityManifest(path);
+      assert.deepEqual(manifest, {}, 'falls back to the unconfined baseline');
+    } finally {
+      (process.stderr as { write: unknown }).write = original;
+    }
+
+    assert.match(captured, /AgentGuard.*WARNING/);
+    assert.match(captured, /malformed/);
+    assert.ok(captured.includes(path), 'warning names the offending file');
+  });
+
   it('overlays the local manifest onto the resolved policy with local precedence', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-caps-resolve-'));
     const manifestPath = join(dir, 'capabilities.json');

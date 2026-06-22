@@ -178,7 +178,23 @@ export function runMcpBrokerStdio(options: RunMcpBrokerStdioOptions): Promise<nu
   const clientErr = options.stderr ?? process.stderr;
   const clientIn = options.stdin ?? process.stdin;
 
-  child.stdout.on('data', (chunk: Buffer) => clientOut.write(chunk));
+  // Single writer for the client stream. Downstream stdout chunks and the
+  // broker's own synthesized JSON-RPC errors share `clientOut`; funnelling both
+  // through one serialized queue keeps each message atomic so an injected error
+  // can never be spliced into the middle of a downstream response. The queue
+  // also honors backpressure (waits for `drain`) instead of unbounded buffering.
+  let writeChain: Promise<void> = Promise.resolve();
+  const writeClient = (data: string | Buffer): void => {
+    writeChain = writeChain.then(
+      () =>
+        new Promise<void>((res) => {
+          if (clientOut.write(data)) res();
+          else clientOut.once('drain', () => res());
+        })
+    );
+  };
+
+  child.stdout.on('data', (chunk: Buffer) => writeClient(chunk));
   child.stderr.on('data', (chunk: Buffer) => clientErr.write(chunk));
 
   // Serialize per-line handling so forwarding order is preserved across async
@@ -194,7 +210,7 @@ export function runMcpBrokerStdio(options: RunMcpBrokerStdioOptions): Promise<nu
       if (outcome.forward) {
         child.stdin.write(`${line}\n`);
       } else if (outcome.injectToClient) {
-        clientOut.write(`${outcome.injectToClient}\n`);
+        writeClient(`${outcome.injectToClient}\n`);
         if (outcome.blocked) options.onBlocked?.(outcome.blocked);
       }
     });
@@ -206,8 +222,18 @@ export function runMcpBrokerStdio(options: RunMcpBrokerStdioOptions): Promise<nu
     chain.then(() => child.stdin.end()).catch(() => child.stdin.end());
   });
 
+  // Resolve only after the child has exited AND every buffered evaluation plus
+  // its client write has drained. Resolving on `exit` alone could drop a
+  // synthesized block response that was still in flight when the child died.
+  // The child's own exit code is propagated unchanged.
   return new Promise((resolve) => {
-    child.on('exit', (code) => resolve(code ?? 0));
-    child.on('error', () => resolve(1));
+    const settle = (code: number) => {
+      chain
+        .then(() => writeChain)
+        .then(() => resolve(code))
+        .catch(() => resolve(code));
+    };
+    child.on('exit', (code) => settle(code ?? 0));
+    child.on('error', () => settle(1));
   });
 }

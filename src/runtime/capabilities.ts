@@ -52,6 +52,10 @@ export function resolveSkillScope(
   const manifest = policy.skillCapabilities;
   if (!manifest) return { capabilities: mergeCapabilities({}), scoped: false };
 
+  // Precedence: a skill's own entry always wins. The wildcard ("*") is only
+  // consulted as a fallback for skills WITHOUT an explicit entry. Adding "*" to
+  // the manifest is itself the operator's explicit opt-in to confine every
+  // otherwise-undeclared skill; it never overrides a skill-specific scope.
   const skillId = action.sourceSkill;
   const entry =
     (skillId && manifest[skillId]) ||
@@ -120,16 +124,30 @@ export function capabilityScopeReasons(
 
 /**
  * Load a local capability manifest (JSON map of skillId -> partial capability).
- * Best-effort: a missing or malformed file yields an empty manifest.
+ *
+ * A *missing* file is the normal unconfigured case and yields an empty manifest
+ * silently. A *present but malformed* file is different: silently swallowing it
+ * would drop every per-skill restriction without the operator noticing. We
+ * therefore surface a loud warning to stderr in that case so the failure is
+ * observable, then fall back to the unconfined baseline (the OSS threat scanner
+ * still runs, so this is a return to default behavior, not a new privilege
+ * grant). We deliberately do not hard-fail the whole runtime here: confinement
+ * is an opt-in additive layer, and crashing policy resolution over an optional
+ * file would trade a narrow confinement gap for a total availability outage.
  */
 export function loadSkillCapabilityManifest(
   manifestPath: string = capabilityManifestPath()
 ): Record<string, Partial<CapabilityModel>> {
+  if (!existsSync(manifestPath)) return {};
   try {
-    if (!existsSync(manifestPath)) return {};
     const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
     return normalizeManifest(parsed);
-  } catch {
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[AgentGuard] WARNING: capability manifest at "${manifestPath}" is present but unreadable/malformed ` +
+        `(${detail}); per-skill confinement is NOT applied. Fix or remove the file.\n`
+    );
     return {};
   }
 }
