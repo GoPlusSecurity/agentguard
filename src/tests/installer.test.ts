@@ -297,4 +297,264 @@ describe('Agent template installers', () => {
     assert.deepEqual(config.plugins.allow, ['existing', 'agentguard']);
     assert.equal(config.plugins.entries.agentguard.enabled, true);
   });
+
+  it('installs AgentGuard as a Goose MCP extension when config.yaml does not exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-fresh-'));
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = join(dir, '.config', 'goose');
+    try {
+      const result = installAgentTemplates('goose');
+      const configPath = join(process.env.GOOSE_CONFIG_DIR, 'config.yaml');
+
+      assert.equal(result.agent, 'goose');
+      assert.deepEqual(result.files, [configPath]);
+      const yaml = readFileSync(configPath, 'utf8');
+      assert.ok(yaml.includes('extensions:'));
+      assert.ok(yaml.includes('  agentguard:'));
+      assert.ok(yaml.includes('command: agentguard-mcp'));
+      assert.ok(yaml.includes('type: stdio'));
+      assert.ok(yaml.includes('enabled: true'));
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it("merges AgentGuard into a Goose config that already declares other extensions", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-merge-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      [
+        'OPENAI_API_KEY: sk-redacted',
+        'GOOSE_MODE: auto',
+        'extensions:',
+        '  slack:',
+        '    type: stdio',
+        '    command: uvx',
+        '    args: [mcp_slack]',
+        '    enabled: true',
+        '',
+      ].join('\n')
+    );
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      installAgentTemplates('goose');
+      const yaml = readFileSync(configPath, 'utf8');
+      assert.ok(yaml.includes('OPENAI_API_KEY: sk-redacted'));
+      assert.ok(yaml.includes('  slack:'));
+      assert.ok(yaml.includes('command: uvx'));
+      assert.ok(yaml.includes('  agentguard:'));
+      assert.ok(yaml.includes('command: agentguard-mcp'));
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it('is idempotent: re-running goose install produces byte-identical config', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-idempotent-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      installAgentTemplates('goose');
+      const first = readFileSync(configPath, 'utf8');
+      installAgentTemplates('goose');
+      const second = readFileSync(configPath, 'utf8');
+      assert.equal(first, second);
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it('Goose plugin docs ship in the published package', () => {
+    // The README and UPSTREAM_PROPOSAL are the deliverable. Lock them in.
+    const pluginDir = join(__dirname, '..', '..', 'plugins', 'goose');
+    assert.ok(existsSync(join(pluginDir, 'README.md')));
+    assert.ok(existsSync(join(pluginDir, 'UPSTREAM_PROPOSAL.md')));
+    const readme = readFileSync(join(pluginDir, 'README.md'), 'utf8');
+    // The README must be honest about the limitation.
+    assert.ok(/advisory/i.test(readme));
+    assert.ok(/not a (?:hard )?(?:gate|security boundary)/i.test(readme));
+  });
+
+  it('preserves comments, inline comments, and trailing top-level keys around Goose extensions', () => {
+    // Lock in the HIGH-severity review fix: a real YAML parser must round-trip
+    // comments and unrelated top-level keys instead of clobbering them.
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-comments-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      [
+        '# Goose user config — handle with care.',
+        'OPENAI_API_KEY: sk-redacted',
+        'GOOSE_MODE: auto  # auto-confirm tool calls',
+        '',
+        '# Existing MCP servers configured by user',
+        'extensions:',
+        '  slack:',
+        '    type: stdio',
+        '    command: uvx',
+        '    args: [mcp_slack]',
+        '    enabled: true',
+        '  github:',
+        '    type: sse',
+        '    serverUrl: https://mcp.example.com/github',
+        '    enabled: false',
+        '',
+        '# Trailing keys after extensions: must survive too',
+        'GOOSE_PROVIDER: openai',
+        'SECURITY_PROMPT_ENABLED: true',
+        '',
+      ].join('\n')
+    );
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      installAgentTemplates('goose');
+      const merged = readFileSync(configPath, 'utf8');
+      // Comments
+      assert.ok(merged.includes('# Goose user config — handle with care.'));
+      assert.ok(merged.includes('# Existing MCP servers configured by user'));
+      assert.ok(merged.includes('# Trailing keys after extensions: must survive too'));
+      // Unrelated top-level keys before and after extensions:
+      assert.ok(merged.includes('OPENAI_API_KEY: sk-redacted'));
+      assert.ok(merged.includes('GOOSE_MODE: auto'));
+      assert.ok(merged.includes('GOOSE_PROVIDER: openai'));
+      assert.ok(merged.includes('SECURITY_PROMPT_ENABLED: true'));
+      // Sibling extensions kept and AgentGuard appended
+      assert.ok(merged.includes('slack:'));
+      assert.ok(merged.includes('github:'));
+      assert.ok(merged.includes('agentguard:'));
+      assert.ok(merged.includes('command: agentguard-mcp'));
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it('refuses to clobber an extensions: that is a sequence rather than a mapping', () => {
+    // Defensive: a malformed config where `extensions:` is a list should not
+    // be silently overwritten. The installer must error so the user fixes it.
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-malformed-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, 'extensions:\n  - slack\n  - github\n');
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      assert.throws(() => installAgentTemplates('goose'), /expected a mapping/i);
+      // File must be untouched.
+      assert.equal(readFileSync(configPath, 'utf8'), 'extensions:\n  - slack\n  - github\n');
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it('refuses to modify an unparseable Goose config file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-unparseable-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    // Tabs as indent inside a block scalar — unambiguously a YAML error.
+    writeFileSync(configPath, 'extensions:\n\t- bad\n  good: ok\n');
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    const originalSource = readFileSync(configPath, 'utf8');
+    try {
+      assert.throws(() => installAgentTemplates('goose'), /YAML|unparseable|parse/i);
+      assert.equal(readFileSync(configPath, 'utf8'), originalSource);
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it('handles quoted keys and 4-space-indented Goose extensions blocks', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-quoted-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      [
+        '"extensions":',
+        '    "my-extension":',
+        '        type: stdio',
+        '        command: my-mcp',
+        '        enabled: true',
+        '',
+      ].join('\n')
+    );
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      installAgentTemplates('goose');
+      const merged = readFileSync(configPath, 'utf8');
+      // The quoted-key + 4-space-indent variant is valid YAML; both
+      // existing and new entries must remain after the round-trip.
+      assert.ok(merged.includes('my-extension'));
+      assert.ok(merged.includes('agentguard'));
+      assert.ok(merged.includes('command: agentguard-mcp'));
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
+
+  it("forced install of Goose replaces only the agentguard entry, leaving siblings alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-goose-force-'));
+    const configDir = join(dir, '.config', 'goose');
+    const configPath = join(configDir, 'config.yaml');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      [
+        'extensions:',
+        '  slack:',
+        '    type: stdio',
+        '    command: uvx',
+        '    args: [mcp_slack]',
+        '    enabled: true',
+        '  agentguard:',
+        '    type: stdio',
+        '    command: /opt/old/agentguard-mcp-v0',
+        '    args: []',
+        '    enabled: false',
+        '',
+      ].join('\n')
+    );
+
+    const prev = process.env.GOOSE_CONFIG_DIR;
+    process.env.GOOSE_CONFIG_DIR = configDir;
+    try {
+      installAgentTemplates('goose', { force: true });
+      const merged = readFileSync(configPath, 'utf8');
+      // Sibling untouched
+      assert.ok(merged.includes('slack:'));
+      assert.ok(merged.includes('command: uvx'));
+      // AgentGuard replaced with canonical entry
+      assert.ok(merged.includes('command: agentguard-mcp'));
+      assert.ok(!merged.includes('/opt/old/agentguard-mcp-v0'));
+    } finally {
+      if (prev === undefined) delete process.env.GOOSE_CONFIG_DIR;
+      else process.env.GOOSE_CONFIG_DIR = prev;
+    }
+  });
 });

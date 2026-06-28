@@ -1,8 +1,9 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import * as YAML from 'yaml';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'goose';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,6 +22,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'goose') return installGoose(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -238,6 +240,123 @@ function installQClaw(root: string, force: boolean): InstallResult {
   const configPath = join(qclawRoot, 'qclaw.json');
   const pluginResult = installClawPlugin('qclaw', qclawRoot, configPath, force);
   return { agent: 'qclaw', files: pluginResult.files };
+}
+
+/**
+ * Install AgentGuard as an MCP extension in Goose.
+ *
+ * Goose has no out-of-process plugin API — the only in-process hard gate
+ * is the Rust `ToolInspector` trait, which is compile-time. The closest
+ * supported integration today is an MCP server entry in config.yaml. The
+ * model can choose not to call AgentGuard's MCP tools, so this is an
+ * **advisory** integration, not a hard security boundary. See
+ * plugins/goose/README.md for the honest framing and
+ * plugins/goose/UPSTREAM_PROPOSAL.md for the path to a real gate.
+ */
+function installGoose(cwd: string | undefined, force: boolean): InstallResult {
+  const configDir = cwd
+    ? join(cwd, '.config', 'goose')
+    : process.env.GOOSE_CONFIG_DIR?.trim() ||
+      (process.platform === 'win32'
+        ? join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Block', 'goose', 'config')
+        : join(homedir(), '.config', 'goose'));
+  const configPath = join(configDir, 'config.yaml');
+
+  mkdirSync(configDir, { recursive: true });
+  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  const next = mergeGooseAgentGuardExtension(existing, force);
+  if (next !== existing) {
+    writeFileSync(configPath, next);
+  }
+
+  return { agent: 'goose', files: [configPath] };
+}
+
+/**
+ * The canonical AgentGuard MCP extension entry. Kept as a plain object so
+ * the YAML library serializes it consistently regardless of input formatting.
+ */
+const GOOSE_AGENTGUARD_ENTRY = Object.freeze({
+  type: 'stdio',
+  command: 'agentguard-mcp',
+  args: [] as string[],
+  timeout: 300,
+  enabled: true,
+  description: 'GoPlus AgentGuard MCP — security scanner + action evaluator',
+});
+
+/**
+ * Merge AgentGuard into Goose's config.yaml using a real YAML parser
+ * (eemeli/yaml) so existing comments, custom indentation, quoted keys,
+ * tabs-as-indent, and unrelated top-level keys all survive the round-trip.
+ *
+ * Behavior:
+ *  - No file / empty file → emit a minimal document with the AgentGuard entry.
+ *  - `extensions:` exists as a mapping → set/replace `extensions.agentguard`.
+ *  - `extensions:` exists as a non-mapping (scalar, null, sequence) → fail
+ *    loudly rather than silently overwriting unrelated user data.
+ *  - `agentguard` already present and `!force` → no-op (return existing).
+ *  - `agentguard` already present and `force` → replace the entry only;
+ *    sibling extensions (slack, github, …) are left alone.
+ */
+function mergeGooseAgentGuardExtension(existing: string, force: boolean): string {
+  const text = existing.replace(/\r\n/g, '\n');
+
+  // Empty / whitespace-only → fresh document.
+  if (text.trim().length === 0) {
+    const doc = new YAML.Document({
+      extensions: { agentguard: { ...GOOSE_AGENTGUARD_ENTRY } },
+    });
+    return doc.toString();
+  }
+
+  let doc: YAML.Document.Parsed;
+  try {
+    doc = YAML.parseDocument(text, { keepSourceTokens: true });
+  } catch (err) {
+    throw new Error(
+      `Refusing to modify Goose config: existing YAML is unparseable (${err instanceof Error ? err.message : 'unknown error'}). Fix the file or move it aside, then re-run.`
+    );
+  }
+  if (doc.errors.length > 0) {
+    throw new Error(
+      `Refusing to modify Goose config: YAML parse errors present (${doc.errors[0].message}). Fix the file or move it aside, then re-run.`
+    );
+  }
+
+  const extensions = doc.get('extensions', true);
+  const hasExtensionsKey = doc.has('extensions');
+
+  if (!hasExtensionsKey || extensions === null || extensions === undefined) {
+    // Add a fresh extensions mapping with just AgentGuard. setIn handles the
+    // missing-path case by materializing intermediate maps.
+    doc.setIn(['extensions', 'agentguard'], { ...GOOSE_AGENTGUARD_ENTRY });
+    return doc.toString();
+  }
+
+  if (!YAML.isMap(extensions)) {
+    throw new Error(
+      `Refusing to modify Goose config: top-level "extensions" is ${describeYamlNode(extensions)}, expected a mapping. Convert it to a mapping (\`extensions:\\n  name: ...\`) or move the file aside.`
+    );
+  }
+
+  const existingAgentGuard = extensions.get('agentguard', true);
+  if (existingAgentGuard !== undefined && existingAgentGuard !== null && !force) {
+    // Already configured — leave the file (including any comments on the
+    // agentguard entry) byte-identical.
+    return existing;
+  }
+
+  // Set or replace just the agentguard entry, preserving siblings.
+  doc.setIn(['extensions', 'agentguard'], { ...GOOSE_AGENTGUARD_ENTRY });
+  return doc.toString();
+}
+
+function describeYamlNode(node: unknown): string {
+  if (YAML.isSeq(node)) return 'a sequence';
+  if (YAML.isScalar(node)) return `the scalar value ${JSON.stringify((node as YAML.Scalar).value)}`;
+  if (node === null) return 'null';
+  return typeof node;
 }
 
 function writeIfAllowed(path: string, content: string, force: boolean): void {
