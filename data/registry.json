@@ -1,5 +1,38 @@
 {
   "version": 1,
-  "updated_at": "2026-02-02T00:00:00.000Z",
-  "records": []
+  "updated_at": "2026-06-29T18:31:15.433Z",
+  "records": [
+    {
+      "record_key": "github.com/Xquik-dev/hermes-tweet@v0.1.6#sha256:2fc6ff9479226dfc3e8c2103c8b978c3e9f4a7b6cfdf6735d92eb7116ca209a3",
+      "skill": {
+        "id": "hermes-tweet",
+        "source": "github.com/Xquik-dev/hermes-tweet",
+        "version_ref": "v0.1.6",
+        "artifact_hash": "sha256:2fc6ff9479226dfc3e8c2103c8b978c3e9f4a7b6cfdf6735d92eb7116ca209a3"
+      },
+      "trust_level": "restricted",
+      "capabilities": {
+        "network_allowlist": [
+          "xquik.com"
+        ],
+        "filesystem_allowlist": [],
+        "exec": "deny",
+        "secrets_allowlist": []
+      },
+      "expires_at": "2026-09-27T18:31:15.433Z",
+      "review": {
+        "reviewed_by": "kriptoburak",
+        "reviewed_at": "2026-06-29T18:31:15.433Z",
+        "evidence_refs": [
+          "https://github.com/Xquik-dev/hermes-tweet/commit/b92e90e787c851dfb1820e065289130483117ffe",
+          "https://github.com/Xquik-dev/hermes-tweet/tree/b92e90e787c851dfb1820e065289130483117ffe/skills/hermes-tweet",
+          "https://github.com/Xquik-dev/hermes-tweet/blob/b92e90e787c851dfb1820e065289130483117ffe/skills/hermes-tweet/SKILL.md"
+        ],
+        "notes": "Hash recomputed from commit b92e90e787c851dfb1820e065289130483117ffe skills/hermes-tweet with AgentGuard calculateArtifactHash ordering. No secrets are granted by this registry record. Expires after 90 days for revalidation."
+      },
+      "status": "active",
+      "created_at": "2026-06-29T18:31:15.433Z",
+      "updated_at": "2026-06-29T18:31:15.433Z"
+    }
+  ]
 }
