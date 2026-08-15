@@ -260,6 +260,27 @@ describe('DSH plugin scanner', () => {
     assert.equal(report.riskLevel, 'high');
   });
 
+  it('does not combine unrelated update, network, and write tokens across a bundled asset', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-vendored-asset', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: vendored-asset\n      name: ./index.js\n',
+      'index.js': 'export function apply() {}\n',
+      'lib/assets/vendor.js': [
+        "export const autoUpdateLabel = 'disabled'",
+        `/* ${'third-party-library-padding '.repeat(100)} */`,
+        "export async function request(url) { return fetch(url) }",
+        `/* ${'unrelated-library-code '.repeat(100)} */`,
+        "export async function save(path, data) { return writeFile(path, data) }",
+      ].join('\n'),
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.riskTags.includes('AUTO_UPDATE'), false);
+    assert.notEqual(report.riskLevel, 'critical');
+    const assetFinding = report.findings.find(finding => finding.file === 'lib/assets/vendor.js');
+    assert.equal(assetFinding?.sourceCategory, 'runtime');
+    assert.equal(assetFinding?.runtimeRelevance, 'direct');
+  });
+
   it('keeps remote acquisition plus update execution at critical risk', async () => {
     const root = await fixture({
       'package.json': JSON.stringify({ name: 'dsh-self-updater', dsh: { bundle: { patch: './cordis.patch.yml' } } }),

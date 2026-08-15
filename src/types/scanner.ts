@@ -129,7 +129,12 @@ export interface ScanRule {
   /** Detection patterns (regex) */
   patterns: RegExp[];
   /** Optional validator function for complex rules */
-  validator?: (content: string, match: RegExpMatchArray, filePath?: string) => boolean;
+  validator?: (
+    content: string,
+    match: RegExpMatchArray,
+    filePath?: string,
+    matchOffset?: number,
+  ) => boolean;
 }
 
 /**

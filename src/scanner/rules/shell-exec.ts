@@ -50,11 +50,15 @@ export const SHELL_EXEC_RULES: ScanRule[] = [
       /fetch.*then.*eval/,
       /download.*execute/i,
     ],
-    validator: (content, match) => {
-      const remoteAcquisition = /\b(?:fetch|axios|requests\.get|urllib|curl|wget|download)\b/i.test(content);
+    validator: (content, match, _filePath, matchOffset = 0) => {
+      // Compound update evidence must be local to the matched update behavior. File-wide
+      // co-occurrence creates critical false positives in large bundled libraries.
+      const radius = 1_500;
+      const region = content.slice(Math.max(0, matchOffset - radius), matchOffset + match[0].length + radius);
+      const remoteAcquisition = /\b(?:fetch|axios|requests\.get|urllib|curl|wget|download)\b/i.test(region);
       if (/(?:cron|schedule|setInterval)/i.test(match[0])) return remoteAcquisition;
       if (!/auto.?update|self.?update/i.test(match[0])) return true;
-      const installOrExecute = /\b(?:eval|exec|spawn|execFile|writeFile|rename|chmod|import\s*\(|npm\s+install|pnpm\s+add|pip\s+install)\b/i.test(content);
+      const installOrExecute = /\b(?:eval|exec|spawn|execFile|writeFile|rename|chmod|import\s*\(|npm\s+install|pnpm\s+add|pip\s+install)\b/i.test(region);
       return remoteAcquisition && installOrExecute;
     },
   },

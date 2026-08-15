@@ -1,0 +1,9 @@
+{
+  "name": "dsh-vendored-static-library",
+  "version": "1.0.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

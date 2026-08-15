@@ -99,6 +99,15 @@
     "mustNotContainTags": ["PROMPT_INJECTION"]
   },
   {
+    "name": "vendored-static-library",
+    "expectedRisk": "high",
+    "expectedRecommendation": "avoid-on-primary-machine",
+    "expectedRuntimeRisk": "high",
+    "expectedReviewPriority": "elevated",
+    "mustContainTags": ["NETWORK_ACCESS", "FILE_WRITE_ACCESS"],
+    "mustNotContainTags": ["AUTO_UPDATE"]
+  },
+  {
     "name": "core-override",
     "expectedRisk": "high",
     "expectedRecommendation": "sandbox-only",

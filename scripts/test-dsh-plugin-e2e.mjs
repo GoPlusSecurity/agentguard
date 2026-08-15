@@ -12,8 +12,15 @@ const profileDir = join(dshHome, 'profiles/web');
 const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
 const safeFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/safe-theme');
 const localLoaderFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/data-local-loader');
+const vendoredLibraryFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/vendored-static-library');
 
-await Promise.all([access(dshBin), access(installedPlugin), access(safeFixture), access(localLoaderFixture)]);
+await Promise.all([
+  access(dshBin),
+  access(installedPlugin),
+  access(safeFixture),
+  access(localLoaderFixture),
+  access(vendoredLibraryFixture),
+]);
 
 const env = { ...process.env, DSH_HOME: dshHome, DSH_TELEMETRY_MODE: 'DISABLED' };
 const dumped = spawnSync(dshBin, ['web', '--dump-config'], {
@@ -43,6 +50,12 @@ assert.equal(localLoaderScan.riskLevel, 'high');
 assert.equal(localLoaderScan.runtimeSurfaceRiskLevel, 'high');
 assert.ok(localLoaderReport.runtimeSurfaceRiskTags.includes('DYNAMIC_MODULE_LOADING'));
 assert.ok(!localLoaderReport.runtimeSurfaceRiskTags.includes('REMOTE_LOADER'));
+
+const vendoredLibraryScan = await registered.execute({ target: vendoredLibraryFixture, format: 'json' });
+const vendoredLibraryReport = JSON.parse(vendoredLibraryScan.content);
+assert.equal(vendoredLibraryScan.riskLevel, 'high');
+assert.equal(vendoredLibraryScan.runtimeSurfaceRiskLevel, 'high');
+assert.ok(!vendoredLibraryReport.riskTags.includes('AUTO_UPDATE'));
 
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
@@ -90,6 +103,7 @@ try {
     scanRecommendation: scan.installRecommendation,
     reviewPriority: scan.reviewPriority,
     localDynamicLoadingRisk: localLoaderScan.runtimeSurfaceRiskLevel,
+    vendoredLibraryAutoUpdate: vendoredLibraryReport.riskTags.includes('AUTO_UPDATE'),
   }));
 } finally {
   child.kill('SIGTERM');

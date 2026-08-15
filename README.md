@@ -160,6 +160,8 @@ Phase 1.1 keeps the conservative full-repository risk while adding a separate ru
 
 Phase 1.2 treats active `SKILL.md` and agent-instruction files as runtime-relevant, keeps executable source runtime-relevant even under `data/` or `assets/`, distinguishes computed local module loading from remote code execution, and requires concrete credential APIs before reporting keychain access.
 
+Phase 1.3 localizes compound `AUTO_UPDATE` evidence around the matched update behavior. Large bundled or third-party JavaScript files no longer become critical merely because unrelated network and execution tokens appear elsewhere in the same file; executable files under `assets/` remain visible to prevent path-based evasion.
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
@@ -347,7 +349,7 @@ The report is a self-contained HTML file that opens automatically in your browse
 
 | Category | Rules | Severity |
 |----------|-------|----------|
-| **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
+| **Execution** | SHELL_EXEC, DYNAMIC_MODULE_LOADING, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
 | **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, MNEMONIC_PATTERN | MEDIUM-CRITICAL |
 | **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
 | **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |

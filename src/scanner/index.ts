@@ -245,14 +245,18 @@ export class SkillScanner {
     evidence: ScanEvidence[],
     context?: string,
   ): void {
+    let lineOffset = 0;
+    const lines = content.split('\n');
     for (const rule of rules) {
       for (const pattern of rule.patterns) {
-        const lines = content.split('\n');
+        lineOffset = 0;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           const match = line.match(pattern);
           if (match) {
-            if (rule.validator && !rule.validator(content, match, filePath)) {
+            const matchOffset = lineOffset + (match.index ?? 0);
+            if (rule.validator && !rule.validator(content, match, filePath, matchOffset)) {
+              lineOffset += line.length + 1;
               continue;
             }
             riskTags.add(rule.id);
@@ -267,6 +271,7 @@ export class SkillScanner {
             }
             evidence.push(ev);
           }
+          lineOffset += line.length + 1;
         }
       }
     }

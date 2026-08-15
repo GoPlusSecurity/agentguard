@@ -261,6 +261,8 @@ Phase 1.2 applies two precedence rules to avoid hiding executable behavior:
 
 Ordinary README discussion and inert management-CLI strings do not become prompt-injection findings unless the artifact is an active instruction file or the code also contains a recognized prompt-delivery surface. Computed local or package imports produce the high-risk `DYNAMIC_MODULE_LOADING` tag; only remote acquisition combined with execution produces the critical `REMOTE_LOADER` tag.
 
+Phase 1.3 requires the remote-acquisition and install/execute sides of `AUTO_UPDATE` to occur near the matched update behavior. This prevents file-wide keyword co-occurrence in large generated or vendored libraries from producing a critical update finding. An executable asset remains runtime-relevant, however: the scanner narrows the compound rule instead of trusting an `assets/` directory name as a security boundary.
+
 | Risk | Typical meaning | Default recommendation |
 |---|---|---|
 | Low | No security-relevant capability was detected. | `safe-to-try` |
@@ -351,7 +353,7 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Inclusion of dangerous behavior under test-like paths in install recommendations.
 - Markdown output and HTML escaping.
 
-`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, status polling, source-mapped generated runtime code, test-only shell execution, key-shaped data samples, active skill injection, executable code under `data/`, an inert keychain label, an inert CLI warning string, and a core Cordis override. The corpus verifies repository risk, runtime-surface risk, review priority, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
+`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, status polling, source-mapped generated runtime code, test-only shell execution, key-shaped data samples, active skill injection, executable code under `data/`, an inert keychain label, an inert CLI warning string, a vendored static-library co-occurrence case, and a core Cordis override. The corpus verifies repository risk, runtime-surface risk, review priority, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
 
 When a local DSH runtime and profile are installed, run the opt-in integration test:
 
@@ -382,7 +384,8 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
 - Runtime enforcement and source-plugin attribution are deferred to Phase 2.
-- Phase 1.1 path relevance is a heuristic. It does not resolve package-manager `files`, ignore rules, exports, lifecycle reachability, or every Cordis composition edge.
+- Runtime path relevance is a heuristic. It does not yet resolve package-manager `files`, ignore rules, exports, lifecycle reachability, third-party provenance, or every Cordis composition edge.
+- Phase 1.3 uses a bounded source region for compound auto-update evidence rather than a full language parser or data-flow graph. Unusually large updater functions can therefore still require manual review.
 - Prompt-delivery detection recognizes common DSH and model APIs but cannot prove that every string reaches a model, or that every active instruction artifact is enabled by the final profile.
 - npm tarball acquisition and source-to-published-artifact comparison remain future supply-chain work; a GitHub repository scan must not be presented as proof of what an npm package contains.
 

@@ -54,6 +54,12 @@ describe('DSH labeled evaluation corpus', () => {
             && finding.sourceCategory === 'runtime'
             && finding.runtimeRelevance === 'direct'));
       }
+      if (entry.name === 'vendored-static-library') {
+        assert.ok(report.findings.some(finding =>
+          finding.file === 'lib/assets/vendor.js'
+            && finding.sourceCategory === 'runtime'
+            && finding.runtimeRelevance === 'direct'));
+      }
     });
   }
 });
