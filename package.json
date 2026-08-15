@@ -12,6 +12,11 @@
       "./dist/openclaw.js"
     ]
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh.cordis.patch.yml"
+    }
+  },
   "bin": {
     "agentguard": "./dist/cli.js",
     "agentguard-mcp": "./dist/mcp-server.js"
@@ -22,6 +27,7 @@
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w",
     "test": "node --test dist/tests/*.test.js",
+    "test:dsh-e2e": "node scripts/test-dsh-plugin-e2e.mjs",
     "test:cloud-live": "node --test dist/tests/cloud-live.test.js",
     "postinstall": "node dist/postinstall.js || true",
     "prepublishOnly": "npm run build"
@@ -70,6 +76,7 @@
   "files": [
     "dist",
     "docs",
+    "dsh.cordis.patch.yml",
     "examples/openclaw-docker",
     "README.md",
     "LICENSE",

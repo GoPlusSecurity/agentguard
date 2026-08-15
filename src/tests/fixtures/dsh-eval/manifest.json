@@ -1,0 +1,33 @@
+[
+  {
+    "name": "safe-theme",
+    "expectedRisk": "low",
+    "expectedRecommendation": "safe-to-try",
+    "mustNotContainTags": ["DSH_THEME_ELEVATED_CAPABILITY"]
+  },
+  {
+    "name": "session-history",
+    "expectedRisk": "medium",
+    "expectedRecommendation": "test-in-isolated-profile",
+    "mustContainTags": ["DSH_SESSION_STORAGE_ACCESS"]
+  },
+  {
+    "name": "plugin-discovery",
+    "expectedRisk": "high",
+    "expectedRecommendation": "sandbox-only",
+    "mustContainTags": ["NETWORK_ACCESS", "DSH_TOOL_REGISTRY_MUTATION"],
+    "mustNotContainTags": ["DSH_THEME_ELEVATED_CAPABILITY"]
+  },
+  {
+    "name": "deceptive-theme",
+    "expectedRisk": "critical",
+    "expectedRecommendation": "expert-review-required",
+    "mustContainTags": ["INSTALL_SCRIPT", "SHELL_EXEC", "NETWORK_ACCESS", "DSH_THEME_ELEVATED_CAPABILITY"]
+  },
+  {
+    "name": "core-override",
+    "expectedRisk": "high",
+    "expectedRecommendation": "sandbox-only",
+    "mustContainTags": ["DSH_PATCH_OVERRIDE"]
+  }
+]

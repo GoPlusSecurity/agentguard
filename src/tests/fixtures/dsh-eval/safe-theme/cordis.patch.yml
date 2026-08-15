@@ -1,0 +1,3 @@
+- insert:
+    - id: eval-safe-theme
+      name: ./theme.js

@@ -4,6 +4,37 @@ AgentGuard for DeepSeek Harness (DSH) is an installation-time trust layer for th
 
 Phase 1 is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH.
 
+## Install in DSH
+
+AgentGuard can be loaded into a DSH profile as a native tool plugin. From an npm release:
+
+```bash
+dsh plugin --profile web add @goplus/agentguard
+```
+
+For local development, link the checkout instead:
+
+```bash
+dsh plugin --profile web add link:/absolute/path/to/agentguard
+```
+
+Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL and returns a Markdown or JSON report. For example, ask DSH: “Use AgentGuard to scan `/path/to/plugin` and report whether I should install it.”
+
+The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
+
+### Capability boundary
+
+| Capability | DSH Phase 1 | Notes |
+|---|---|---|
+| Detect DSH manifests and Cordis configuration | Yes | Parses supported metadata without evaluating `!!js`. |
+| Scan local directories and HTTPS GitHub repositories | Yes | GitHub scans pin the resolved default-branch commit. |
+| Explain capabilities, findings, and installation posture | Yes | Results remain advisory and require human review. |
+| Install or execute the scanned plugin | No | The scanner never invokes a package manager or target lifecycle script. |
+| Intercept commands executed by DSH | No | Runtime enforcement is a separate Phase 2 requirement. |
+| Apply allow, warn, approve, or block decisions inside DSH | No | Requires stable DSH execution hooks and source-plugin attribution. |
+
+AgentGuard's runtime protection for other supported hosts must not be interpreted as active DSH protection. Installing this bundle adds the scanner tool only.
+
 ## Why this exists
 
 DSH treats tools, providers, UI extensions, workflow components, and runtime behavior as plugins. That extensibility means a package presented as a theme can still read credentials, spawn a shell, replace a model provider, or intercept the tool pipeline. Generic JavaScript scanning catches some of those operations but cannot explain where they affect a composed DSH runtime.
@@ -299,6 +330,16 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Tool, file-write, provider, and credential classification.
 - Inclusion of dangerous behavior under test-like paths in install recommendations.
 - Markdown output and HTML escaping.
+
+`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, and a core Cordis override. The corpus verifies expected risk, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
+
+When a local DSH runtime and profile are installed, run the opt-in integration test:
+
+```bash
+npm run test:dsh-e2e
+```
+
+The integration test verifies that the profile composes the AgentGuard bundle, boots the real DSH Web runtime on a temporary loopback port, and executes `agentguard_dsh_scan` from the installed profile. Override discovery paths with `DSH_E2E_BIN` and `DSH_E2E_HOME` when needed.
 
 Before submission, also run:
 

@@ -15,6 +15,10 @@ coverage/
 .idea/
 .vscode/
 tmp/
+.dsh-runtime/
+.dsh-home/
+.dsh-test-reports/
+.pnpm-store/
 .npmrc
 skills/agentguard/scripts/data/
 skills/agentguard/scripts/package-lock.json

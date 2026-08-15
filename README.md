@@ -146,6 +146,16 @@ agentguard dsh-scan ./path/to/dsh-plugin --format html --output report.html
 
 Reports include DSH identification confidence, plugin kind, explainable risk level, permission profile, impact layers, source evidence, and an installation recommendation. See [AgentGuard for DSH](docs/dsh.md) for the risk model and current limitations.
 
+Install AgentGuard as a native DSH tool plugin, then restart the profile:
+
+```bash
+dsh plugin --profile web add @goplus/agentguard
+```
+
+DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.
+
+> **DSH Phase 1 boundary:** this integration is an installation-time static scanner, not a runtime command firewall. AgentGuard's command interception for other supported agent hosts does not automatically apply inside DSH. DSH runtime allow/warn/approve/block enforcement is deferred until a stable execution-hook and attribution contract is available.
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
