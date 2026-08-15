@@ -27,10 +27,19 @@ function repositoryUrl(value: unknown): string | undefined {
 
 /** Parse the DSH-relevant subset of a package manifest without executing package code. */
 export async function parseDshPackage(rootDir: string): Promise<DshPackageMetadata> {
+  const path = join(rootDir, 'package.json');
+  let raw: string;
   try {
-    const path = join(rootDir, 'package.json');
-    if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) return { ...EMPTY_METADATA };
-    const raw = await readFile(path, 'utf8');
+    if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) {
+      return { ...EMPTY_METADATA, parseError: `package.json exceeds ${MAX_SCANNABLE_FILE_BYTES} byte scan limit` };
+    }
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ...EMPTY_METADATA };
+    return { ...EMPTY_METADATA, parseError: (error as Error).message };
+  }
+
+  try {
     const manifest = JSON.parse(raw) as Record<string, unknown>;
     const dsh = manifest.dsh && typeof manifest.dsh === 'object'
       ? manifest.dsh as Record<string, unknown>
@@ -66,7 +75,7 @@ export async function parseDshPackage(rootDir: string): Promise<DshPackageMetada
       scripts: stringRecord(manifest.scripts),
       dependencies: Object.keys(dependencies).sort(),
     };
-  } catch {
-    return { ...EMPTY_METADATA };
+  } catch (error) {
+    return { ...EMPTY_METADATA, parseError: `Invalid package.json: ${(error as Error).message}` };
   }
 }

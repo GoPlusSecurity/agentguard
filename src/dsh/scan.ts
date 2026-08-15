@@ -23,6 +23,7 @@ import type {
 
 const RULES: ScanRule[] = [...ALL_RULES, ...DSH_RULES];
 const SEVERITY_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+const SECURITY_RELEVANT_CORDIS_ROW = /^(?:llm|agent|tools?|session|storage|credentials?|sandbox|approval|permission|webserver|runtime)$/i;
 
 function severityFor(tag: RiskTag): RiskLevel {
   return DSH_RULES.find(rule => rule.id === tag)?.severity ?? getRuleById(tag)?.severity ?? 'low';
@@ -137,17 +138,25 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
       },
       payload: { type: 'dir', ref: source.rootDir },
     });
-    scan.evidence = scan.evidence.filter(item => {
-      if (item.tag !== 'DSH_PATCH_OVERRIDE') return true;
-      const id = item.match.match(/id:\s*([^\s]+)/i)?.[1];
-      return Boolean(id && detection.cordis.rows.some(row =>
-        row.file === item.file && row.id === id && row.operation === 'replace',
-      ));
-    });
+    // Cordis overrides are derived from parsed rows below, not regex snippets.
+    scan.evidence = scan.evidence.filter(item => item.tag !== 'DSH_PATCH_OVERRIDE');
     scan.risk_tags = [...new Set(scan.evidence.map(item => item.tag))];
     const riskTags = [...new Set(scan.risk_tags)];
     const harmlessMismatch = hasHarmlessCapabilityMismatch(detection, pluginKind, capabilityProfile);
     const findings = toFindings(scan.evidence);
+    const coreOverrides = detection.cordis.rows.filter(row =>
+      row.operation === 'replace' && Boolean(row.id && SECURITY_RELEVANT_CORDIS_ROW.test(row.id)),
+    );
+    if (coreOverrides.length > 0) riskTags.push('DSH_PATCH_OVERRIDE');
+    for (const row of coreOverrides) {
+      findings.push({
+        ruleId: 'DSH_PATCH_OVERRIDE',
+        severity: 'high',
+        file: row.file,
+        message: 'Cordis patch replaces an existing DSH composition row',
+        snippet: `id: ${row.id}`,
+      });
+    }
     if (harmlessMismatch) {
       const unexpected = unexpectedHarmlessCapabilities(capabilityProfile);
       riskTags.push('DSH_THEME_ELEVATED_CAPABILITY');
@@ -210,7 +219,10 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
           cordisFiles: detection.cordis.files,
         },
       },
-      diagnostics: { cordisParseErrors: detection.cordis.parseErrors },
+      diagnostics: {
+        packageParseError: detection.package.parseError,
+        cordisParseErrors: detection.cordis.parseErrors,
+      },
     };
   } finally {
     await source.cleanup();

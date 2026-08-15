@@ -101,6 +101,15 @@ describe('DSH project detection and parsing', () => {
     assert.equal(parsed.rows.length, 0);
     assert.match(parsed.parseErrors[0]?.message ?? '', /row mapping/);
   });
+
+  it('reports malformed package.json without aborting the scan', async () => {
+    const root = await fixture({
+      'package.json': '{ "name": "broken",',
+      'cordis.yml': '[]\n',
+    });
+    const report = await scanDshPlugin(root);
+    assert.match(report.diagnostics.packageParseError ?? '', /Invalid package\.json/);
+  });
 });
 
 describe('DSH plugin scanner', () => {
@@ -204,7 +213,7 @@ describe('DSH plugin scanner', () => {
     const report = await scanDshPlugin(root);
     const overrides = report.findings.filter(finding => finding.ruleId === 'DSH_PATCH_OVERRIDE');
     assert.equal(overrides.length, 1);
-    assert.match(overrides[0].snippet ?? '', /id:\s*llm/);
+    assert.equal(overrides[0].snippet, 'id: llm');
     assert.equal(report.identity.pluginKind, 'bundle');
     assert.ok(report.impactLayers.includes('runtime-core'));
   });

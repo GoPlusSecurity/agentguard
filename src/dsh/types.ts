@@ -48,6 +48,7 @@ export interface DshPackageMetadata {
   clientPlatform?: string;
   scripts: Record<string, string>;
   dependencies: string[];
+  parseError?: string;
 }
 
 /** One Cordis configuration row or patch target. */
@@ -144,6 +145,7 @@ export interface DshPluginScanReport {
     };
   };
   diagnostics: {
+    packageParseError?: string;
     cordisParseErrors: Array<{ file: string; message: string }>;
   };
 }
