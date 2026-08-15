@@ -4,6 +4,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply, createAgentGuardDshTool } from '../dsh/plugin.js';
+import { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE } from '../dsh/metadata.js';
+import { packageVersion } from '../version.js';
 
 const roots: string[] = [];
 
@@ -30,6 +32,9 @@ describe('AgentGuard DSH runtime plugin', () => {
     await writeFile(join(root, 'theme.js'), 'export function apply() {}\n', 'utf8');
 
     const result = await createAgentGuardDshTool().execute({ target: root });
+    assert.equal(result.scannerVersion, packageVersion);
+    assert.equal(result.rulesBaseline, DSH_RULES_BASELINE);
+    assert.equal(result.phase, DSH_INTEGRATION_PHASE);
     assert.equal(result.format, 'markdown');
     assert.match(result.content, /AgentGuard for DSH/);
     assert.equal(result.runtimeSurfaceRiskLevel, 'low');
@@ -45,7 +50,14 @@ describe('AgentGuard DSH runtime plugin', () => {
 
     const result = await createAgentGuardDshTool().execute({ target: root, format: 'json' });
     assert.equal(result.format, 'json');
-    assert.equal(JSON.parse(result.content).schemaVersion, 1);
+    const report = JSON.parse(result.content);
+    assert.equal(report.schemaVersion, 1);
+    assert.deepEqual(report.scanner, {
+      name: 'AgentGuard for DSH',
+      version: packageVersion,
+      phase: DSH_INTEGRATION_PHASE,
+      rulesBaseline: DSH_RULES_BASELINE,
+    });
     await assert.rejects(() => createAgentGuardDshTool().execute({ target: '  ' }), /non-empty/);
   });
 });

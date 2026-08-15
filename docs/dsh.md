@@ -22,6 +22,32 @@ Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, 
 
 The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
 
+### Operate the DSH installation
+
+DSH forwards plugin lifecycle commands to the profile package manager. Keep the profile name explicit so an update or removal cannot affect a different profile.
+
+```bash
+# Confirm that the plugin is composed into the web profile
+dsh web --dump-config
+
+# Update an npm-installed release
+dsh plugin --profile web update @goplus/agentguard
+
+# Remove AgentGuard from the profile
+dsh plugin --profile web remove @goplus/agentguard
+```
+
+Restart the DSH process after an add, update, or remove operation. For a local `link:` installation, rebuild the AgentGuard checkout with `npm run build`, then restart DSH; the link continues to point at the same checkout.
+
+Verification checklist:
+
+1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
+2. DSH exposes the `agentguard_dsh_scan` tool.
+3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
+4. After removal and restart, the AgentGuard composition row and tool are absent.
+
+If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web process is not listening; it is not evidence of a scanner failure. Start or restart DSH and inspect its terminal output. If the tool is missing while DSH is running, check the explicit profile with `--dump-config`, then confirm the package appears in that profile's dependencies.
+
 ### Capability boundary
 
 | Capability | DSH Phase 1 | Notes |
@@ -289,6 +315,7 @@ The top-level report is `DshPluginScanReport`:
 | Field | Purpose |
 |---|---|
 | `schemaVersion` | Report contract version; currently `1`. |
+| `scanner` | Scanner name, package version, Phase 1 milestone, and frozen rules baseline used to produce the result. This additive field may be absent in older schema-v1 reports. |
 | `identity` | Package name, version, repository, hash, and inferred plugin kind. |
 | `detection` | DSH decision, confidence, and matched signals. |
 | `riskLevel` | `low`, `medium`, `high`, or `critical`. |
@@ -308,6 +335,16 @@ The top-level report is `DshPluginScanReport`:
 | `diagnostics` | Non-fatal package-manifest and Cordis parse errors. |
 
 The artifact hash is computed from the scanned files. Consumers should use it with the source revision when recording an approval because a repository name or package version alone does not identify immutable content.
+
+### Read the result before installing
+
+Use the two risk views together:
+
+- Start with `runtimeSurfaceRiskLevel` and findings marked `runtime/direct` to review code likely to load in DSH.
+- Keep `riskLevel` as the conservative repository-wide view; test, documentation, example, and data findings remain visible and may still expose supply-chain or secret-handling problems.
+- Treat `reviewPriority` as review ordering, not a maliciousness verdict. `URGENT` means the evidence deserves immediate source inspection.
+- Match each capability to the plugin's stated purpose. Expected access is still access: provider mutation, shell execution, self-update, install scripts, and credential reads deserve explicit approval.
+- Record the source revision, artifact hash, scanner version, and rules baseline with the decision. Rescan whenever any of them changes.
 
 ## Resource and execution safety
 

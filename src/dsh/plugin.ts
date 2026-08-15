@@ -1,5 +1,6 @@
 import { scanDshPlugin } from './scan.js';
 import { renderDshMarkdown } from '../reports/dsh-report.js';
+import { getDshScannerMetadata } from './metadata.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools'];
@@ -28,6 +29,9 @@ export type AgentGuardDshToolArgs = {
 };
 
 export type AgentGuardDshToolResult = {
+  scannerVersion: string;
+  rulesBaseline: string;
+  phase: string;
   riskLevel: string;
   installRecommendation: string;
   runtimeSurfaceRiskLevel: string;
@@ -63,6 +67,9 @@ export function createAgentGuardDshTool(): ToolDefinition {
       schema: {
         type: 'object',
         properties: {
+          scannerVersion: { type: 'string' },
+          rulesBaseline: { type: 'string' },
+          phase: { type: 'string' },
           riskLevel: { type: 'string' },
           installRecommendation: { type: 'string' },
           runtimeSurfaceRiskLevel: { type: 'string' },
@@ -72,6 +79,9 @@ export function createAgentGuardDshTool(): ToolDefinition {
           content: { type: 'string' },
         },
         required: [
+          'scannerVersion',
+          'rulesBaseline',
+          'phase',
           'riskLevel',
           'installRecommendation',
           'runtimeSurfaceRiskLevel',
@@ -95,7 +105,11 @@ export function createAgentGuardDshTool(): ToolDefinition {
 
       const report = await scanDshPlugin(args.target.trim());
       const format = args.format ?? 'markdown';
+      const scanner = report.scanner ?? getDshScannerMetadata();
       return {
+        scannerVersion: scanner.version,
+        rulesBaseline: scanner.rulesBaseline,
+        phase: scanner.phase,
         riskLevel: report.riskLevel,
         installRecommendation: report.installRecommendation,
         runtimeSurfaceRiskLevel: report.runtimeSurfaceRiskLevel ?? report.riskLevel,

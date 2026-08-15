@@ -13,6 +13,7 @@ import {
   unexpectedHarmlessCapabilities,
 } from './classify-plugin.js';
 import { detectDshPlugin } from './detect.js';
+import { getDshScannerMetadata } from './metadata.js';
 import { addFindingContext, calculateReviewPriority, runtimeSurfaceTags } from './finding-context.js';
 import { resolveDshSource } from './source.js';
 import type {
@@ -194,6 +195,7 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
 
     return {
       schemaVersion: 1,
+      scanner: getDshScannerMetadata(),
       identity: {
         name: detection.package.name ?? basename(source.repositoryUrl ?? source.rootDir).replace(/\.git$/, ''),
         packageName: detection.package.name,

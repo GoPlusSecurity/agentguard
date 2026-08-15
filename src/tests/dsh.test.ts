@@ -414,6 +414,8 @@ describe('DSH report rendering', () => {
     const report = await scanDshPlugin(root);
     const markdown = renderDshMarkdown(report);
     const html = renderDshHtml(report);
+    assert.match(markdown, /Rules baseline:.*83db977a/);
+    assert.match(html, /rules.*83db977a/);
     assert.match(markdown, /Permission profile/);
     assert.match(markdown, /Runtime-surface risk/);
     assert.match(markdown, /Review priority/);
@@ -432,8 +434,11 @@ describe('DSH report rendering', () => {
     delete report.runtimeSurfaceRiskTags;
     delete report.runtimeSurfaceRecommendation;
     delete report.reviewPriority;
+    delete report.scanner;
     assert.match(renderDshMarkdown(report), /Runtime-surface risk:.*LOW/);
+    assert.match(renderDshMarkdown(report), /Scanner:.*Unavailable in legacy schema-v1 report/);
     assert.match(renderDshHtml(report), /Runtime surface: low/);
+    assert.match(renderDshHtml(report), /Scanner version unavailable in legacy schema-v1 report/);
   });
 
   it('creates missing parent directories for CLI report output', async () => {

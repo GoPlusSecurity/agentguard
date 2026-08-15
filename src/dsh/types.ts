@@ -135,6 +135,13 @@ export interface DshPluginIdentity {
 /** Complete installation-time report for a DSH plugin. */
 export interface DshPluginScanReport {
   schemaVersion: 1;
+  /** Additive schema-v1 provenance for reproducing and comparing scan results. */
+  scanner?: {
+    name: string;
+    version: string;
+    phase: string;
+    rulesBaseline: string;
+  };
   identity: DshPluginIdentity;
   detection: Pick<DshDetection, 'isDshPlugin' | 'confidence' | 'signals'>;
   /** Risk across the full scanned repository, including tests, docs, examples, and data. */

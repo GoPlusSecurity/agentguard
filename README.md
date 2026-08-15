@@ -154,6 +154,8 @@ dsh plugin --profile web add @goplus/agentguard
 
 DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.
 
+Update or remove it from the same profile with `dsh plugin --profile web update @goplus/agentguard` or `dsh plugin --profile web remove @goplus/agentguard`. The [DSH operations and report guide](docs/dsh.md#operate-the-dsh-installation) includes verification and troubleshooting steps.
+
 > **DSH Phase 1 boundary:** this integration is an installation-time static scanner, not a runtime command firewall. AgentGuard's command interception for other supported agent hosts does not automatically apply inside DSH. DSH runtime allow/warn/approve/block enforcement is deferred until a stable execution-hook and attribution contract is available.
 
 Phase 1.1 keeps the conservative full-repository risk while adding a separate runtime-surface risk, evidence source categories, likely-generated markers, and a human-review priority. Tests, examples, docs, and data findings remain visible instead of being silently discarded.

@@ -37,6 +37,10 @@ function htmlEscape(value: string): string {
 
 /** Render a portable Markdown DSH scan report. */
 export function renderDshMarkdown(report: DshPluginScanReport): string {
+  const scannerLabel = report.scanner
+    ? `${report.scanner.name} ${report.scanner.version} (${report.scanner.phase})`
+    : 'Unavailable in legacy schema-v1 report';
+  const rulesBaseline = report.scanner?.rulesBaseline ?? 'Unavailable in legacy schema-v1 report';
   const runtimeSurfaceRisk = report.runtimeSurfaceRiskLevel ?? report.riskLevel;
   const runtimeSurfaceRecommendation = report.runtimeSurfaceRecommendation ?? report.installRecommendation;
   const capabilities = Object.entries(report.capabilityProfile)
@@ -61,6 +65,10 @@ export function renderDshMarkdown(report: DshPluginScanReport): string {
 **Runtime-surface risk:** ${runtimeSurfaceRisk.toUpperCase()}
 
 **Review priority:** ${(report.reviewPriority ?? 'elevated').toUpperCase()}
+
+**Scanner:** ${scannerLabel}
+
+**Rules baseline:** ${rulesBaseline}
 
 **DSH project:** ${report.detection.isDshPlugin ? 'Yes' : 'No'} (${report.detection.confidence} confidence)
 
@@ -109,6 +117,10 @@ ${findings}
 
 /** Render a self-contained shareable HTML DSH scan report. */
 export function renderDshHtml(report: DshPluginScanReport): string {
+  const scannerLabel = report.scanner
+    ? `${report.scanner.name} ${report.scanner.version} · ${report.scanner.phase}`
+    : 'Scanner version unavailable in legacy schema-v1 report';
+  const rulesBaseline = report.scanner?.rulesBaseline ?? 'unavailable';
   const risk = htmlEscape(report.riskLevel);
   const runtimeSurfaceRisk = report.runtimeSurfaceRiskLevel ?? report.riskLevel;
   const runtimeSurfaceRecommendation = report.runtimeSurfaceRecommendation ?? report.installRecommendation;
@@ -159,7 +171,7 @@ export function renderDshHtml(report: DshPluginScanReport): string {
   </style>
 </head>
 <body><main>
-  <header class="hero"><div class="eyebrow">AgentGuard for DSH</div><h1>${htmlEscape(report.identity.name)}</h1><p class="summary">${htmlEscape(report.summary)}</p><span class="risk">Repository: ${risk}</span><span class="risk runtime-risk">Runtime surface: ${runtimeRisk}</span><p>Review priority: <strong>${htmlEscape(report.reviewPriority ?? 'elevated')}</strong></p></header>
+  <header class="hero"><div class="eyebrow">AgentGuard for DSH</div><h1>${htmlEscape(report.identity.name)}</h1><p class="summary">${htmlEscape(report.summary)}</p><span class="risk">Repository: ${risk}</span><span class="risk runtime-risk">Runtime surface: ${runtimeRisk}</span><p>Review priority: <strong>${htmlEscape(report.reviewPriority ?? 'elevated')}</strong></p><p>${htmlEscape(scannerLabel)} · rules <code>${htmlEscape(rulesBaseline)}</code></p></header>
   <div class="grid">
     <section><h2>Permission profile</h2><div class="capabilities">${capabilities}</div></section>
     <section><h2>DSH identity</h2><dl><dt>Detected</dt><dd>${report.detection.isDshPlugin ? 'Yes' : 'No'} (${htmlEscape(report.detection.confidence)})</dd><dt>Kind</dt><dd>${htmlEscape(report.identity.pluginKind)}</dd><dt>Impact</dt><dd>${impacts || 'None inferred'}</dd></dl><ul>${signals || '<li>No DSH-specific signals</li>'}</ul></section>

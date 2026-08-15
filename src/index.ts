@@ -13,6 +13,7 @@ export * from './types/index.js';
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
 export { scanDshPlugin, DSH_RULES, DSH_SCAN_RULES } from './dsh/scan.js';
+export { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE, getDshScannerMetadata } from './dsh/metadata.js';
 export { detectDshPlugin } from './dsh/detect.js';
 export { parseDshPackage } from './dsh/parse-package.js';
 export { parseCordisConfigs } from './dsh/parse-cordis-patch.js';
