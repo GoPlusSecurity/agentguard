@@ -29,6 +29,7 @@
     "test": "node --test dist/tests/*.test.js",
     "test:dsh-e2e": "node scripts/test-dsh-plugin-e2e.mjs",
     "test:dsh-lifecycle": "node scripts/test-dsh-plugin-lifecycle.mjs",
+    "test:dsh-package": "node scripts/test-dsh-package.mjs",
     "benchmark:dsh": "node scripts/dsh-benchmark.mjs",
     "benchmark:dsh:update": "node scripts/dsh-benchmark.mjs --update",
     "test:cloud-live": "node --test dist/tests/cloud-live.test.js",
@@ -78,6 +79,7 @@
   },
   "files": [
     "dist",
+    "!dist/tests",
     "docs",
     "dsh.cordis.patch.yml",
     "examples/openclaw-docker",

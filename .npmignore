@@ -1,0 +1,2 @@
+# Compiled tests are useful in the checkout but are not runtime package assets.
+dist/tests/

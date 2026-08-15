@@ -402,6 +402,14 @@ npm run test:dsh-e2e
 
 The integration test verifies that the profile composes the AgentGuard bundle, boots the real DSH Web runtime on a temporary loopback port, and executes `agentguard_dsh_scan` from the installed profile. Override discovery paths with `DSH_E2E_BIN` and `DSH_E2E_HOME` when needed.
 
+Before publishing an npm release, validate the exact package artifact:
+
+```bash
+npm run test:dsh-package
+```
+
+This test creates a temporary tarball and a clean DSH profile, verifies the DSH JavaScript, type declarations, Cordis patch, report renderer, and documentation are packaged, rejects compiled test assets, then exercises tarball install, scan, update, and removal. It never publishes the package. Override the DSH executable with `DSH_PACKAGE_BIN` when needed.
+
 Before submission, also run:
 
 ```bash

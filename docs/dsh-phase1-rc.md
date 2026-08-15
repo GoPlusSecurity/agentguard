@@ -13,10 +13,11 @@ Before merging or releasing the RC:
 1. `npm run build` succeeds.
 2. `npm test` passes the complete unit/integration suite.
 3. `npm run test:dsh-e2e` composes the installed profile, boots DSH, and invokes the scanner.
-4. `npm run benchmark:dsh` matches all exact-commit real-world snapshots.
-5. `git diff --check` reports no whitespace errors.
-6. Every new or removed HIGH/CRITICAL runtime tag has a written human-review explanation.
-7. The PR documents the Phase 1 boundary and known limitations.
+4. `npm run test:dsh-package` builds the npm tarball, verifies required runtime and type assets, excludes compiled tests, and exercises install, scan, update, and removal in a clean DSH profile.
+5. `npm run benchmark:dsh` matches all exact-commit real-world snapshots.
+6. `git diff --check` reports no whitespace errors.
+7. Every new or removed HIGH/CRITICAL runtime tag has a written human-review explanation.
+8. The PR documents the Phase 1 boundary and known limitations.
 
 The real-world benchmark requires GitHub network access. The synthetic labeled corpus remains part of the normal offline test suite.
 
