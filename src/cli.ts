@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { Command } from 'commander';
 import { AgentGuardCloudClient } from './cloud/client.js';
@@ -391,6 +391,7 @@ async function main() {
           : renderDshMarkdown(report);
       if (options.output) {
         const outputPath = resolve(String(options.output));
+        mkdirSync(dirname(outputPath), { recursive: true });
         writeFileSync(outputPath, rendered, 'utf8');
         console.error(`DSH scan report written to ${outputPath}`);
       } else {

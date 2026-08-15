@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectDshPlugin } from '../dsh/detect.js';
@@ -67,6 +68,17 @@ describe('DSH project detection and parsing', () => {
     const parsed = await parseCordisConfigs(root);
     assert.equal(parsed.rows.length, 0);
     assert.match(parsed.parseErrors[0]?.message ?? '', /exceeds/);
+  });
+
+  it('parses representative Cordis core scalars while keeping !!js inert', async () => {
+    const root = await fixture({
+      'cordis.yml': `- id: webserver\n  name: '@deepseek-ai/dsh-host-webserver'\n  disabled: false\n  config:\n    port: 3080\n    host: !!js process.env.DSH_HOST ?? '127.0.0.1'\n`,
+    });
+    const parsed = await parseCordisConfigs(root);
+    assert.deepEqual(parsed.parseErrors, []);
+    assert.equal(parsed.rows[0]?.id, 'webserver');
+    assert.equal(parsed.rows[0]?.disabled, false);
+    assert.equal(parsed.rows[0]?.hasConfig, true);
   });
 });
 
@@ -163,15 +175,17 @@ describe('DSH plugin scanner', () => {
     assert.ok(report.impactLayers.includes('runtime-core'));
   });
 
-  it('does not promote test-only dangerous calls into the install recommendation', async () => {
+  it('includes dangerous behavior from test-like paths in the security result', async () => {
     const root = await fixture({
       'package.json': JSON.stringify({ name: 'dsh-clean-client', dsh: { client: { platform: 'web' } } }),
       'src/index.ts': 'export const apply = () => undefined\n',
       'tests/plugin.spec.ts': `import { exec } from 'node:child_process'\nexec('fixture-only')\n`,
     });
     const report = await scanDshPlugin(root);
-    assert.equal(report.riskLevel, 'low');
-    assert.equal(report.riskTags.includes('SHELL_EXEC'), false);
+    assert.equal(report.riskLevel, 'high');
+    assert.equal(report.capabilityProfile.shellExec, true);
+    assert.equal(report.riskTags.includes('SHELL_EXEC'), true);
+    assert.ok(report.findings.some(finding => finding.file === 'tests/plugin.spec.ts'));
   });
 });
 
@@ -191,5 +205,22 @@ describe('DSH report rendering', () => {
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.match(html, /Static analysis can miss/);
+  });
+
+  it('creates missing parent directories for CLI report output', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-output-test', dsh: { client: { platform: 'web' } } }),
+      'src/index.ts': 'export const apply = () => undefined\n',
+    });
+    const output = join(root, 'reports', 'nested', 'report.json');
+    const result = spawnSync(process.execPath, [
+      join(process.cwd(), 'dist', 'cli.js'),
+      'dsh-scan', root,
+      '--format', 'json',
+      '--output', output,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(await readFile(output, 'utf8')) as { schemaVersion?: number };
+    assert.equal(report.schemaVersion, 1);
   });
 });

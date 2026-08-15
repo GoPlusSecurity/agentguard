@@ -29,23 +29,48 @@ async function gitMetadata(rootDir: string): Promise<{ revision?: string; lastCo
   }
 }
 
+async function resolveGithubHead(repositoryUrl: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', [
+    '-c', 'core.hooksPath=/dev/null',
+    'ls-remote', '--exit-code', '--', repositoryUrl, 'HEAD',
+  ], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+  const revision = stdout.trim().split(/\s+/)[0];
+  if (!revision || !/^[0-9a-f]{40,64}$/i.test(revision)) {
+    throw new Error('GitHub repository did not advertise a valid HEAD revision');
+  }
+  return revision.toLowerCase();
+}
+
 /** Resolve a local directory or HTTPS GitHub repository into a scan directory. */
 export async function resolveDshSource(input: string): Promise<ResolvedDshSource> {
   const github = input.match(GITHUB_REPO);
   if (github) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'agentguard-dsh-'));
     const rootDir = join(tempRoot, 'repo');
+    const repositoryUrl = `https://github.com/${github[1]}/${github[2]}.git`;
     try {
+      const expectedRevision = await resolveGithubHead(repositoryUrl);
+      await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'init', rootDir], { timeout: 10_000 });
+      await execFileAsync('git', ['-C', rootDir, 'remote', 'add', 'origin', repositoryUrl], { timeout: 10_000 });
       await execFileAsync('git', [
         '-c', 'core.hooksPath=/dev/null',
-        'clone', '--depth', '1', '--single-branch', '--no-recurse-submodules', '--', input, rootDir,
+        '-C', rootDir,
+        'fetch', '--depth', '1', '--no-tags', 'origin', expectedRevision,
       ], { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
+      await execFileAsync('git', [
+        '-c', 'core.hooksPath=/dev/null',
+        '-C', rootDir,
+        'checkout', '--detach', expectedRevision,
+      ], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
       const metadata = await gitMetadata(rootDir);
+      if (metadata.revision?.toLowerCase() !== expectedRevision) {
+        throw new Error(`Checked out ${metadata.revision ?? 'no revision'} instead of resolved HEAD ${expectedRevision}`);
+      }
       return {
         rootDir,
         kind: 'github',
         input,
-        repositoryUrl: input,
+        repositoryUrl,
         ...metadata,
         cleanup: () => rm(tempRoot, { recursive: true, force: true }),
       };

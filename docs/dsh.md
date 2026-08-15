@@ -132,11 +132,11 @@ local directory or HTTPS GitHub repository
 
 Local inputs are resolved to an absolute directory. GitHub inputs are shallow-cloned into a temporary directory with these constraints:
 
-- Default branch only, depth 1.
+- Resolve the default branch HEAD first, then fetch and check out that exact commit at depth 1.
 - Submodules are not initialized.
 - Repository hooks are disabled for the clone operation.
 - The temporary checkout is removed after scanning, including after failures.
-- The report records the scanned commit and commit time when Git metadata is available.
+- The checkout is verified against the pre-resolved HEAD, and the report records that commit and its commit time.
 
 Other HTTP sources are rejected in Phase 1.
 
@@ -156,7 +156,7 @@ The report exposes every matched signal and a confidence value of `none`, `low`,
 
 Only the DSH-owned portion of `package.json` is retained. Package code is never imported.
 
-Cordis YAML is parsed using the YAML failsafe schema. Tagged values such as `!!js process.env.KEY` remain inert data and are never evaluated. The parser distinguishes:
+Cordis YAML is parsed with the YAML core schema and an explicit scalar resolver that preserves `!!js` expressions as inert strings. Expressions such as `!!js process.env.KEY` are never evaluated, while ordinary booleans and numbers retain their YAML core types. The parser distinguishes:
 
 - `entry`: a normal row in a base Cordis document.
 - `insert`: a row introduced through an `insert` patch.
@@ -181,7 +181,7 @@ The artifact is scanned with AgentGuard's existing security rules plus DSH-speci
 | `DSH_SESSION_STORAGE_ACCESS` | Medium | Source accesses sessions, settings, credentials, or persistence. |
 | `DSH_THEME_ELEVATED_CAPABILITY` | High | A benign-looking UI, theme, skin, or pet also requests elevated capabilities. |
 
-Findings under test, fixture, and common test-file paths remain available to ordinary repository tooling but are excluded from the DSH installation recommendation. This avoids classifying a plugin by the capabilities of its test harness.
+All shipped paths participate in risk calculation, including test-like and fixture paths. Published packages can place executable behavior anywhere, so directory names are not treated as a security boundary.
 
 ### 5. Capability profile
 
@@ -296,7 +296,7 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Low-risk UI themes.
 - Critical escalation for deceptive themes.
 - Tool, file-write, provider, and credential classification.
-- Exclusion of test-only execution from install recommendations.
+- Inclusion of dangerous behavior under test-like paths in install recommendations.
 - Markdown output and HTML escaping.
 
 Before submission, also run:
@@ -318,7 +318,6 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - GitHub scans follow the current default branch; they do not accept a tag, branch, pull request, or commit selector in Phase 1.
 - Repository scanning does not prove that an npm package with the same name contains the same files.
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
-- Development-path exclusion can hide behavior if a package intentionally ships executable code under a test-like path.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
 - Runtime enforcement and source-plugin attribution are deferred to Phase 2.
 

@@ -20,10 +20,6 @@ import type {
 const RULES: ScanRule[] = [...ALL_RULES, ...DSH_RULES];
 const SEVERITY_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
-function isDevelopmentOnlyPath(file: string): boolean {
-  return /(?:^|\/)(?:tests?|__tests__|fixtures)(?:\/|$)|\.(?:spec|test)\.[^.]+$/i.test(file);
-}
-
 function severityFor(tag: RiskTag): RiskLevel {
   return DSH_RULES.find(rule => rule.id === tag)?.severity ?? getRuleById(tag)?.severity ?? 'low';
 }
@@ -133,7 +129,6 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
       payload: { type: 'dir', ref: source.rootDir },
     });
     scan.evidence = scan.evidence.filter(item => {
-      if (isDevelopmentOnlyPath(item.file)) return false;
       if (item.tag !== 'DSH_PATCH_OVERRIDE') return true;
       const id = item.match.match(/id:\s*([^\s]+)/i)?.[1];
       return Boolean(id && detection.cordis.rows.some(row =>

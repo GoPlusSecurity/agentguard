@@ -19,7 +19,7 @@ const PATTERNS = {
 export async function buildCapabilityProfile(rootDir: string, detection: DshDetection): Promise<DshCapabilityProfile> {
   const files = await walkDirectory(rootDir);
   const combined = files
-    .filter(file => file.extension !== '.md' && !/(?:^|\/)(?:tests?|__tests__|fixtures)(?:\/|$)|\.(?:spec|test)\.[^.]+$/i.test(file.relativePath))
+    .filter(file => file.extension !== '.md')
     .map(file => file.content)
     .join('\n');
   const rowNames = detection.cordis.rows.map(row => `${row.id ?? ''} ${row.name ?? ''}`).join('\n');

@@ -1,11 +1,15 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { glob } from 'glob';
-import { parseDocument } from 'yaml';
+import { parseDocument, type ScalarTag } from 'yaml';
 import type { DshCordisAnalysis, DshCordisRow } from './types.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
 
 const CORDIS_FILES = ['**/cordis.yml', '**/cordis.yaml', '**/cordis.patch.yml', '**/cordis.patch.yaml'];
+const JS_EXPRESSION_TAG: ScalarTag = {
+  tag: 'tag:yaml.org,2002:js',
+  resolve: value => value,
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -49,7 +53,7 @@ function collectRows(
   return rows;
 }
 
-/** Parse Cordis configs using YAML's failsafe schema so `!!js` values are never evaluated. */
+/** Parse Cordis configs with core scalars while preserving `!!js` as inert text. */
 export async function parseCordisConfigs(rootDir: string): Promise<DshCordisAnalysis> {
   const matches = await glob(CORDIS_FILES, {
     cwd: rootDir,
@@ -69,7 +73,11 @@ export async function parseCordisConfigs(rootDir: string): Promise<DshCordisAnal
         continue;
       }
       const raw = await readFile(path, 'utf8');
-      const document = parseDocument(raw, { schema: 'failsafe', strict: false });
+      const document = parseDocument(raw, {
+        schema: 'core',
+        strict: true,
+        customTags: [JS_EXPRESSION_TAG],
+      });
       if (document.errors.length > 0) {
         parseErrors.push({ file, message: document.errors.map(error => error.message).join('; ') });
         continue;
