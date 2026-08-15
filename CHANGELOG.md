@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+- Added the read-only DSH installation scanner, native DSH tool plugin, dual full-repository/runtime-surface risk views, review priority, generated-code context, evidence aggregation, and explainable Markdown/HTML/JSON reports.
+- Added a pinned real-world DSH regression benchmark with deterministic snapshots and manual source-review records for representative LOW-through-CRITICAL artifacts.
+
 ### Changed
 - MCPB release builds now publish the bundle as `agentguard.mcpb` so Anthropic's
   directory auto-pickup keeps matching the asset across version tags.

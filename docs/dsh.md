@@ -371,6 +371,14 @@ Before submission, also run:
 git diff --check
 ```
 
+Phase 1 release-candidate changes also run the pinned real-world gate:
+
+```bash
+npm run benchmark:dsh
+```
+
+See `benchmarks/dsh/README.md` for snapshot-update policy and `docs/dsh-phase1-rc.md` for the frozen boundary and acceptance gates. The real-world benchmark fetches exact public GitHub commits and is intentionally separate from the offline default test suite.
+
 ## Compatibility and change policy
 
 DSH is a developer preview and its manifest or Cordis conventions may change. DSH-specific parsing and classification live under `src/dsh/`, rules live under `src/scanner/rules/dsh/`, and report rendering lives under `src/reports/`. This separation lets DSH compatibility evolve without coupling generic AgentGuard rules to one plugin framework.

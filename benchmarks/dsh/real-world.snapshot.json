@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "baseline": "phase1-rc1",
+  "rulesFrozenAt": "83db977a566d8a853568a2d2903b142106d80196",
+  "cases": [
+    {
+      "id": "dsh-deep-whale",
+      "repository": "https://github.com/Small-tailqwq/dsh-deep-whale",
+      "revision": "cdb4da4f9c708571c6303cc1053185c62c8b617b",
+      "subpath": "maid-atelier",
+      "artifactHash": "sha256:de23a63acf59e71f8abfa78d36a03d8ebcd7b1a8c52c07df72a72ff427202fb1",
+      "pluginKind": "bundle",
+      "riskLevel": "medium",
+      "runtimeSurfaceRiskLevel": "low",
+      "reviewPriority": "routine",
+      "installRecommendation": "test-in-isolated-profile",
+      "runtimeSurfaceRecommendation": "safe-to-try",
+      "riskTags": [
+        "FILE_READ_ACCESS"
+      ],
+      "runtimeSurfaceRiskTags": [],
+      "findingCounts": {
+        "FILE_READ_ACCESS": 2
+      },
+      "generatedFindingCounts": {}
+    },
+    {
+      "id": "superdesign-skill",
+      "repository": "https://github.com/superdesigndev/superdesign-skill",
+      "revision": "dc60b43625426bdd1e88fe494739fd5ea27daedd",
+      "artifactHash": "sha256:d41297e03c8ff608d5ea68c90c9139d65c4712c9e8ca4eb641b320d852195c99",
+      "pluginKind": "bundle",
+      "riskLevel": "high",
+      "runtimeSurfaceRiskLevel": "medium",
+      "reviewPriority": "elevated",
+      "installRecommendation": "sandbox-only",
+      "runtimeSurfaceRecommendation": "test-in-isolated-profile",
+      "riskTags": [
+        "FILE_READ_ACCESS",
+        "SHELL_EXEC"
+      ],
+      "runtimeSurfaceRiskTags": [
+        "FILE_READ_ACCESS"
+      ],
+      "findingCounts": {
+        "FILE_READ_ACCESS": 1,
+        "SHELL_EXEC": 1
+      },
+      "generatedFindingCounts": {}
+    },
+    {
+      "id": "dsh-open-in-vscode",
+      "repository": "https://github.com/omdsh-dev/dsh-open-in-vscode",
+      "revision": "149f21aed3d05d2b392206394c4a023e35d694c7",
+      "artifactHash": "sha256:3dba401fa1197e5ddfe4bca482070a48674a2ba49f37ed50dace7203de20a68a",
+      "pluginKind": "bundle",
+      "riskLevel": "high",
+      "runtimeSurfaceRiskLevel": "high",
+      "reviewPriority": "elevated",
+      "installRecommendation": "avoid-on-primary-machine",
+      "runtimeSurfaceRecommendation": "avoid-on-primary-machine",
+      "riskTags": [
+        "DYNAMIC_CODE_EXECUTION",
+        "FILE_READ_ACCESS",
+        "FILE_WRITE_ACCESS",
+        "OBFUSCATION",
+        "SHELL_EXEC"
+      ],
+      "runtimeSurfaceRiskTags": [
+        "DYNAMIC_CODE_EXECUTION",
+        "OBFUSCATION",
+        "SHELL_EXEC"
+      ],
+      "findingCounts": {
+        "DYNAMIC_CODE_EXECUTION": 1,
+        "FILE_READ_ACCESS": 1,
+        "FILE_WRITE_ACCESS": 3,
+        "OBFUSCATION": 278,
+        "SHELL_EXEC": 2
+      },
+      "generatedFindingCounts": {
+        "DYNAMIC_CODE_EXECUTION": 1,
+        "OBFUSCATION": 278,
+        "SHELL_EXEC": 1
+      }
+    },
+    {
+      "id": "dsh-vision-router",
+      "repository": "https://github.com/ysr666/dsh-vision-router",
+      "revision": "86268695b1fb537794b33d0fb5267ce64ddbb8ce",
+      "artifactHash": "sha256:0c2ac2d727074301daf17349ac47ba18caae334a916f1fef63f3d667b66e0a7e",
+      "pluginKind": "bundle",
+      "riskLevel": "critical",
+      "runtimeSurfaceRiskLevel": "critical",
+      "reviewPriority": "urgent",
+      "installRecommendation": "expert-review-required",
+      "runtimeSurfaceRecommendation": "expert-review-required",
+      "riskTags": [
+        "AUTO_UPDATE",
+        "DSH_PROVIDER_MUTATION",
+        "DSH_RUNTIME_MUTATION",
+        "DSH_SESSION_STORAGE_ACCESS",
+        "DSH_TOOL_REGISTRY_MUTATION",
+        "DYNAMIC_CODE_EXECUTION",
+        "DYNAMIC_MODULE_LOADING",
+        "FILE_READ_ACCESS",
+        "FILE_WRITE_ACCESS",
+        "NETWORK_ACCESS",
+        "READ_ENV_SECRETS",
+        "SHELL_EXEC",
+        "SUSPICIOUS_IP"
+      ],
+      "runtimeSurfaceRiskTags": [
+        "AUTO_UPDATE",
+        "DSH_PROVIDER_MUTATION",
+        "DSH_RUNTIME_MUTATION",
+        "DSH_SESSION_STORAGE_ACCESS",
+        "DSH_TOOL_REGISTRY_MUTATION",
+        "DYNAMIC_CODE_EXECUTION",
+        "DYNAMIC_MODULE_LOADING",
+        "FILE_READ_ACCESS",
+        "FILE_WRITE_ACCESS",
+        "NETWORK_ACCESS",
+        "READ_ENV_SECRETS",
+        "SHELL_EXEC"
+      ],
+      "findingCounts": {
+        "AUTO_UPDATE": 1,
+        "DSH_PROVIDER_MUTATION": 44,
+        "DSH_RUNTIME_MUTATION": 2,
+        "DSH_SESSION_STORAGE_ACCESS": 4,
+        "DSH_TOOL_REGISTRY_MUTATION": 2,
+        "DYNAMIC_CODE_EXECUTION": 1,
+        "DYNAMIC_MODULE_LOADING": 2,
+        "FILE_READ_ACCESS": 11,
+        "FILE_WRITE_ACCESS": 9,
+        "NETWORK_ACCESS": 7,
+        "READ_ENV_SECRETS": 1,
+        "SHELL_EXEC": 1,
+        "SUSPICIOUS_IP": 1
+      },
+      "generatedFindingCounts": {}
+    },
+    {
+      "id": "misakanet",
+      "repository": "https://github.com/Ikalus1988/MisakaNet",
+      "revision": "90665bad188073cf995fd3ca4428273653f83b81",
+      "artifactHash": "sha256:961a7023f960c55fda51a04abe3349c73442c14c15a3dae2392345dbde01e7c5",
+      "pluginKind": "bundle",
+      "riskLevel": "critical",
+      "runtimeSurfaceRiskLevel": "critical",
+      "reviewPriority": "urgent",
+      "installRecommendation": "expert-review-required",
+      "runtimeSurfaceRecommendation": "expert-review-required",
+      "riskTags": [
+        "AUTO_UPDATE",
+        "DYNAMIC_CODE_EXECUTION",
+        "DYNAMIC_MODULE_LOADING",
+        "FILE_READ_ACCESS",
+        "FILE_WRITE_ACCESS",
+        "NETWORK_ACCESS",
+        "NET_EXFIL_UNRESTRICTED",
+        "PROMPT_INJECTION",
+        "READ_ENV_SECRETS",
+        "READ_KEYCHAIN",
+        "READ_SSH_KEYS",
+        "SHELL_EXEC",
+        "SUSPICIOUS_IP",
+        "TROJAN_DISTRIBUTION",
+        "WEBHOOK_EXFIL"
+      ],
+      "runtimeSurfaceRiskTags": [
+        "DYNAMIC_CODE_EXECUTION",
+        "DYNAMIC_MODULE_LOADING",
+        "FILE_READ_ACCESS",
+        "NETWORK_ACCESS",
+        "NET_EXFIL_UNRESTRICTED",
+        "PROMPT_INJECTION",
+        "READ_ENV_SECRETS",
+        "READ_KEYCHAIN",
+        "SHELL_EXEC",
+        "SUSPICIOUS_IP",
+        "WEBHOOK_EXFIL"
+      ],
+      "findingCounts": {
+        "AUTO_UPDATE": 5,
+        "DYNAMIC_CODE_EXECUTION": 1,
+        "DYNAMIC_MODULE_LOADING": 17,
+        "FILE_READ_ACCESS": 4,
+        "FILE_WRITE_ACCESS": 13,
+        "NET_EXFIL_UNRESTRICTED": 12,
+        "NETWORK_ACCESS": 32,
+        "PROMPT_INJECTION": 7,
+        "READ_ENV_SECRETS": 75,
+        "READ_KEYCHAIN": 9,
+        "READ_SSH_KEYS": 17,
+        "SHELL_EXEC": 291,
+        "SUSPICIOUS_IP": 37,
+        "TROJAN_DISTRIBUTION": 1,
+        "WEBHOOK_EXFIL": 1
+      },
+      "generatedFindingCounts": {}
+    }
+  ]
+}

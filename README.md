@@ -164,6 +164,8 @@ Phase 1.3 localizes compound `AUTO_UPDATE` evidence around the matched update be
 
 Phase 1.4 separates eval-like `DYNAMIC_CODE_EXECUTION` from encoded or packed-code `OBFUSCATION`. DSH reports aggregate repeated matches by rule and file, retain the total occurrence count, and keep generated runtime bundles security-relevant instead of treating source maps as proof of safety.
 
+The Phase 1 release candidate freezes those rule semantics and adds an exact-commit real-world regression gate. See [the RC acceptance plan](docs/dsh-phase1-rc.md) and [benchmark policy](benchmarks/dsh/README.md).
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
