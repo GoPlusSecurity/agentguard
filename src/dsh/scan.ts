@@ -37,20 +37,29 @@ function humanMessage(tag: RiskTag): string {
 }
 
 function toFindings(evidence: ScanEvidence[]): DshFinding[] {
+  const findings = new Map<string, DshFinding>();
   const seen = new Set<string>();
-  return evidence.filter(item => {
-    const key = `${item.tag}\0${item.file}\0${item.line}\0${item.match}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map(item => ({
-    ruleId: item.tag,
-    severity: severityFor(item.tag),
-    file: item.file,
-    line: item.line || undefined,
-    message: humanMessage(item.tag),
-    snippet: item.match,
-  }));
+  for (const item of evidence) {
+    const evidenceKey = `${item.tag}\0${item.file}\0${item.line}\0${item.match}`;
+    if (seen.has(evidenceKey)) continue;
+    seen.add(evidenceKey);
+    const key = `${item.tag}\0${item.file}`;
+    const existing = findings.get(key);
+    if (existing) {
+      existing.occurrenceCount = (existing.occurrenceCount ?? 1) + 1;
+      continue;
+    }
+    findings.set(key, {
+      ruleId: item.tag,
+      severity: severityFor(item.tag),
+      file: item.file,
+      line: item.line || undefined,
+      message: humanMessage(item.tag),
+      snippet: item.match,
+      occurrenceCount: 1,
+    });
+  }
+  return [...findings.values()];
 }
 
 function calculateDshRisk(tags: RiskTag[]): RiskLevel {
@@ -58,7 +67,8 @@ function calculateDshRisk(tags: RiskTag[]): RiskLevel {
   if ([...unique].some(tag => severityFor(tag) === 'critical')) return 'critical';
   const criticalCombination = unique.has('INSTALL_SCRIPT')
     && (unique.has('SHELL_EXEC') || unique.has('REMOTE_LOADER'))
-    && (unique.has('READ_ENV_SECRETS') || unique.has('OBFUSCATION') || unique.has('NETWORK_ACCESS'));
+    && (unique.has('READ_ENV_SECRETS') || unique.has('DYNAMIC_CODE_EXECUTION')
+      || unique.has('OBFUSCATION') || unique.has('NETWORK_ACCESS'));
   if (criticalCombination) return 'critical';
   return [...unique].reduce<RiskLevel>((current, tag) => {
     const severity = severityFor(tag);
@@ -84,6 +94,7 @@ function buildSummary(
   if (tags.length === 0) return 'DSH project detected; no security-relevant capabilities were found by the current static rules.';
   const capabilityLabels: Partial<Record<RiskTag, string>> = {
     SHELL_EXEC: 'shell execution',
+    DYNAMIC_CODE_EXECUTION: 'dynamic code execution',
     DYNAMIC_MODULE_LOADING: 'dynamic local or package module loading',
     FILE_WRITE_ACCESS: 'file writes',
     FILE_READ_ACCESS: 'file reads',

@@ -22,6 +22,14 @@ describe('Scanner Rules', () => {
     assert.equal(remote?.severity, 'critical');
   });
 
+  it('distinguishes dynamic code execution from encoded or packed code', () => {
+    const dynamicExecution = getRuleById('DYNAMIC_CODE_EXECUTION');
+    const obfuscation = getRuleById('OBFUSCATION');
+    assert.equal(dynamicExecution?.severity, 'high');
+    assert.equal(obfuscation?.severity, 'high');
+    assert.notEqual(dynamicExecution?.description, obfuscation?.description);
+  });
+
   it('should filter rules by severity', () => {
     const critical = getRulesBySeverity('critical');
     assert.ok(critical.length > 0, 'Should have critical rules');

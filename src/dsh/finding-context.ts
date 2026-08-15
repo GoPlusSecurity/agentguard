@@ -99,7 +99,8 @@ export function calculateReviewPriority(
   if (runtimeRisk === 'critical'
     && runtimeTags.includes('INSTALL_SCRIPT')
     && (runtimeTags.includes('SHELL_EXEC') || runtimeTags.includes('REMOTE_LOADER'))
-    && (runtimeTags.includes('NETWORK_ACCESS') || runtimeTags.includes('READ_ENV_SECRETS') || runtimeTags.includes('OBFUSCATION'))) {
+    && (runtimeTags.includes('NETWORK_ACCESS') || runtimeTags.includes('READ_ENV_SECRETS')
+      || runtimeTags.includes('DYNAMIC_CODE_EXECUTION') || runtimeTags.includes('OBFUSCATION'))) {
     return 'urgent';
   }
   if (runtimeRisk === 'critical' || runtimeTags.includes('DSH_PATCH_OVERRIDE')) return 'high';

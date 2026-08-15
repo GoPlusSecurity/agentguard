@@ -180,6 +180,7 @@ export class SkillScanner {
       'credential-access': 'READ_KEYCHAIN',
       'data-exfiltration': 'NET_EXFIL_UNRESTRICTED',
       'webhook-exfil': 'WEBHOOK_EXFIL',
+      'dynamic-code-execution': 'DYNAMIC_CODE_EXECUTION',
       'obfuscation': 'OBFUSCATION',
       'prompt-injection': 'PROMPT_INJECTION',
       'private-key': 'PRIVATE_KEY_PATTERN',
@@ -360,7 +361,8 @@ export class SkillScanner {
 
     const parts: string[] = [];
 
-    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER') || tags.has('DYNAMIC_MODULE_LOADING')) {
+    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')
+      || tags.has('DYNAMIC_MODULE_LOADING') || tags.has('DYNAMIC_CODE_EXECUTION')) {
       parts.push('code execution capabilities');
     }
     if (tags.has('PRIVATE_KEY_PATTERN') || tags.has('MNEMONIC_PATTERN')) {

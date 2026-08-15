@@ -44,8 +44,10 @@ export function renderDshMarkdown(report: DshPluginScanReport): string {
     .join('\n');
   const findings = report.findings.length > 0
     ? report.findings.map(finding => {
-      const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
-      return `| ${finding.severity.toUpperCase()} | ${markdownEscape(finding.ruleId)} | ${markdownEscape(location)} | ${finding.sourceCategory ?? 'unknown'} | ${finding.runtimeRelevance ?? 'unknown'} | ${finding.likelyGenerated ? 'Yes' : 'No'} | ${markdownEscape(finding.message)} |`;
+      const count = finding.occurrenceCount ?? 1;
+      const location = `${finding.line ? `${finding.file}:${finding.line}` : finding.file}${count > 1 ? ` (+${count - 1} more)` : ''}`;
+      const rule = `${finding.ruleId}${count > 1 ? ` × ${count}` : ''}`;
+      return `| ${finding.severity.toUpperCase()} | ${markdownEscape(rule)} | ${markdownEscape(location)} | ${finding.sourceCategory ?? 'unknown'} | ${finding.runtimeRelevance ?? 'unknown'} | ${finding.likelyGenerated ? 'Yes' : 'No'} | ${markdownEscape(finding.message)} |`;
     }).join('\n')
     : '| — | — | — | — | — | — | No findings |';
   const signals = report.detection.signals.length > 0
@@ -117,11 +119,14 @@ export function renderDshHtml(report: DshPluginScanReport): string {
       <strong>${enabled ? 'Detected' : 'Not detected'}</strong>
     </div>`).join('');
   const findings = report.findings.length > 0
-    ? report.findings.map(finding => `
+    ? report.findings.map(finding => {
+      const count = finding.occurrenceCount ?? 1;
+      return `
       <article class="finding">
         <span class="severity ${htmlEscape(finding.severity)}">${htmlEscape(finding.severity)}</span>
-        <div><strong>${htmlEscape(finding.ruleId)}</strong><p>${htmlEscape(finding.message)}</p><p class="finding-context">${htmlEscape(finding.sourceCategory ?? 'unknown')} · runtime ${htmlEscape(finding.runtimeRelevance ?? 'unknown')}${finding.likelyGenerated ? ' · likely generated' : ''}</p><code>${htmlEscape(finding.file)}${finding.line ? `:${finding.line}` : ''}</code>${finding.snippet ? `<pre>${htmlEscape(finding.snippet)}</pre>` : ''}</div>
-      </article>`).join('')
+        <div><strong>${htmlEscape(finding.ruleId)}${count > 1 ? ` × ${count}` : ''}</strong><p>${htmlEscape(finding.message)}</p><p class="finding-context">${htmlEscape(finding.sourceCategory ?? 'unknown')} · runtime ${htmlEscape(finding.runtimeRelevance ?? 'unknown')}${finding.likelyGenerated ? ' · likely generated' : ''}</p><code>${htmlEscape(finding.file)}${finding.line ? `:${finding.line}` : ''}${count > 1 ? ` (+${count - 1} more)` : ''}</code>${finding.snippet ? `<pre>${htmlEscape(finding.snippet)}</pre>` : ''}</div>
+      </article>`;
+    }).join('')
     : '<p class="empty">No findings from the current static rules.</p>';
   const signals = report.detection.signals.map(signal => `<li>${htmlEscape(signal)}</li>`).join('');
   const impacts = report.impactLayers.map(layer => `<span class="chip">${htmlEscape(layer)}</span>`).join('');

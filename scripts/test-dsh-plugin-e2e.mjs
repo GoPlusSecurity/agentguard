@@ -13,6 +13,7 @@ const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/d
 const safeFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/safe-theme');
 const localLoaderFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/data-local-loader');
 const vendoredLibraryFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/vendored-static-library');
+const generatedRuntimeFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/generated-runtime');
 
 await Promise.all([
   access(dshBin),
@@ -20,6 +21,7 @@ await Promise.all([
   access(safeFixture),
   access(localLoaderFixture),
   access(vendoredLibraryFixture),
+  access(generatedRuntimeFixture),
 ]);
 
 const env = { ...process.env, DSH_HOME: dshHome, DSH_TELEMETRY_MODE: 'DISABLED' };
@@ -56,6 +58,13 @@ const vendoredLibraryReport = JSON.parse(vendoredLibraryScan.content);
 assert.equal(vendoredLibraryScan.riskLevel, 'high');
 assert.equal(vendoredLibraryScan.runtimeSurfaceRiskLevel, 'high');
 assert.ok(!vendoredLibraryReport.riskTags.includes('AUTO_UPDATE'));
+
+const generatedRuntimeScan = await registered.execute({ target: generatedRuntimeFixture, format: 'json' });
+const generatedRuntimeReport = JSON.parse(generatedRuntimeScan.content);
+assert.ok(generatedRuntimeReport.runtimeSurfaceRiskTags.includes('DYNAMIC_CODE_EXECUTION'));
+assert.ok(!generatedRuntimeReport.runtimeSurfaceRiskTags.includes('OBFUSCATION'));
+assert.ok(generatedRuntimeReport.findings.some(finding =>
+  finding.ruleId === 'DYNAMIC_CODE_EXECUTION' && finding.occurrenceCount === 1 && finding.likelyGenerated));
 
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
@@ -104,6 +113,7 @@ try {
     reviewPriority: scan.reviewPriority,
     localDynamicLoadingRisk: localLoaderScan.runtimeSurfaceRiskLevel,
     vendoredLibraryAutoUpdate: vendoredLibraryReport.riskTags.includes('AUTO_UPDATE'),
+    generatedRuntimeTag: generatedRuntimeReport.runtimeSurfaceRiskTags.includes('DYNAMIC_CODE_EXECUTION'),
   }));
 } finally {
   child.kill('SIGTERM');

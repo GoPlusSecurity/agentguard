@@ -162,6 +162,8 @@ Phase 1.2 treats active `SKILL.md` and agent-instruction files as runtime-releva
 
 Phase 1.3 localizes compound `AUTO_UPDATE` evidence around the matched update behavior. Large bundled or third-party JavaScript files no longer become critical merely because unrelated network and execution tokens appear elsewhere in the same file; executable files under `assets/` remain visible to prevent path-based evasion.
 
+Phase 1.4 separates eval-like `DYNAMIC_CODE_EXECUTION` from encoded or packed-code `OBFUSCATION`. DSH reports aggregate repeated matches by rule and file, retain the total occurrence count, and keep generated runtime bundles security-relevant instead of treating source maps as proof of safety.
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
@@ -352,7 +354,7 @@ The report is a self-contained HTML file that opens automatically in your browse
 | **Execution** | SHELL_EXEC, DYNAMIC_MODULE_LOADING, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
 | **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, MNEMONIC_PATTERN | MEDIUM-CRITICAL |
 | **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
-| **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
+| **Dynamic execution and obfuscation** | DYNAMIC_CODE_EXECUTION, OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
 | **Web3** | WALLET_DRAINING, UNLIMITED_APPROVAL, DANGEROUS_SELFDESTRUCT, HIDDEN_TRANSFER, PROXY_UPGRADE, FLASH_LOAN_RISK, REENTRANCY_PATTERN, SIGNATURE_REPLAY | MEDIUM-CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM-CRITICAL |
 

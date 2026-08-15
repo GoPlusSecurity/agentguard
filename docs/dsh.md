@@ -263,6 +263,8 @@ Ordinary README discussion and inert management-CLI strings do not become prompt
 
 Phase 1.3 requires the remote-acquisition and install/execute sides of `AUTO_UPDATE` to occur near the matched update behavior. This prevents file-wide keyword co-occurrence in large generated or vendored libraries from producing a critical update finding. An executable asset remains runtime-relevant, however: the scanner narrows the compound rule instead of trusting an `assets/` directory name as a security boundary.
 
+Phase 1.4 separates two previously conflated signals: `DYNAMIC_CODE_EXECUTION` covers eval-like execution primitives, while `OBFUSCATION` covers strong encoded or packed-code indicators. DSH findings with the same rule and file are represented once with an `occurrenceCount`; Markdown and HTML display the total as `× N`. Aggregation reduces report noise but does not reduce severity, and a generated runtime bundle remains runtime-relevant.
+
 | Risk | Typical meaning | Default recommendation |
 |---|---|---|
 | Low | No security-relevant capability was detected. | `safe-to-try` |
@@ -297,7 +299,7 @@ The top-level report is `DshPluginScanReport`:
 | `reviewPriority` | `routine`, `elevated`, `high`, or `urgent`; orders human review and does not claim malicious intent. |
 | `capabilityProfile` | Static effective-capability booleans. |
 | `impactLayers` | DSH runtime areas the artifact can influence. |
-| `findings` | Rule, severity, file, line, explanation, snippet, source category, runtime relevance, and likely-generated marker. |
+| `findings` | Rule, severity, representative file/line/snippet, aggregated occurrence count, source category, runtime relevance, and likely-generated marker. |
 | `installRecommendation` | Suggested isolation or review posture. |
 | `summary` | Short human-readable decision summary. |
 | `harmlessMismatch` | Whether a benign UI label conflicts with elevated behavior. |

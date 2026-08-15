@@ -297,14 +297,34 @@ describe('DSH plugin scanner', () => {
     const root = await fixture({
       'package.json': JSON.stringify({ name: 'dsh-generated-runtime', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
       'cordis.patch.yml': '- insert:\n    - id: generated-runtime\n      name: ./lib/index.js\n',
-      'lib/index.js': 'export function run(input) { return eval(input) }\n',
+      'lib/index.js': [
+        'export function run(input) { return eval(input) }',
+        'export function runAgain(input) { return eval(input) }',
+        'export function runThird(input) { return eval(input) }',
+      ].join('\n'),
       'lib/index.js.map': '{}\n',
     });
     const report = await scanDshPlugin(root);
-    const finding = report.findings.find(item => item.ruleId === 'OBFUSCATION');
+    const finding = report.findings.find(item => item.ruleId === 'DYNAMIC_CODE_EXECUTION');
     assert.equal(finding?.sourceCategory, 'runtime');
     assert.equal(finding?.runtimeRelevance, 'direct');
     assert.equal(finding?.likelyGenerated, true);
+    assert.equal(finding?.occurrenceCount, 3);
+    assert.equal(report.riskTags.includes('OBFUSCATION'), false);
+    assert.match(renderDshMarkdown(report), /DYNAMIC_CODE_EXECUTION × 3/);
+    assert.match(renderDshHtml(report), /DYNAMIC_CODE_EXECUTION × 3/);
+    assert.equal(report.runtimeSurfaceRiskLevel, 'high');
+  });
+
+  it('keeps encoded or packed code distinct from dynamic execution primitives', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-encoded-code', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: encoded-code\n      name: ./index.js\n',
+      'index.js': String.raw`export const encoded = '\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c'`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.riskTags.includes('OBFUSCATION'), true);
+    assert.equal(report.riskTags.includes('DYNAMIC_CODE_EXECUTION'), false);
     assert.equal(report.runtimeSurfaceRiskLevel, 'high');
   });
 

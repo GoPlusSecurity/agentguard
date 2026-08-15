@@ -112,6 +112,8 @@ export interface DshFinding {
   line?: number;
   message: string;
   snippet?: string;
+  /** Number of equivalent rule matches aggregated for this file. */
+  occurrenceCount?: number;
   sourceCategory?: DshFindingSource;
   runtimeRelevance?: DshRuntimeRelevance;
   likelyGenerated?: boolean;

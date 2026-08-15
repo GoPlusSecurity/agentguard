@@ -5,8 +5,8 @@ import type { ScanRule } from '../../types/scanner.js';
  */
 export const OBFUSCATION_RULES: ScanRule[] = [
   {
-    id: 'OBFUSCATION',
-    description: 'Detects dynamic code execution or strong code-obfuscation indicators',
+    id: 'DYNAMIC_CODE_EXECUTION',
+    description: 'Detects eval-like dynamic code execution primitives',
     severity: 'high',
     file_patterns: ['*.js', '*.ts', '*.mjs', '*.py'],
     patterns: [
@@ -15,13 +15,20 @@ export const OBFUSCATION_RULES: ScanRule[] = [
       /new\s+Function\s*\(/,
       /setTimeout\s*\(\s*['"`]/,
       /setInterval\s*\(\s*['"`]/,
+      // Python eval/exec
+      /(?<!\.)\bexec\s*\(/,
+      /\bcompile\s*\([^)]+,\s*['"`]<[^>]+>['"`],\s*['"`]exec['"`]\s*\)/,
+    ],
+  },
+  {
+    id: 'OBFUSCATION',
+    description: 'Detects strong encoded or packed-code indicators',
+    severity: 'high',
+    file_patterns: ['*.js', '*.ts', '*.mjs', '*.py'],
+    patterns: [
       // Base64 decode + execute
       /atob\s*\([^)]+\).*eval/,
       /Buffer\.from\s*\([^,]+,\s*['"`]base64['"`]\s*\).*eval/,
-      // Python eval/exec
-      /(?<!\.)\bexec\s*\(/,
-      /\beval\s*\(/,
-      /\bcompile\s*\([^)]+,\s*['"`]<[^>]+>['"`],\s*['"`]exec['"`]\s*\)/,
       // Hex encoding patterns
       /\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){10,}/,
       // Unicode encoding patterns

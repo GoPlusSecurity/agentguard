@@ -21,7 +21,8 @@ export type RiskTag =
   // Data exfiltration risks
   | 'NET_EXFIL_UNRESTRICTED'
   | 'WEBHOOK_EXFIL'
-  // Code obfuscation
+  // Dynamic execution and code obfuscation
+  | 'DYNAMIC_CODE_EXECUTION'
   | 'OBFUSCATION'
   // Prompt injection
   | 'PROMPT_INJECTION'

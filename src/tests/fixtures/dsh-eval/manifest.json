@@ -47,7 +47,8 @@
     "expectedRecommendation": "sandbox-only",
     "expectedRuntimeRisk": "high",
     "expectedReviewPriority": "elevated",
-    "mustContainTags": ["OBFUSCATION"]
+    "mustContainTags": ["DYNAMIC_CODE_EXECUTION"],
+    "mustNotContainTags": ["OBFUSCATION"]
   },
   {
     "name": "test-only-shell",
