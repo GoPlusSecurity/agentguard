@@ -7,6 +7,12 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const GITHUB_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
 
+/** Normalize the exact HTTPS GitHub repository forms supported by Phase 1. */
+export function normalizeGithubRepositoryUrl(input: string): string | undefined {
+  const match = input.match(GITHUB_REPO);
+  return match ? `https://github.com/${match[1]}/${match[2]}.git` : undefined;
+}
+
 export interface ResolvedDshSource {
   rootDir: string;
   kind: 'local' | 'github';
@@ -55,11 +61,10 @@ async function requireGitForGithubScan(): Promise<void> {
 
 /** Resolve a local directory or HTTPS GitHub repository into a scan directory. */
 export async function resolveDshSource(input: string): Promise<ResolvedDshSource> {
-  const github = input.match(GITHUB_REPO);
-  if (github) {
+  const repositoryUrl = normalizeGithubRepositoryUrl(input);
+  if (repositoryUrl) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'agentguard-dsh-'));
     const rootDir = join(tempRoot, 'repo');
-    const repositoryUrl = `https://github.com/${github[1]}/${github[2]}.git`;
     try {
       await requireGitForGithubScan();
       const expectedRevision = await resolveGithubHead(repositoryUrl);

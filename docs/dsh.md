@@ -45,7 +45,7 @@ agentguard dsh-scan <local-directory-or-github-url> [options]
 Supported inputs:
 
 - A local plugin, bundle, or profile directory.
-- An HTTPS GitHub URL in `https://github.com/owner/repository` form.
+- An HTTPS GitHub URL in `https://github.com/owner/repository`, `https://github.com/owner/repository.git`, or either form with one trailing slash.
 
 Options:
 
@@ -249,7 +249,7 @@ The top-level report is `DshPluginScanReport`:
 | `summary` | Short human-readable decision summary. |
 | `harmlessMismatch` | Whether a benign UI label conflicts with elevated behavior. |
 | `source` | Original input, source kind, resolved reference, revision, and commit time. |
-| `project` | Description, repository metadata, DSH manifest signals, and informational install-documentation presence. `hasInstallInstructions` never affects risk or recommendations. |
+| `project` | Description, repository metadata, DSH manifest signals, and informational README install-documentation presence. `hasReadmeInstallInstructions` never affects risk or recommendations. |
 | `diagnostics` | Non-fatal Cordis parse errors. |
 
 The artifact hash is computed from the scanned files. Consumers should use it with the source revision when recording an approval because a repository name or package version alone does not identify immutable content.

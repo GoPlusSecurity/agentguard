@@ -75,22 +75,30 @@ function collectRows(
   value: unknown,
   file: string,
   defaultOperation: 'entry' | 'replace' = basename(file).includes('.patch.') ? 'replace' : 'entry',
+  context = 'document root',
 ): DshCordisRow[] {
   const rows: DshCordisRow[] = [];
-  if (!isSeq(value)) return rows;
-  for (const item of value.items) {
-    if (!isMap(item)) continue;
+  if (!isSeq(value)) throw new Error(`Expected a Cordis row sequence at ${context}`);
+  for (const [index, item] of value.items.entries()) {
+    if (!isMap(item)) throw new Error(`Expected a Cordis row mapping at ${context}[${index}]`);
     const insertedRows = mapValue(item, 'insert');
-    if (isSeq(insertedRows)) {
-      for (const inserted of insertedRows.items) {
-        if (isMap(inserted)) addRow(rows, inserted, file, 'insert');
+    if (insertedRows !== undefined) {
+      if (!isSeq(insertedRows)) throw new Error(`Expected insert to be a sequence at ${context}[${index}]`);
+      for (const [insertIndex, inserted] of insertedRows.items.entries()) {
+        if (!isMap(inserted)) {
+          throw new Error(`Expected an inserted Cordis row mapping at ${context}[${index}].insert[${insertIndex}]`);
+        }
+        addRow(rows, inserted, file, 'insert');
       }
       continue;
     }
     addRow(rows, item, file, defaultOperation);
     const config = mapValue(item, 'config');
     if (isMap(config)) {
-      rows.push(...collectRows(mapValue(config, 'patches'), file, 'replace'));
+      const patches = mapValue(config, 'patches');
+      if (patches !== undefined) {
+        rows.push(...collectRows(patches, file, 'replace', `${context}[${index}].config.patches`));
+      }
     }
   }
   return rows;

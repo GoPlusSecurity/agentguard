@@ -34,11 +34,16 @@ export function hasHarmlessCapabilityMismatch(
 ): boolean {
   const label = `${detection.package.name ?? ''} ${detection.package.description ?? ''}`;
   const looksHarmless = kind === 'theme' || kind === 'ui' || HARMLESS_LABEL.test(label);
-  return looksHarmless && (
-    capabilities.shellExec
-    || capabilities.networkAccess
-    || capabilities.envAccess
-    || capabilities.fileWrite
-    || capabilities.runtimeMutation
-  );
+  return looksHarmless && unexpectedHarmlessCapabilities(capabilities).length > 0;
+}
+
+/** High-risk capabilities that are unexpected for a benign-looking UI extension. */
+export function unexpectedHarmlessCapabilities(capabilities: DshCapabilityProfile): Array<keyof DshCapabilityProfile> {
+  const unexpected: Array<keyof DshCapabilityProfile> = [];
+  if (capabilities.shellExec) unexpected.push('shellExec');
+  if (capabilities.fileWrite) unexpected.push('fileWrite');
+  if (capabilities.runtimeMutation) unexpected.push('runtimeMutation');
+  // Network-only UI behavior can be legitimate; environment access plus network can exfiltrate secrets.
+  if (capabilities.envAccess && capabilities.networkAccess) unexpected.push('envAccess', 'networkAccess');
+  return unexpected;
 }

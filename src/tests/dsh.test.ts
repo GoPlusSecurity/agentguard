@@ -9,6 +9,7 @@ import { parseCordisConfigs } from '../dsh/parse-cordis-patch.js';
 import { scanDshPlugin } from '../dsh/scan.js';
 import { renderDshHtml, renderDshMarkdown } from '../reports/dsh-report.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
+import { normalizeGithubRepositoryUrl } from '../dsh/source.js';
 
 const roots: string[] = [];
 
@@ -91,6 +92,15 @@ describe('DSH project detection and parsing', () => {
     assert.equal(parsed.rows.length, 0);
     assert.match(parsed.parseErrors[0]?.message ?? '', /depth limit/);
   });
+
+  it('reports malformed Cordis row structures instead of silently skipping them', async () => {
+    const root = await fixture({
+      'cordis.yml': `- id: valid-looking\n- not-a-row\n`,
+    });
+    const parsed = await parseCordisConfigs(root);
+    assert.equal(parsed.rows.length, 0);
+    assert.match(parsed.parseErrors[0]?.message ?? '', /row mapping/);
+  });
 });
 
 describe('DSH plugin scanner', () => {
@@ -109,7 +119,7 @@ describe('DSH plugin scanner', () => {
     assert.equal(report.riskLevel, 'low');
     assert.equal(report.capabilityProfile.uiInjection, true);
     assert.equal(report.harmlessMismatch, false);
-    assert.equal(report.project.hasInstallInstructions, true);
+    assert.equal(report.project.hasReadmeInstallInstructions, true);
   });
 
   it('escalates a deceptive theme with install, shell, network, and env access', async () => {
@@ -132,6 +142,18 @@ describe('DSH plugin scanner', () => {
     assert.ok(report.riskTags.includes('DSH_THEME_ELEVATED_CAPABILITY'));
     assert.equal(report.installRecommendation, 'expert-review-required');
     assert.match(report.summary, /inconsistent with its UI\/theme purpose/);
+    const mismatch = report.findings.find(finding => finding.ruleId === 'DSH_THEME_ELEVATED_CAPABILITY');
+    assert.match(mismatch?.snippet ?? '', /shellExec/);
+  });
+
+  it('does not flag expected network-only behavior as a deceptive theme mismatch', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'remote-wallpaper-theme', dsh: { client: { platform: 'web' } } }),
+      'src/index.ts': `export async function load() { return fetch('https://example.com/theme.json') }\n`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.harmlessMismatch, false);
+    assert.equal(report.riskLevel, 'medium');
   });
 
   it('classifies tool mutation and file writes as high risk', async () => {
@@ -234,5 +256,15 @@ describe('DSH report rendering', () => {
     assert.equal(result.status, 0, result.stderr);
     const report = JSON.parse(await readFile(output, 'utf8')) as { schemaVersion?: number };
     assert.equal(report.schemaVersion, 1);
+  });
+});
+
+describe('DSH GitHub source normalization', () => {
+  it('accepts documented repository URL forms and rejects repository subpaths', () => {
+    const canonical = 'https://github.com/owner/repository.git';
+    assert.equal(normalizeGithubRepositoryUrl('https://github.com/owner/repository'), canonical);
+    assert.equal(normalizeGithubRepositoryUrl('https://github.com/owner/repository.git'), canonical);
+    assert.equal(normalizeGithubRepositoryUrl('https://github.com/owner/repository/'), canonical);
+    assert.equal(normalizeGithubRepositoryUrl('https://github.com/owner/repository/tree/main'), undefined);
   });
 });

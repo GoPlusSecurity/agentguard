@@ -7,7 +7,11 @@ import { DSH_RULES } from '../scanner/rules/dsh/index.js';
 import type { RiskLevel, RiskTag, ScanEvidence, ScanRule } from '../types/scanner.js';
 import { buildCapabilityProfile } from './capability-profile.js';
 import { classifyImpactLayers } from './classify-impact.js';
-import { classifyDshPlugin, hasHarmlessCapabilityMismatch } from './classify-plugin.js';
+import {
+  classifyDshPlugin,
+  hasHarmlessCapabilityMismatch,
+  unexpectedHarmlessCapabilities,
+} from './classify-plugin.js';
 import { detectDshPlugin } from './detect.js';
 import { resolveDshSource } from './source.js';
 import type {
@@ -98,8 +102,8 @@ function buildSummary(
   return `${risk.toUpperCase()} risk: ${prioritizedReasons.join(', ') || 'security-relevant behavior detected'}.${mismatchText}`;
 }
 
-async function hasInstallInstructions(rootDir: string): Promise<boolean> {
-  for (const file of ['README.md', 'README.zh.md', 'readme.md']) {
+async function hasReadmeInstallInstructions(rootDir: string): Promise<boolean> {
+  for (const file of ['README.md', 'README.mdx', 'README.zh.md', 'README.zh-CN.md', 'readme.md']) {
     try {
       const path = join(rootDir, file);
       if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) continue;
@@ -145,12 +149,14 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
     const harmlessMismatch = hasHarmlessCapabilityMismatch(detection, pluginKind, capabilityProfile);
     const findings = toFindings(scan.evidence);
     if (harmlessMismatch) {
+      const unexpected = unexpectedHarmlessCapabilities(capabilityProfile);
       riskTags.push('DSH_THEME_ELEVATED_CAPABILITY');
       findings.push({
         ruleId: 'DSH_THEME_ELEVATED_CAPABILITY',
         severity: 'high',
         file: 'package.json',
-        message: 'Looks harmless, but requests elevated capabilities',
+        message: `Benign-looking UI purpose conflicts with unexpected capabilities: ${unexpected.join(', ')}`,
+        snippet: `name=${JSON.stringify(detection.package.name ?? '')}; capabilities=${unexpected.join(',')}`,
       });
     }
     const riskLevel = calculateDshRisk(riskTags);
@@ -196,7 +202,7 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
       project: {
         description: detection.package.description,
         repositoryUrl: detection.package.repositoryUrl ?? source.repositoryUrl,
-        hasInstallInstructions: await hasInstallInstructions(source.rootDir),
+        hasReadmeInstallInstructions: await hasReadmeInstallInstructions(source.rootDir),
         manifest: {
           bundle: Boolean(detection.package.bundlePatch),
           profile: detection.package.profileBundles.length > 0,

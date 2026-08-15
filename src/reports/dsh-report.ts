@@ -87,7 +87,7 @@ ${findings}
 - Description: ${report.project.description ?? 'Not provided'}
 - Repository: ${report.project.repositoryUrl ?? 'Local directory'}
 - Last commit: ${report.source.lastCommitAt ?? 'Unknown'}
-- Install instructions: ${report.project.hasInstallInstructions ? 'Found' : 'Not found'}
+- README install instructions: ${report.project.hasReadmeInstallInstructions ? 'Found' : 'Not found'}
 - Cordis files: ${report.project.manifest.cordisFiles.join(', ') || 'None'}
 - Artifact hash: ${report.identity.artifactHash ?? 'Unknown'}
 - Scanned at: ${report.scannedAt}
