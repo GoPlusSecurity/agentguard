@@ -41,6 +41,18 @@ async function resolveGithubHead(repositoryUrl: string): Promise<string> {
   return revision.toLowerCase();
 }
 
+async function requireGitForGithubScan(): Promise<void> {
+  try {
+    await execFileAsync('git', ['--version'], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new Error('GitHub repository scans require git, but no git executable was found in PATH');
+    }
+    throw new Error(`Unable to run git for GitHub repository scan: ${(error as Error).message}`);
+  }
+}
+
 /** Resolve a local directory or HTTPS GitHub repository into a scan directory. */
 export async function resolveDshSource(input: string): Promise<ResolvedDshSource> {
   const github = input.match(GITHUB_REPO);
@@ -49,6 +61,7 @@ export async function resolveDshSource(input: string): Promise<ResolvedDshSource
     const rootDir = join(tempRoot, 'repo');
     const repositoryUrl = `https://github.com/${github[1]}/${github[2]}.git`;
     try {
+      await requireGitForGithubScan();
       const expectedRevision = await resolveGithubHead(repositoryUrl);
       await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'init', rootDir], { timeout: 10_000 });
       await execFileAsync('git', ['-C', rootDir, 'remote', 'add', 'origin', repositoryUrl], { timeout: 10_000 });
@@ -76,7 +89,7 @@ export async function resolveDshSource(input: string): Promise<ResolvedDshSource
       };
     } catch (error) {
       await rm(tempRoot, { recursive: true, force: true });
-      throw new Error(`Failed to clone GitHub repository: ${(error as Error).message}`);
+      throw new Error(`Failed to fetch GitHub repository: ${(error as Error).message}`);
     }
   }
 

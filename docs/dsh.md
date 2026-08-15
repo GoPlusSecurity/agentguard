@@ -249,7 +249,7 @@ The top-level report is `DshPluginScanReport`:
 | `summary` | Short human-readable decision summary. |
 | `harmlessMismatch` | Whether a benign UI label conflicts with elevated behavior. |
 | `source` | Original input, source kind, resolved reference, revision, and commit time. |
-| `project` | Description, repository metadata, DSH manifest signals, and install-documentation presence. |
+| `project` | Description, repository metadata, DSH manifest signals, and informational install-documentation presence. `hasInstallInstructions` never affects risk or recommendations. |
 | `diagnostics` | Non-fatal Cordis parse errors. |
 
 The artifact hash is computed from the scanned files. Consumers should use it with the source revision when recording an approval because a repository name or package version alone does not identify immutable content.
@@ -264,6 +264,7 @@ The scanner treats its input as untrusted:
 - GitHub clones do not initialize submodules or run repository hooks.
 - Individual scan files are limited to 2 MiB.
 - A scan considers at most 10,000 matching files.
+- Cordis ASTs are limited to 20,000 nodes and 64 levels, and only required map/sequence fields are read without materializing the document through `toJS()`.
 - Common dependency, build, VCS, coverage, lockfile, and binary paths are skipped.
 - HTML report values are escaped before rendering.
 

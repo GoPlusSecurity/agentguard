@@ -134,6 +134,7 @@ export interface DshPluginScanReport {
   project: {
     description?: string;
     repositoryUrl?: string;
+    /** Informational README metadata only; never used for risk or installation recommendations. */
     hasInstallInstructions: boolean;
     manifest: {
       bundle: boolean;

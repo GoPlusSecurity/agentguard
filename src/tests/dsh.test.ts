@@ -80,6 +80,17 @@ describe('DSH project detection and parsing', () => {
     assert.equal(parsed.rows[0]?.disabled, false);
     assert.equal(parsed.rows[0]?.hasConfig, true);
   });
+
+  it('rejects deeply nested Cordis ASTs before recursive row collection', async () => {
+    let nested = '- id: leaf\n';
+    for (let index = 0; index < 70; index += 1) {
+      nested = `- id: level-${index}\n  config:\n    patches:\n${nested.split('\n').filter(Boolean).map(line => `      ${line}`).join('\n')}\n`;
+    }
+    const root = await fixture({ 'cordis.yml': nested });
+    const parsed = await parseCordisConfigs(root);
+    assert.equal(parsed.rows.length, 0);
+    assert.match(parsed.parseErrors[0]?.message ?? '', /depth limit/);
+  });
 });
 
 describe('DSH plugin scanner', () => {
@@ -120,6 +131,7 @@ describe('DSH plugin scanner', () => {
     assert.ok(report.riskTags.includes('READ_ENV_SECRETS'));
     assert.ok(report.riskTags.includes('DSH_THEME_ELEVATED_CAPABILITY'));
     assert.equal(report.installRecommendation, 'expert-review-required');
+    assert.match(report.summary, /inconsistent with its UI\/theme purpose/);
   });
 
   it('classifies tool mutation and file writes as high risk', async () => {

@@ -86,11 +86,16 @@ function buildSummary(
     DSH_TOOL_REGISTRY_MUTATION: 'tool pipeline changes',
     DSH_PROVIDER_MUTATION: 'model/provider changes',
     DSH_RUNTIME_MUTATION: 'runtime lifecycle changes',
+    DSH_THEME_ELEVATED_CAPABILITY: 'elevated capabilities inconsistent with its UI/theme purpose',
   };
   const reasons = tags.map(tag => capabilityLabels[tag]).filter((value): value is string => Boolean(value));
-  const uniqueReasons = [...new Set(reasons)].slice(0, 4);
+  const uniqueReasons = [...new Set(reasons)];
+  const mismatchReason = capabilityLabels.DSH_THEME_ELEVATED_CAPABILITY!;
+  const prioritizedReasons = mismatch
+    ? [mismatchReason, ...uniqueReasons.filter(reason => reason !== mismatchReason)].slice(0, 4)
+    : uniqueReasons.slice(0, 4);
   const mismatchText = mismatch ? ' Its benign-looking purpose does not match the elevated capabilities it requests.' : '';
-  return `${risk.toUpperCase()} risk: ${uniqueReasons.join(', ') || 'security-relevant behavior detected'}.${mismatchText}`;
+  return `${risk.toUpperCase()} risk: ${prioritizedReasons.join(', ') || 'security-relevant behavior detected'}.${mismatchText}`;
 }
 
 async function hasInstallInstructions(rootDir: string): Promise<boolean> {

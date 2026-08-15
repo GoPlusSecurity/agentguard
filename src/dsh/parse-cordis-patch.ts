@@ -1,32 +1,73 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { glob } from 'glob';
-import { parseDocument, type ScalarTag } from 'yaml';
+import {
+  isMap,
+  isNode,
+  isPair,
+  isScalar,
+  isSeq,
+  parseDocument,
+  type ScalarTag,
+  type YAMLMap,
+} from 'yaml';
 import type { DshCordisAnalysis, DshCordisRow } from './types.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
 
 const CORDIS_FILES = ['**/cordis.yml', '**/cordis.yaml', '**/cordis.patch.yml', '**/cordis.patch.yaml'];
+const MAX_CORDIS_AST_DEPTH = 64;
+const MAX_CORDIS_AST_NODES = 20_000;
 const JS_EXPRESSION_TAG: ScalarTag = {
   tag: 'tag:yaml.org,2002:js',
   resolve: value => value,
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+function mapValue(map: YAMLMap, key: string): unknown {
+  return map.get(key, true) as unknown;
 }
 
-function addRow(rows: DshCordisRow[], value: unknown, file: string, operation: DshCordisRow['operation']): void {
-  const row = asRecord(value);
-  if (!row) return;
+function scalarValue(map: YAMLMap, key: string): unknown {
+  const value = mapValue(map, key);
+  return isScalar(value) ? value.value : undefined;
+}
+
+function validateAstLimits(root: unknown): void {
+  if (!isNode(root)) return;
+  const stack: Array<{ node: unknown; depth: number }> = [{ node: root, depth: 1 }];
+  let visited = 0;
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    visited += 1;
+    if (visited > MAX_CORDIS_AST_NODES) {
+      throw new Error(`Cordis YAML exceeds ${MAX_CORDIS_AST_NODES} node limit`);
+    }
+    if (current.depth > MAX_CORDIS_AST_DEPTH) {
+      throw new Error(`Cordis YAML exceeds ${MAX_CORDIS_AST_DEPTH} level depth limit`);
+    }
+    if (isMap(current.node) || isSeq(current.node)) {
+      for (const item of current.node.items) {
+        if (isPair(item)) {
+          if (isNode(item.key)) stack.push({ node: item.key, depth: current.depth + 1 });
+          if (isNode(item.value)) stack.push({ node: item.value, depth: current.depth + 1 });
+        } else if (isNode(item)) {
+          stack.push({ node: item, depth: current.depth + 1 });
+        }
+      }
+    }
+  }
+}
+
+function addRow(rows: DshCordisRow[], row: YAMLMap, file: string, operation: DshCordisRow['operation']): void {
+  const id = scalarValue(row, 'id');
+  const name = scalarValue(row, 'name');
+  const disabled = scalarValue(row, 'disabled');
   rows.push({
     file,
-    id: typeof row.id === 'string' ? row.id : undefined,
-    name: typeof row.name === 'string' ? row.name : undefined,
+    id: typeof id === 'string' ? id : undefined,
+    name: typeof name === 'string' ? name : undefined,
     operation,
-    hasConfig: Object.hasOwn(row, 'config'),
-    disabled: row.disabled === true || typeof row.disabled === 'string',
+    hasConfig: row.has('config'),
+    disabled: disabled === true || typeof disabled === 'string',
   });
 }
 
@@ -36,18 +77,20 @@ function collectRows(
   defaultOperation: 'entry' | 'replace' = basename(file).includes('.patch.') ? 'replace' : 'entry',
 ): DshCordisRow[] {
   const rows: DshCordisRow[] = [];
-  if (!Array.isArray(value)) return rows;
-  for (const item of value) {
-    const record = asRecord(item);
-    if (!record) continue;
-    if (Array.isArray(record.insert)) {
-      for (const inserted of record.insert) addRow(rows, inserted, file, 'insert');
+  if (!isSeq(value)) return rows;
+  for (const item of value.items) {
+    if (!isMap(item)) continue;
+    const insertedRows = mapValue(item, 'insert');
+    if (isSeq(insertedRows)) {
+      for (const inserted of insertedRows.items) {
+        if (isMap(inserted)) addRow(rows, inserted, file, 'insert');
+      }
       continue;
     }
-    addRow(rows, record, file, defaultOperation);
-    const config = asRecord(record.config);
-    if (config && Array.isArray(config.patches)) {
-      rows.push(...collectRows(config.patches, file, 'replace'));
+    addRow(rows, item, file, defaultOperation);
+    const config = mapValue(item, 'config');
+    if (isMap(config)) {
+      rows.push(...collectRows(mapValue(config, 'patches'), file, 'replace'));
     }
   }
   return rows;
@@ -82,7 +125,8 @@ export async function parseCordisConfigs(rootDir: string): Promise<DshCordisAnal
         parseErrors.push({ file, message: document.errors.map(error => error.message).join('; ') });
         continue;
       }
-      rows.push(...collectRows(document.toJS(), file));
+      validateAstLimits(document.contents);
+      rows.push(...collectRows(document.contents, file));
     } catch (error) {
       parseErrors.push({ file, message: (error as Error).message });
     }
