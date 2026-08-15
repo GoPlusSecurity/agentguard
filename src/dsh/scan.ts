@@ -13,6 +13,7 @@ import {
   unexpectedHarmlessCapabilities,
 } from './classify-plugin.js';
 import { detectDshPlugin } from './detect.js';
+import { addFindingContext, calculateReviewPriority, runtimeSurfaceTags } from './finding-context.js';
 import { resolveDshSource } from './source.js';
 import type {
   DshCapabilityProfile,
@@ -168,7 +169,15 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
         snippet: `name=${JSON.stringify(detection.package.name ?? '')}; capabilities=${unexpected.join(',')}`,
       });
     }
+    await addFindingContext(source.rootDir, findings);
     const riskLevel = calculateDshRisk(riskTags);
+    const runtimeTags = runtimeSurfaceTags(findings);
+    const runtimeSurfaceRiskLevel = calculateDshRisk(runtimeTags);
+    const runtimeCapabilities = {
+      ...capabilityProfile,
+      shellExec: runtimeTags.includes('SHELL_EXEC'),
+      fileWrite: runtimeTags.includes('FILE_WRITE_ACCESS'),
+    };
     const scannedAt = scan.metadata?.scan_time ?? new Date().toISOString();
 
     return {
@@ -191,6 +200,10 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
       },
       riskLevel,
       riskTags,
+      runtimeSurfaceRiskLevel,
+      runtimeSurfaceRiskTags: runtimeTags,
+      runtimeSurfaceRecommendation: recommendationFor(runtimeSurfaceRiskLevel, runtimeCapabilities),
+      reviewPriority: calculateReviewPriority(riskLevel, runtimeSurfaceRiskLevel, runtimeTags),
       capabilityProfile,
       impactLayers,
       findings,

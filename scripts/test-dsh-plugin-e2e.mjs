@@ -31,6 +31,9 @@ assert.equal(registered?.name, 'agentguard_dsh_scan');
 const scan = await registered.execute({ target: safeFixture, format: 'json' });
 assert.equal(scan.riskLevel, 'low');
 assert.equal(scan.installRecommendation, 'safe-to-try');
+assert.equal(scan.runtimeSurfaceRiskLevel, 'low');
+assert.equal(scan.runtimeSurfaceRecommendation, 'safe-to-try');
+assert.equal(scan.reviewPriority, 'routine');
 assert.equal(JSON.parse(scan.content).schemaVersion, 1);
 
 const port = await new Promise((resolvePort, reject) => {
@@ -75,7 +78,9 @@ try {
     runtimeHttpStatus: status,
     tool: registered.name,
     scanRisk: scan.riskLevel,
+    runtimeSurfaceRisk: scan.runtimeSurfaceRiskLevel,
     scanRecommendation: scan.installRecommendation,
+    reviewPriority: scan.reviewPriority,
   }));
 } finally {
   child.kill('SIGTERM');

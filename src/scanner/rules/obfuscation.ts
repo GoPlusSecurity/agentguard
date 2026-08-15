@@ -6,9 +6,9 @@ import type { ScanRule } from '../../types/scanner.js';
 export const OBFUSCATION_RULES: ScanRule[] = [
   {
     id: 'OBFUSCATION',
-    description: 'Detects code obfuscation techniques',
+    description: 'Detects dynamic code execution or strong code-obfuscation indicators',
     severity: 'high',
-    file_patterns: ['*.js', '*.ts', '*.mjs', '*.py', '*.md'],
+    file_patterns: ['*.js', '*.ts', '*.mjs', '*.py'],
     patterns: [
       // JavaScript eval
       /\beval\s*\(/,

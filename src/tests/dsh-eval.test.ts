@@ -10,6 +10,8 @@ type EvaluationCase = {
   name: string;
   expectedRisk: RiskLevel;
   expectedRecommendation: DshInstallRecommendation;
+  expectedRuntimeRisk: RiskLevel;
+  expectedReviewPriority: 'routine' | 'elevated' | 'high' | 'urgent';
   mustContainTags?: RiskTag[];
   mustNotContainTags?: RiskTag[];
 };
@@ -23,11 +25,22 @@ describe('DSH labeled evaluation corpus', () => {
       const report = await scanDshPlugin(resolve(corpusRoot, entry.name));
       assert.equal(report.riskLevel, entry.expectedRisk);
       assert.equal(report.installRecommendation, entry.expectedRecommendation);
+      assert.equal(report.runtimeSurfaceRiskLevel, entry.expectedRuntimeRisk);
+      assert.equal(report.reviewPriority, entry.expectedReviewPriority);
       for (const tag of entry.mustContainTags ?? []) {
         assert.ok(report.riskTags.includes(tag), `expected ${entry.name} to include ${tag}`);
       }
       for (const tag of entry.mustNotContainTags ?? []) {
         assert.ok(!report.riskTags.includes(tag), `expected ${entry.name} not to include ${tag}`);
+      }
+      if (entry.name === 'generated-runtime') {
+        assert.ok(report.findings.some(finding => finding.likelyGenerated));
+      }
+      if (entry.name === 'test-only-shell') {
+        assert.ok(report.findings.some(finding => finding.sourceCategory === 'test'));
+      }
+      if (entry.name === 'data-key-sample') {
+        assert.ok(report.findings.some(finding => finding.sourceCategory === 'data'));
       }
     });
   }

@@ -229,6 +229,62 @@ describe('DSH plugin scanner', () => {
     assert.equal(report.capabilityProfile.shellExec, true);
     assert.equal(report.riskTags.includes('SHELL_EXEC'), true);
     assert.ok(report.findings.some(finding => finding.file === 'tests/plugin.spec.ts'));
+    assert.equal(report.runtimeSurfaceRiskLevel, 'low');
+    assert.equal(report.runtimeSurfaceRecommendation, 'safe-to-try');
+    assert.equal(report.reviewPriority, 'elevated');
+    const testFinding = report.findings.find(finding => finding.file === 'tests/plugin.spec.ts');
+    assert.equal(testFinding?.sourceCategory, 'test');
+    assert.equal(testFinding?.runtimeRelevance, 'unlikely');
+  });
+
+  it('does not treat polling with auto-update wording as remote code execution', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-update-status', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: update-status\n      name: ./index.js\n',
+      'index.js': `export function autoUpdateStatus() {\n  return setInterval(() => fetch('https://example.com/status'), 1000)\n}\n`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.riskTags.includes('AUTO_UPDATE'), false);
+    assert.equal(report.riskLevel, 'medium');
+  });
+
+  it('does not label scheduled local maintenance as an auto-update', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-local-maintenance', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: local-maintenance\n      name: ./index.js\n',
+      'index.js': `import { exec } from 'node:child_process'\nexport function scheduleCleanup() { return setInterval(() => exec('cleanup-cache'), 1000) }\n`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.riskTags.includes('AUTO_UPDATE'), false);
+    assert.equal(report.riskTags.includes('SHELL_EXEC'), true);
+    assert.equal(report.riskLevel, 'high');
+  });
+
+  it('keeps remote acquisition plus update execution at critical risk', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-self-updater', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: self-updater\n      name: ./index.js\n',
+      'index.js': `import { writeFile } from 'node:fs/promises'\nexport async function autoUpdate() {\n  const code = await fetch('https://example.com/plugin.js').then(r => r.text())\n  await writeFile('./plugin.js', code)\n  return import('./plugin.js')\n}\n`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.equal(report.riskTags.includes('AUTO_UPDATE'), true);
+    assert.equal(report.runtimeSurfaceRiskLevel, 'critical');
+    assert.equal(report.reviewPriority, 'urgent');
+  });
+
+  it('marks source-mapped lib findings as likely generated without hiding runtime risk', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'dsh-generated-runtime', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      'cordis.patch.yml': '- insert:\n    - id: generated-runtime\n      name: ./lib/index.js\n',
+      'lib/index.js': 'export function run(input) { return eval(input) }\n',
+      'lib/index.js.map': '{}\n',
+    });
+    const report = await scanDshPlugin(root);
+    const finding = report.findings.find(item => item.ruleId === 'OBFUSCATION');
+    assert.equal(finding?.sourceCategory, 'runtime');
+    assert.equal(finding?.runtimeRelevance, 'direct');
+    assert.equal(finding?.likelyGenerated, true);
+    assert.equal(report.runtimeSurfaceRiskLevel, 'high');
   });
 });
 
@@ -245,9 +301,25 @@ describe('DSH report rendering', () => {
     const markdown = renderDshMarkdown(report);
     const html = renderDshHtml(report);
     assert.match(markdown, /Permission profile/);
+    assert.match(markdown, /Runtime-surface risk/);
+    assert.match(markdown, /Review priority/);
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.match(html, /Static analysis can miss/);
+  });
+
+  it('renders schema-v1 reports created before the additive scope fields', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({ name: 'legacy-dsh-report', dsh: { client: { platform: 'web' } } }),
+      'src/index.ts': 'export const apply = () => undefined\n',
+    });
+    const report = await scanDshPlugin(root);
+    delete report.runtimeSurfaceRiskLevel;
+    delete report.runtimeSurfaceRiskTags;
+    delete report.runtimeSurfaceRecommendation;
+    delete report.reviewPriority;
+    assert.match(renderDshMarkdown(report), /Runtime-surface risk:.*LOW/);
+    assert.match(renderDshHtml(report), /Runtime surface: low/);
   });
 
   it('creates missing parent directories for CLI report output', async () => {

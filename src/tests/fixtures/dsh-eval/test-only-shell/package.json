@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-test-only-shell",
+  "description": "A client with a shell-based test fixture",
+  "dsh": { "client": { "platform": "web" } }
+}

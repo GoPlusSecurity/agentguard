@@ -3,18 +3,24 @@
     "name": "safe-theme",
     "expectedRisk": "low",
     "expectedRecommendation": "safe-to-try",
+    "expectedRuntimeRisk": "low",
+    "expectedReviewPriority": "routine",
     "mustNotContainTags": ["DSH_THEME_ELEVATED_CAPABILITY"]
   },
   {
     "name": "session-history",
     "expectedRisk": "medium",
     "expectedRecommendation": "test-in-isolated-profile",
+    "expectedRuntimeRisk": "medium",
+    "expectedReviewPriority": "routine",
     "mustContainTags": ["DSH_SESSION_STORAGE_ACCESS"]
   },
   {
     "name": "plugin-discovery",
     "expectedRisk": "high",
     "expectedRecommendation": "sandbox-only",
+    "expectedRuntimeRisk": "high",
+    "expectedReviewPriority": "elevated",
     "mustContainTags": ["NETWORK_ACCESS", "DSH_TOOL_REGISTRY_MUTATION"],
     "mustNotContainTags": ["DSH_THEME_ELEVATED_CAPABILITY"]
   },
@@ -22,12 +28,49 @@
     "name": "deceptive-theme",
     "expectedRisk": "critical",
     "expectedRecommendation": "expert-review-required",
+    "expectedRuntimeRisk": "critical",
+    "expectedReviewPriority": "urgent",
     "mustContainTags": ["INSTALL_SCRIPT", "SHELL_EXEC", "NETWORK_ACCESS", "DSH_THEME_ELEVATED_CAPABILITY"]
+  },
+  {
+    "name": "status-polling",
+    "expectedRisk": "medium",
+    "expectedRecommendation": "test-in-isolated-profile",
+    "expectedRuntimeRisk": "medium",
+    "expectedReviewPriority": "routine",
+    "mustContainTags": ["NETWORK_ACCESS"],
+    "mustNotContainTags": ["AUTO_UPDATE"]
+  },
+  {
+    "name": "generated-runtime",
+    "expectedRisk": "high",
+    "expectedRecommendation": "sandbox-only",
+    "expectedRuntimeRisk": "high",
+    "expectedReviewPriority": "elevated",
+    "mustContainTags": ["OBFUSCATION"]
+  },
+  {
+    "name": "test-only-shell",
+    "expectedRisk": "high",
+    "expectedRecommendation": "avoid-on-primary-machine",
+    "expectedRuntimeRisk": "low",
+    "expectedReviewPriority": "elevated",
+    "mustContainTags": ["SHELL_EXEC"]
+  },
+  {
+    "name": "data-key-sample",
+    "expectedRisk": "critical",
+    "expectedRecommendation": "expert-review-required",
+    "expectedRuntimeRisk": "low",
+    "expectedReviewPriority": "elevated",
+    "mustContainTags": ["PRIVATE_KEY_PATTERN"]
   },
   {
     "name": "core-override",
     "expectedRisk": "high",
     "expectedRecommendation": "sandbox-only",
+    "expectedRuntimeRisk": "high",
+    "expectedReviewPriority": "high",
     "mustContainTags": ["DSH_PATCH_OVERRIDE"]
   }
 ]

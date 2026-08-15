@@ -85,6 +85,25 @@ export type DshInstallRecommendation =
   | 'avoid-on-primary-machine'
   | 'expert-review-required';
 
+/** Where a finding came from in the scanned repository. */
+export type DshFindingSource =
+  | 'runtime'
+  | 'installation'
+  | 'configuration'
+  | 'build'
+  | 'test'
+  | 'example'
+  | 'documentation'
+  | 'data'
+  | 'derived'
+  | 'unknown';
+
+/** How likely the finding is to participate in the installed runtime surface. */
+export type DshRuntimeRelevance = 'direct' | 'indirect' | 'unlikely' | 'unknown';
+
+/** Human-review ordering; this is not a claim that the plugin is malicious. */
+export type DshReviewPriority = 'routine' | 'elevated' | 'high' | 'urgent';
+
 /** A report finding with rule explanation and source evidence. */
 export interface DshFinding {
   ruleId: RiskTag;
@@ -93,6 +112,9 @@ export interface DshFinding {
   line?: number;
   message: string;
   snippet?: string;
+  sourceCategory?: DshFindingSource;
+  runtimeRelevance?: DshRuntimeRelevance;
+  likelyGenerated?: boolean;
 }
 
 /** Stable identity for a scanned DSH plugin artifact. */
@@ -113,8 +135,14 @@ export interface DshPluginScanReport {
   schemaVersion: 1;
   identity: DshPluginIdentity;
   detection: Pick<DshDetection, 'isDshPlugin' | 'confidence' | 'signals'>;
+  /** Risk across the full scanned repository, including tests, docs, examples, and data. */
   riskLevel: RiskLevel;
   riskTags: RiskTag[];
+  /** Additive schema-v1 field: secondary risk from direct and indirect installed-runtime evidence. */
+  runtimeSurfaceRiskLevel?: RiskLevel;
+  runtimeSurfaceRiskTags?: RiskTag[];
+  runtimeSurfaceRecommendation?: DshInstallRecommendation;
+  reviewPriority?: DshReviewPriority;
   capabilityProfile: DshCapabilityProfile;
   impactLayers: DshImpactLayer[];
   findings: DshFinding[];

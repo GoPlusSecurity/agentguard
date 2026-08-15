@@ -247,6 +247,13 @@ Capabilities and Cordis rows are mapped to DSH-facing impact layers:
 
 Risk is derived from visible rule severity and explicit compound conditions; there is no opaque model score.
 
+Phase 1.1 reports two complementary views:
+
+- `riskLevel` is the conservative full-repository risk. It includes findings in runtime code, build scripts, tests, examples, documentation, and data so a suspicious path name cannot hide evidence.
+- `runtimeSurfaceRiskLevel` is a secondary prioritization view calculated from findings classified as directly or indirectly relevant to the installed runtime. It excludes only evidence classified as unlikely runtime input, such as tests, examples, and documentation. It never deletes those findings from the report.
+
+Every finding includes `sourceCategory`, `runtimeRelevance`, and `likelyGenerated`. A source-mapped file under `lib/` may be marked as generated while remaining directly runtime-relevant: generated does not mean safe.
+
 | Risk | Typical meaning | Default recommendation |
 |---|---|---|
 | Low | No security-relevant capability was detected. | `safe-to-try` |
@@ -273,9 +280,13 @@ The top-level report is `DshPluginScanReport`:
 | `detection` | DSH decision, confidence, and matched signals. |
 | `riskLevel` | `low`, `medium`, `high`, or `critical`. |
 | `riskTags` | Deduplicated security rule identifiers. |
+| `runtimeSurfaceRiskLevel` | Secondary risk derived from direct and indirect runtime-surface evidence. |
+| `runtimeSurfaceRiskTags` | Tags participating in the runtime-surface calculation. |
+| `runtimeSurfaceRecommendation` | Installation posture based on the runtime-surface view. |
+| `reviewPriority` | `routine`, `elevated`, `high`, or `urgent`; orders human review and does not claim malicious intent. |
 | `capabilityProfile` | Static effective-capability booleans. |
 | `impactLayers` | DSH runtime areas the artifact can influence. |
-| `findings` | Rule, severity, file, line, explanation, and matched snippet. |
+| `findings` | Rule, severity, file, line, explanation, snippet, source category, runtime relevance, and likely-generated marker. |
 | `installRecommendation` | Suggested isolation or review posture. |
 | `summary` | Short human-readable decision summary. |
 | `harmlessMismatch` | Whether a benign UI label conflicts with elevated behavior. |
@@ -331,7 +342,7 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Inclusion of dangerous behavior under test-like paths in install recommendations.
 - Markdown output and HTML escaping.
 
-`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, and a core Cordis override. The corpus verifies expected risk, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
+`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, status polling, source-mapped generated runtime code, test-only shell execution, key-shaped data samples, and a core Cordis override. The corpus verifies repository risk, runtime-surface risk, review priority, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
 
 When a local DSH runtime and profile are installed, run the opt-in integration test:
 
@@ -362,6 +373,8 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
 - Runtime enforcement and source-plugin attribution are deferred to Phase 2.
+- Phase 1.1 path relevance is a heuristic. It does not resolve package-manager `files`, ignore rules, exports, lifecycle reachability, or every Cordis composition edge.
+- npm tarball acquisition and source-to-published-artifact comparison remain future supply-chain work; a GitHub repository scan must not be presented as proof of what an npm package contains.
 
 ## Phase 2 direction
 

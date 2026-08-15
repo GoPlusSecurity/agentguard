@@ -30,6 +30,9 @@ export type AgentGuardDshToolArgs = {
 export type AgentGuardDshToolResult = {
   riskLevel: string;
   installRecommendation: string;
+  runtimeSurfaceRiskLevel: string;
+  runtimeSurfaceRecommendation: string;
+  reviewPriority: string;
   format: 'markdown' | 'json';
   content: string;
 };
@@ -62,10 +65,21 @@ export function createAgentGuardDshTool(): ToolDefinition {
         properties: {
           riskLevel: { type: 'string' },
           installRecommendation: { type: 'string' },
+          runtimeSurfaceRiskLevel: { type: 'string' },
+          runtimeSurfaceRecommendation: { type: 'string' },
+          reviewPriority: { type: 'string' },
           format: { type: 'string', enum: ['markdown', 'json'] },
           content: { type: 'string' },
         },
-        required: ['riskLevel', 'installRecommendation', 'format', 'content'],
+        required: [
+          'riskLevel',
+          'installRecommendation',
+          'runtimeSurfaceRiskLevel',
+          'runtimeSurfaceRecommendation',
+          'reviewPriority',
+          'format',
+          'content',
+        ],
         additionalProperties: false,
       },
       render: (_args, value) => [{ type: 'text', text: value.content }],
@@ -84,6 +98,9 @@ export function createAgentGuardDshTool(): ToolDefinition {
       return {
         riskLevel: report.riskLevel,
         installRecommendation: report.installRecommendation,
+        runtimeSurfaceRiskLevel: report.runtimeSurfaceRiskLevel ?? report.riskLevel,
+        runtimeSurfaceRecommendation: report.runtimeSurfaceRecommendation ?? report.installRecommendation,
+        reviewPriority: report.reviewPriority ?? 'elevated',
         format,
         content: format === 'json' ? JSON.stringify(report, null, 2) : renderDshMarkdown(report),
       };

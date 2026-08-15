@@ -32,6 +32,9 @@ describe('AgentGuard DSH runtime plugin', () => {
     const result = await createAgentGuardDshTool().execute({ target: root });
     assert.equal(result.format, 'markdown');
     assert.match(result.content, /AgentGuard for DSH/);
+    assert.equal(result.runtimeSurfaceRiskLevel, 'low');
+    assert.equal(result.runtimeSurfaceRecommendation, 'safe-to-try');
+    assert.equal(result.reviewPriority, 'routine');
     assert.equal(typeof result.installRecommendation, 'string');
   });
 

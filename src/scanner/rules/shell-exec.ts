@@ -37,18 +37,25 @@ export const SHELL_EXEC_RULES: ScanRule[] = [
   },
   {
     id: 'AUTO_UPDATE',
-    description: 'Detects auto-update mechanisms that could execute remote code',
+    description: 'Detects remote acquisition combined with automatic code installation or execution',
     severity: 'critical',
     file_patterns: ['*.js', '*.ts', '*.py', '*.sh', '*.md'],
     patterns: [
-      // Cron/scheduled execution patterns
-      /cron|schedule|interval.*exec|setInterval.*exec/i,
-      // Auto-update patterns
+      // Scheduled execution must name an execution sink on the same line.
+      /(?:cron|schedule|setInterval)[^\n;]*(?:exec|spawn|eval|import\s*\()/i,
+      // Auto-update names require both remote acquisition and a code/file sink.
       /auto.?update|self.?update/i,
       // Download and execute patterns
       /curl.*\|\s*(bash|sh)|wget.*\|\s*(bash|sh)/,
       /fetch.*then.*eval/,
       /download.*execute/i,
     ],
+    validator: (content, match) => {
+      const remoteAcquisition = /\b(?:fetch|axios|requests\.get|urllib|curl|wget|download)\b/i.test(content);
+      if (/(?:cron|schedule|setInterval)/i.test(match[0])) return remoteAcquisition;
+      if (!/auto.?update|self.?update/i.test(match[0])) return true;
+      const installOrExecute = /\b(?:eval|exec|spawn|execFile|writeFile|rename|chmod|import\s*\(|npm\s+install|pnpm\s+add|pip\s+install)\b/i.test(content);
+      return remoteAcquisition && installOrExecute;
+    },
   },
 ];

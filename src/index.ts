@@ -25,12 +25,15 @@ export type {
   DshCordisAnalysis,
   DshDetection,
   DshFinding,
+  DshFindingSource,
   DshImpactLayer,
   DshInstallRecommendation,
   DshPackageMetadata,
   DshPluginIdentity,
   DshPluginKind,
   DshPluginScanReport,
+  DshReviewPriority,
+  DshRuntimeRelevance,
 } from './dsh/types.js';
 export {
   SkillRegistry,
