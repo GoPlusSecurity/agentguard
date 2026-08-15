@@ -1,0 +1,3 @@
+- insert:
+    - id: eval-keychain-label
+      name: ./index.js

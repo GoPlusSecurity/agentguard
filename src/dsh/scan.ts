@@ -84,6 +84,7 @@ function buildSummary(
   if (tags.length === 0) return 'DSH project detected; no security-relevant capabilities were found by the current static rules.';
   const capabilityLabels: Partial<Record<RiskTag, string>> = {
     SHELL_EXEC: 'shell execution',
+    DYNAMIC_MODULE_LOADING: 'dynamic local or package module loading',
     FILE_WRITE_ACCESS: 'file writes',
     FILE_READ_ACCESS: 'file reads',
     NETWORK_ACCESS: 'network access',

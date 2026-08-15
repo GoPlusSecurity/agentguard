@@ -173,7 +173,7 @@ export class SkillScanner {
       'command-injection': 'SHELL_EXEC',
       'code-execution': 'SHELL_EXEC',
       'remote-code-loading': 'REMOTE_LOADER',
-      'dynamic-import': 'REMOTE_LOADER',
+      'dynamic-import': 'DYNAMIC_MODULE_LOADING',
       'env-access': 'READ_ENV_SECRETS',
       'secret-access': 'READ_ENV_SECRETS',
       'ssh-key-access': 'READ_SSH_KEYS',
@@ -252,7 +252,7 @@ export class SkillScanner {
           const line = lines[i];
           const match = line.match(pattern);
           if (match) {
-            if (rule.validator && !rule.validator(content, match)) {
+            if (rule.validator && !rule.validator(content, match, filePath)) {
               continue;
             }
             riskTags.add(rule.id);
@@ -287,12 +287,14 @@ export class SkillScanner {
       );
       const rules = [...getRulesForExtension(file.extension), ...additionalRules];
 
-      // For Markdown files: only scan inside fenced code blocks
-      const contentToScan = file.extension === '.md'
-        ? this.extractMarkdownCodeBlocks(file.content)
-        : file.content;
-
-      this.scanContent(contentToScan, rules, file.relativePath, riskTags, evidence);
+      if (file.extension === '.md') {
+        const promptRules = rules.filter(rule => rule.id === 'PROMPT_INJECTION');
+        const codeBlockRules = rules.filter(rule => rule.id !== 'PROMPT_INJECTION');
+        this.scanContent(this.extractMarkdownCodeBlocks(file.content), codeBlockRules, file.relativePath, riskTags, evidence);
+        this.scanContent(file.content, promptRules, file.relativePath, riskTags, evidence);
+      } else {
+        this.scanContent(file.content, rules, file.relativePath, riskTags, evidence);
+      }
 
       // Base64 decode pass: extract encoded payloads and re-scan
       const decodedPayloads = this.extractAndDecodeBase64(file.content);
@@ -353,7 +355,7 @@ export class SkillScanner {
 
     const parts: string[] = [];
 
-    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')) {
+    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER') || tags.has('DYNAMIC_MODULE_LOADING')) {
       parts.push('code execution capabilities');
     }
     if (tags.has('PRIVATE_KEY_PATTERN') || tags.has('MNEMONIC_PATTERN')) {

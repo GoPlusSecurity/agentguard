@@ -42,6 +42,18 @@ describe('DSH labeled evaluation corpus', () => {
       if (entry.name === 'data-key-sample') {
         assert.ok(report.findings.some(finding => finding.sourceCategory === 'data'));
       }
+      if (entry.name === 'active-skill-injection') {
+        assert.ok(report.findings.some(finding =>
+          finding.ruleId === 'PROMPT_INJECTION'
+            && finding.sourceCategory === 'runtime'
+            && finding.runtimeRelevance === 'indirect'));
+      }
+      if (entry.name === 'data-local-loader') {
+        assert.ok(report.findings.some(finding =>
+          finding.ruleId === 'DYNAMIC_MODULE_LOADING'
+            && finding.sourceCategory === 'runtime'
+            && finding.runtimeRelevance === 'direct'));
+      }
     });
   }
 });

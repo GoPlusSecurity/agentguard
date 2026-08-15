@@ -158,6 +158,8 @@ DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plug
 
 Phase 1.1 keeps the conservative full-repository risk while adding a separate runtime-surface risk, evidence source categories, likely-generated markers, and a human-review priority. Tests, examples, docs, and data findings remain visible instead of being silently discarded.
 
+Phase 1.2 treats active `SKILL.md` and agent-instruction files as runtime-relevant, keeps executable source runtime-relevant even under `data/` or `assets/`, distinguishes computed local module loading from remote code execution, and requires concrete credential APIs before reporting keychain access.
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 

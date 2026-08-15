@@ -15,6 +15,8 @@ const BUILD_PATH = /(?:^|\/)(?:scripts?|tools?|tasks?)(?:\/|$)/i;
 const DATA_PATH = /(?:^|\/)(?:data|assets?|resources?)(?:\/|$)/i;
 const GENERATED_PATH = /(?:^|\/)(?:dist|build|lib|generated|vendor)(?:\/|$)/i;
 const CORDIS_FILE = /(?:^|\/)cordis(?:\.patch)?\.ya?ml$/i;
+const ACTIVE_AGENT_INSTRUCTIONS = /(?:^|\/)(?:SKILL|AGENTS|CLAUDE|GEMINI)\.md$/i;
+const EXECUTABLE_SOURCE = /\.(?:js|ts|jsx|tsx|mjs|cjs|py|sh|bash)$/i;
 
 export function classifyFindingPath(file: string, tag: RiskTag): {
   sourceCategory: DshFindingSource;
@@ -32,12 +34,11 @@ export function classifyFindingPath(file: string, tag: RiskTag): {
   }
   if (TEST_PATH.test(normalized)) return { sourceCategory: 'test', runtimeRelevance: 'unlikely' };
   if (EXAMPLE_PATH.test(normalized)) return { sourceCategory: 'example', runtimeRelevance: 'unlikely' };
+  if (ACTIVE_AGENT_INSTRUCTIONS.test(normalized)) return { sourceCategory: 'runtime', runtimeRelevance: 'indirect' };
   if (DOC_PATH.test(normalized)) return { sourceCategory: 'documentation', runtimeRelevance: 'unlikely' };
   if (BUILD_PATH.test(normalized)) return { sourceCategory: 'build', runtimeRelevance: 'indirect' };
+  if (EXECUTABLE_SOURCE.test(normalized)) return { sourceCategory: 'runtime', runtimeRelevance: 'direct' };
   if (DATA_PATH.test(normalized)) return { sourceCategory: 'data', runtimeRelevance: 'unknown' };
-  if (/\.(?:js|ts|jsx|tsx|mjs|cjs|py|sh|bash)$/i.test(normalized)) {
-    return { sourceCategory: 'runtime', runtimeRelevance: 'direct' };
-  }
   return { sourceCategory: 'unknown', runtimeRelevance: 'unknown' };
 }
 
@@ -76,10 +77,9 @@ export function runtimeSurfaceTags(findings: DshFinding[]): RiskTag[] {
     .map(finding => finding.ruleId))];
 }
 
-const URGENT_RUNTIME_TAGS = new Set<RiskTag>([
+const URGENT_SINGLE_TAGS = new Set<RiskTag>([
   'AUTO_UPDATE',
   'REMOTE_LOADER',
-  'NET_EXFIL_UNRESTRICTED',
   'WEBHOOK_EXFIL',
   'PRIVATE_KEY_PATTERN',
   'MNEMONIC_PATTERN',
@@ -90,7 +90,12 @@ export function calculateReviewPriority(
   runtimeRisk: RiskLevel,
   runtimeTags: RiskTag[],
 ): DshReviewPriority {
-  if (runtimeRisk === 'critical' && runtimeTags.some(tag => URGENT_RUNTIME_TAGS.has(tag))) return 'urgent';
+  if (runtimeRisk === 'critical' && runtimeTags.some(tag => URGENT_SINGLE_TAGS.has(tag))) return 'urgent';
+  if (runtimeRisk === 'critical'
+    && runtimeTags.includes('NET_EXFIL_UNRESTRICTED')
+    && runtimeTags.some(tag => ['READ_ENV_SECRETS', 'READ_SSH_KEYS', 'READ_KEYCHAIN'].includes(tag))) {
+    return 'urgent';
+  }
   if (runtimeRisk === 'critical'
     && runtimeTags.includes('INSTALL_SCRIPT')
     && (runtimeTags.includes('SHELL_EXEC') || runtimeTags.includes('REMOTE_LOADER'))

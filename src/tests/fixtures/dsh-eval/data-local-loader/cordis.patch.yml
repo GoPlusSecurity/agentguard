@@ -1,0 +1,3 @@
+- insert:
+    - id: eval-data-loader
+      name: ./data/loader.js

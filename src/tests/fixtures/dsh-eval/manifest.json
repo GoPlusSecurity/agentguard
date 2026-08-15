@@ -66,6 +66,39 @@
     "mustContainTags": ["PRIVATE_KEY_PATTERN"]
   },
   {
+    "name": "active-skill-injection",
+    "expectedRisk": "critical",
+    "expectedRecommendation": "expert-review-required",
+    "expectedRuntimeRisk": "critical",
+    "expectedReviewPriority": "high",
+    "mustContainTags": ["PROMPT_INJECTION"]
+  },
+  {
+    "name": "data-local-loader",
+    "expectedRisk": "high",
+    "expectedRecommendation": "sandbox-only",
+    "expectedRuntimeRisk": "high",
+    "expectedReviewPriority": "elevated",
+    "mustContainTags": ["DYNAMIC_MODULE_LOADING"],
+    "mustNotContainTags": ["REMOTE_LOADER"]
+  },
+  {
+    "name": "keychain-label",
+    "expectedRisk": "low",
+    "expectedRecommendation": "safe-to-try",
+    "expectedRuntimeRisk": "low",
+    "expectedReviewPriority": "routine",
+    "mustNotContainTags": ["READ_KEYCHAIN"]
+  },
+  {
+    "name": "prompt-cli-string",
+    "expectedRisk": "low",
+    "expectedRecommendation": "safe-to-try",
+    "expectedRuntimeRisk": "low",
+    "expectedReviewPriority": "routine",
+    "mustNotContainTags": ["PROMPT_INJECTION"]
+  },
+  {
     "name": "core-override",
     "expectedRisk": "high",
     "expectedRecommendation": "sandbox-only",

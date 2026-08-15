@@ -11,8 +11,9 @@ const dshHome = resolve(process.env.DSH_E2E_HOME ?? join(repoRoot, '.dsh-home'))
 const profileDir = join(dshHome, 'profiles/web');
 const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
 const safeFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/safe-theme');
+const localLoaderFixture = join(repoRoot, 'src/tests/fixtures/dsh-eval/data-local-loader');
 
-await Promise.all([access(dshBin), access(installedPlugin), access(safeFixture)]);
+await Promise.all([access(dshBin), access(installedPlugin), access(safeFixture), access(localLoaderFixture)]);
 
 const env = { ...process.env, DSH_HOME: dshHome, DSH_TELEMETRY_MODE: 'DISABLED' };
 const dumped = spawnSync(dshBin, ['web', '--dump-config'], {
@@ -35,6 +36,13 @@ assert.equal(scan.runtimeSurfaceRiskLevel, 'low');
 assert.equal(scan.runtimeSurfaceRecommendation, 'safe-to-try');
 assert.equal(scan.reviewPriority, 'routine');
 assert.equal(JSON.parse(scan.content).schemaVersion, 1);
+
+const localLoaderScan = await registered.execute({ target: localLoaderFixture, format: 'json' });
+const localLoaderReport = JSON.parse(localLoaderScan.content);
+assert.equal(localLoaderScan.riskLevel, 'high');
+assert.equal(localLoaderScan.runtimeSurfaceRiskLevel, 'high');
+assert.ok(localLoaderReport.runtimeSurfaceRiskTags.includes('DYNAMIC_MODULE_LOADING'));
+assert.ok(!localLoaderReport.runtimeSurfaceRiskTags.includes('REMOTE_LOADER'));
 
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
@@ -81,6 +89,7 @@ try {
     runtimeSurfaceRisk: scan.runtimeSurfaceRiskLevel,
     scanRecommendation: scan.installRecommendation,
     reviewPriority: scan.reviewPriority,
+    localDynamicLoadingRisk: localLoaderScan.runtimeSurfaceRiskLevel,
   }));
 } finally {
   child.kill('SIGTERM');

@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-prompt-cli-string",
+  "description": "Print a prompt-injection warning in a management CLI",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

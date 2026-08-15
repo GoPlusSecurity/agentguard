@@ -254,6 +254,13 @@ Phase 1.1 reports two complementary views:
 
 Every finding includes `sourceCategory`, `runtimeRelevance`, and `likelyGenerated`. A source-mapped file under `lib/` may be marked as generated while remaining directly runtime-relevant: generated does not mean safe.
 
+Phase 1.2 applies two precedence rules to avoid hiding executable behavior:
+
+- Active agent instruction artifacts such as `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are runtime-relevant even though they are Markdown. Prompt-injection rules scan their instruction text outside fenced code blocks.
+- Executable source extensions (`.js`, `.ts`, `.py`, `.sh`, and related variants) remain runtime-relevant even when stored under `data/`, `assets/`, or `resources/`. Directory names do not override executable file types.
+
+Ordinary README discussion and inert management-CLI strings do not become prompt-injection findings unless the artifact is an active instruction file or the code also contains a recognized prompt-delivery surface. Computed local or package imports produce the high-risk `DYNAMIC_MODULE_LOADING` tag; only remote acquisition combined with execution produces the critical `REMOTE_LOADER` tag.
+
 | Risk | Typical meaning | Default recommendation |
 |---|---|---|
 | Low | No security-relevant capability was detected. | `safe-to-try` |
@@ -268,6 +275,8 @@ Recommendations are deliberately conservative:
 - A theme, skin, wallpaper, mascot, desktop companion, or pet that also performs network, environment, file-write, shell, or runtime operations receives a separate harmless-purpose mismatch finding.
 
 Expected capability does not mean safe capability. For example, a plugin-discovery tool will normally register a tool and access the network; the report should still expose both facts so the operator can constrain where it runs.
+
+Review priority is intentionally separate from severity. `URGENT` is reserved for direct runtime evidence of remote update or execution, webhook exfiltration, embedded key material, credential access combined with outbound POST behavior, or a dangerous install-script combination. A critical prompt string or credential capability without those combinations remains `HIGH` review priority rather than automatically becoming urgent.
 
 ## JSON report contract
 
@@ -342,7 +351,7 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Inclusion of dangerous behavior under test-like paths in install recommendations.
 - Markdown output and HTML escaping.
 
-`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, status polling, source-mapped generated runtime code, test-only shell execution, key-shaped data samples, and a core Cordis override. The corpus verifies repository risk, runtime-surface risk, review priority, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
+`src/tests/dsh-eval.test.ts` runs a labeled baseline corpus covering a safe UI theme, expected session access, a networked tool, a deceptive theme, status polling, source-mapped generated runtime code, test-only shell execution, key-shaped data samples, active skill injection, executable code under `data/`, an inert keychain label, an inert CLI warning string, and a core Cordis override. The corpus verifies repository risk, runtime-surface risk, review priority, recommendation, and key tags; it is a regression baseline, not a statistically meaningful false-positive-rate claim.
 
 When a local DSH runtime and profile are installed, run the opt-in integration test:
 
@@ -374,6 +383,7 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
 - Runtime enforcement and source-plugin attribution are deferred to Phase 2.
 - Phase 1.1 path relevance is a heuristic. It does not resolve package-manager `files`, ignore rules, exports, lifecycle reachability, or every Cordis composition edge.
+- Prompt-delivery detection recognizes common DSH and model APIs but cannot prove that every string reaches a model, or that every active instruction artifact is enabled by the final profile.
 - npm tarball acquisition and source-to-published-artifact comparison remain future supply-chain work; a GitHub repository scan must not be presented as proof of what an npm package contains.
 
 ## Phase 2 direction

@@ -15,6 +15,13 @@ describe('Scanner Rules', () => {
     assert.equal(rule.severity, 'high');
   });
 
+  it('distinguishes computed module loading from remote code execution', () => {
+    const dynamic = getRuleById('DYNAMIC_MODULE_LOADING');
+    const remote = getRuleById('REMOTE_LOADER');
+    assert.equal(dynamic?.severity, 'high');
+    assert.equal(remote?.severity, 'critical');
+  });
+
   it('should filter rules by severity', () => {
     const critical = getRulesBySeverity('critical');
     assert.ok(critical.length > 0, 'Should have critical rules');

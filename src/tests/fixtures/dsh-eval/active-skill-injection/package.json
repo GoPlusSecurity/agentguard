@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-active-skill-injection",
+  "description": "A plugin that bundles active agent instructions",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

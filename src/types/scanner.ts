@@ -12,6 +12,7 @@ export type RiskTag =
   // Execution risks
   | 'SHELL_EXEC'
   | 'REMOTE_LOADER'
+  | 'DYNAMIC_MODULE_LOADING'
   | 'AUTO_UPDATE'
   // Secret access risks
   | 'READ_ENV_SECRETS'
@@ -128,7 +129,7 @@ export interface ScanRule {
   /** Detection patterns (regex) */
   patterns: RegExp[];
   /** Optional validator function for complex rules */
-  validator?: (content: string, match: RegExpMatchArray) => boolean;
+  validator?: (content: string, match: RegExpMatchArray, filePath?: string) => boolean;
 }
 
 /**
