@@ -50,6 +50,10 @@ export const SKIP_PATTERNS = [
   '**/pnpm-lock.yaml',
 ];
 
+/** Limits keep untrusted repositories from exhausting scanner memory. */
+export const MAX_SCANNABLE_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_SCANNABLE_FILES = 10_000;
+
 /**
  * Walk directory and collect scannable files
  */
@@ -61,16 +65,25 @@ export async function walkDirectory(rootDir: string): Promise<FileInfo[]> {
   const pattern = `**/*.{${extensions}}`;
 
   // Find all matching files
-  const matches = await glob(pattern, {
+  const allMatches = await glob(pattern, {
     cwd: rootDir,
     ignore: SKIP_PATTERNS,
     nodir: true,
     absolute: true,
   });
+  const matches = allMatches.sort().slice(0, MAX_SCANNABLE_FILES);
+  if (allMatches.length > MAX_SCANNABLE_FILES) {
+    console.warn(`Scanner file limit reached: scanning ${MAX_SCANNABLE_FILES} of ${allMatches.length} files`);
+  }
 
   // Read file contents
   for (const filePath of matches) {
     try {
+      const info = await fs.stat(filePath);
+      if (info.size > MAX_SCANNABLE_FILE_BYTES) {
+        console.warn(`Skipping oversized scan file: ${filePath} (${info.size} bytes)`);
+        continue;
+      }
       const content = await fs.readFile(filePath, 'utf-8');
       const relativePath = path.relative(rootDir, filePath);
       const extension = path.extname(filePath);

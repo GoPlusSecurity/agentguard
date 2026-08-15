@@ -13,7 +13,7 @@ export const SHELL_EXEC_RULES: ScanRule[] = [
       // Node.js
       /require\s*\(\s*['"`]child_process['"`]\s*\)/,
       /from\s+['"`]child_process['"`]/,
-      /\bexec\s*\(/,
+      /(?<!\.)\bexec\s*\(/,
       /\bexecSync\s*\(/,
       /\bspawn\s*\(/,
       /\bspawnSync\s*\(/,
@@ -26,10 +26,14 @@ export const SHELL_EXEC_RULES: ScanRule[] = [
       /\bos\.exec\w*\s*\(/,
       /\bcommands\.getoutput\s*\(/,
       /\bcommands\.getstatusoutput\s*\(/,
-      // Shell scripts
-      /\$\(.*\)/,
-      /`[^`]*`/,
     ],
+  },
+  {
+    id: 'SHELL_EXEC',
+    description: 'Detects command substitution in shell scripts and documented shell commands',
+    severity: 'high',
+    file_patterns: ['*.sh', '*.bash', '*.md'],
+    patterns: [/\$\(.*\)/, /`[^`]*`/],
   },
   {
     id: 'AUTO_UPDATE',

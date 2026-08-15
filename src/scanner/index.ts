@@ -282,7 +282,10 @@ export class SkillScanner {
     const riskTags: Set<RiskTag> = new Set();
 
     for (const file of files) {
-      const rules = getRulesForExtension(file.extension);
+      const additionalRules = (this.options.additionalRules || []).filter(rule =>
+        rule.file_patterns.some(pattern => pattern === '*' || (pattern.startsWith('*.') && file.extension === pattern.slice(1))),
+      );
+      const rules = [...getRulesForExtension(file.extension), ...additionalRules];
 
       // For Markdown files: only scan inside fenced code blocks
       const contentToScan = file.extension === '.md'

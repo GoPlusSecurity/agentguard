@@ -19,7 +19,7 @@ export const OBFUSCATION_RULES: ScanRule[] = [
       /atob\s*\([^)]+\).*eval/,
       /Buffer\.from\s*\([^,]+,\s*['"`]base64['"`]\s*\).*eval/,
       // Python eval/exec
-      /\bexec\s*\(/,
+      /(?<!\.)\bexec\s*\(/,
       /\beval\s*\(/,
       /\bcompile\s*\([^)]+,\s*['"`]<[^>]+>['"`],\s*['"`]exec['"`]\s*\)/,
       // Hex encoding patterns

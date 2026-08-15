@@ -32,6 +32,8 @@ import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import { CloudRequestError } from './cloud/client.js';
 import { notifyOpenClawMessage, notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
+import { scanDshPlugin } from './dsh/scan.js';
+import { renderDshHtml, renderDshMarkdown } from './reports/dsh-report.js';
 import {
   installThreatFeedCron,
   removeThreatFeedCron,
@@ -368,6 +370,33 @@ async function main() {
         if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
       }
       process.exitCode = result.risk_level === 'critical' ? 2 : 0;
+    });
+
+  program
+    .command('dsh-scan')
+    .description('Audit a local DSH plugin directory or HTTPS GitHub repository')
+    .argument('<repo-or-path>', 'Local directory or https://github.com/owner/repo URL')
+    .option('-f, --format <format>', 'Report format: json | markdown | html', 'markdown')
+    .option('-o, --output <path>', 'Write the report to a file instead of stdout')
+    .action(async (input, options) => {
+      const format = String(options.format).toLowerCase();
+      if (!['json', 'markdown', 'html'].includes(format)) {
+        throw new Error('Invalid format. Use json, markdown, or html.');
+      }
+      const report = await scanDshPlugin(String(input));
+      const rendered = format === 'json'
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : format === 'html'
+          ? renderDshHtml(report)
+          : renderDshMarkdown(report);
+      if (options.output) {
+        const outputPath = resolve(String(options.output));
+        writeFileSync(outputPath, rendered, 'utf8');
+        console.error(`DSH scan report written to ${outputPath}`);
+      } else {
+        process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
+      }
+      process.exitCode = report.riskLevel === 'critical' ? 2 : 0;
     });
 
   program

@@ -39,7 +39,18 @@ export type RiskTag =
   | 'TROJAN_DISTRIBUTION'
   | 'SUSPICIOUS_PASTE_URL'
   | 'SUSPICIOUS_IP'
-  | 'SOCIAL_ENGINEERING';
+  | 'SOCIAL_ENGINEERING'
+  // DSH installation-time capabilities and composition risks
+  | 'INSTALL_SCRIPT'
+  | 'NETWORK_ACCESS'
+  | 'FILE_READ_ACCESS'
+  | 'FILE_WRITE_ACCESS'
+  | 'DSH_PATCH_OVERRIDE'
+  | 'DSH_TOOL_REGISTRY_MUTATION'
+  | 'DSH_PROVIDER_MUTATION'
+  | 'DSH_RUNTIME_MUTATION'
+  | 'DSH_SESSION_STORAGE_ACCESS'
+  | 'DSH_THEME_ELEVATED_CAPABILITY';
 
 /**
  * Evidence of a detected risk

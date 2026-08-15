@@ -129,6 +129,23 @@ agentguard init --agent hermes        # native Hermes plugin (add --shell-hooks 
 agentguard init --agent qclaw
 ```
 
+### Audit DeepSeek Harness plugins before installation
+
+The Phase 1 DSH scanner understands current `dsh.bundle.patch`, `dsh.profile.bundles`, `dsh.client`, and Cordis configuration structures in addition to JavaScript and TypeScript capabilities.
+
+```bash
+# Human-readable report
+agentguard dsh-scan ./path/to/dsh-plugin
+
+# Machine-readable report from a GitHub repository
+agentguard dsh-scan https://github.com/owner/dsh-plugin --format json
+
+# Self-contained shareable report page
+agentguard dsh-scan ./path/to/dsh-plugin --format html --output report.html
+```
+
+Reports include DSH identification confidence, plugin kind, explainable risk level, permission profile, impact layers, source evidence, and an installation recommendation. See [AgentGuard for DSH](docs/dsh.md) for the risk model and current limitations.
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 

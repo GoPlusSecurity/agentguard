@@ -12,6 +12,26 @@ export * from './types/index.js';
 
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
+export { scanDshPlugin, DSH_RULES, DSH_SCAN_RULES } from './dsh/scan.js';
+export { detectDshPlugin } from './dsh/detect.js';
+export { parseDshPackage } from './dsh/parse-package.js';
+export { parseCordisConfigs } from './dsh/parse-cordis-patch.js';
+export { buildCapabilityProfile } from './dsh/capability-profile.js';
+export { classifyDshPlugin, hasHarmlessCapabilityMismatch } from './dsh/classify-plugin.js';
+export { classifyImpactLayers } from './dsh/classify-impact.js';
+export { renderDshHtml, renderDshMarkdown } from './reports/dsh-report.js';
+export type {
+  DshCapabilityProfile,
+  DshCordisAnalysis,
+  DshDetection,
+  DshFinding,
+  DshImpactLayer,
+  DshInstallRecommendation,
+  DshPackageMetadata,
+  DshPluginIdentity,
+  DshPluginKind,
+  DshPluginScanReport,
+} from './dsh/types.js';
 export {
   SkillRegistry,
   RegistryStorage,

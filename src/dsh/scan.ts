@@ -1,0 +1,214 @@
+import { basename, join } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { SkillScanner } from '../scanner/index.js';
+import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
+import { ALL_RULES, getRuleById } from '../scanner/rules/index.js';
+import { DSH_RULES } from '../scanner/rules/dsh/index.js';
+import type { RiskLevel, RiskTag, ScanEvidence, ScanRule } from '../types/scanner.js';
+import { buildCapabilityProfile } from './capability-profile.js';
+import { classifyImpactLayers } from './classify-impact.js';
+import { classifyDshPlugin, hasHarmlessCapabilityMismatch } from './classify-plugin.js';
+import { detectDshPlugin } from './detect.js';
+import { resolveDshSource } from './source.js';
+import type {
+  DshCapabilityProfile,
+  DshFinding,
+  DshInstallRecommendation,
+  DshPluginScanReport,
+} from './types.js';
+
+const RULES: ScanRule[] = [...ALL_RULES, ...DSH_RULES];
+const SEVERITY_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
+function isDevelopmentOnlyPath(file: string): boolean {
+  return /(?:^|\/)(?:tests?|__tests__|fixtures)(?:\/|$)|\.(?:spec|test)\.[^.]+$/i.test(file);
+}
+
+function severityFor(tag: RiskTag): RiskLevel {
+  return DSH_RULES.find(rule => rule.id === tag)?.severity ?? getRuleById(tag)?.severity ?? 'low';
+}
+
+function humanMessage(tag: RiskTag): string {
+  return DSH_RULES.find(rule => rule.id === tag)?.description
+    ?? getRuleById(tag)?.description
+    ?? 'Security-relevant behavior detected';
+}
+
+function toFindings(evidence: ScanEvidence[]): DshFinding[] {
+  const seen = new Set<string>();
+  return evidence.filter(item => {
+    const key = `${item.tag}\0${item.file}\0${item.line}\0${item.match}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(item => ({
+    ruleId: item.tag,
+    severity: severityFor(item.tag),
+    file: item.file,
+    line: item.line || undefined,
+    message: humanMessage(item.tag),
+    snippet: item.match,
+  }));
+}
+
+function calculateDshRisk(tags: RiskTag[]): RiskLevel {
+  const unique = new Set(tags);
+  if ([...unique].some(tag => severityFor(tag) === 'critical')) return 'critical';
+  const criticalCombination = unique.has('INSTALL_SCRIPT')
+    && (unique.has('SHELL_EXEC') || unique.has('REMOTE_LOADER'))
+    && (unique.has('READ_ENV_SECRETS') || unique.has('OBFUSCATION') || unique.has('NETWORK_ACCESS'));
+  if (criticalCombination) return 'critical';
+  return [...unique].reduce<RiskLevel>((current, tag) => {
+    const severity = severityFor(tag);
+    return SEVERITY_ORDER[severity] > SEVERITY_ORDER[current] ? severity : current;
+  }, 'low');
+}
+
+function recommendationFor(risk: RiskLevel, capabilities: DshCapabilityProfile): DshInstallRecommendation {
+  if (risk === 'critical') return 'expert-review-required';
+  if (risk === 'high' && (capabilities.shellExec || capabilities.fileWrite)) return 'avoid-on-primary-machine';
+  if (risk === 'high') return 'sandbox-only';
+  if (risk === 'medium') return 'test-in-isolated-profile';
+  return 'safe-to-try';
+}
+
+function buildSummary(
+  isDsh: boolean,
+  risk: RiskLevel,
+  tags: RiskTag[],
+  mismatch: boolean,
+): string {
+  if (!isDsh) return 'No strong DSH plugin, bundle, profile, or Cordis integration signal was found.';
+  if (tags.length === 0) return 'DSH project detected; no security-relevant capabilities were found by the current static rules.';
+  const capabilityLabels: Partial<Record<RiskTag, string>> = {
+    SHELL_EXEC: 'shell execution',
+    FILE_WRITE_ACCESS: 'file writes',
+    FILE_READ_ACCESS: 'file reads',
+    NETWORK_ACCESS: 'network access',
+    READ_ENV_SECRETS: 'environment access',
+    INSTALL_SCRIPT: 'installation scripts',
+    DSH_TOOL_REGISTRY_MUTATION: 'tool pipeline changes',
+    DSH_PROVIDER_MUTATION: 'model/provider changes',
+    DSH_RUNTIME_MUTATION: 'runtime lifecycle changes',
+  };
+  const reasons = tags.map(tag => capabilityLabels[tag]).filter((value): value is string => Boolean(value));
+  const uniqueReasons = [...new Set(reasons)].slice(0, 4);
+  const mismatchText = mismatch ? ' Its benign-looking purpose does not match the elevated capabilities it requests.' : '';
+  return `${risk.toUpperCase()} risk: ${uniqueReasons.join(', ') || 'security-relevant behavior detected'}.${mismatchText}`;
+}
+
+async function hasInstallInstructions(rootDir: string): Promise<boolean> {
+  for (const file of ['README.md', 'README.zh.md', 'readme.md']) {
+    try {
+      const path = join(rootDir, file);
+      if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) continue;
+      const content = await readFile(path, 'utf8');
+      if (/(?:^|\n)#{1,4}\s*(?:install|installation|安装)|\b(?:npm|pnpm|yarn)\s+(?:add|install)\b/i.test(content)) {
+        return true;
+      }
+    } catch {
+      // A repository need not have every common README spelling.
+    }
+  }
+  return false;
+}
+
+/** Scan one local directory or GitHub repository and return a DSH-specific report. */
+export async function scanDshPlugin(input: string): Promise<DshPluginScanReport> {
+  const source = await resolveDshSource(input);
+  try {
+    const detection = await detectDshPlugin(source.rootDir);
+    const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection);
+    const pluginKind = await classifyDshPlugin(source.rootDir, detection, capabilityProfile);
+    const impactLayers = classifyImpactLayers(pluginKind, capabilityProfile, detection);
+    const artifactScanner = new SkillScanner({ useExternalScanner: false, additionalRules: DSH_RULES });
+    const artifactHash = await artifactScanner.calculateArtifactHash(source.rootDir);
+    const scan = await artifactScanner.scan({
+      skill: {
+        id: detection.package.name ?? basename(source.rootDir),
+        source: source.repositoryUrl ?? source.rootDir,
+        version_ref: detection.package.version ?? source.revision ?? 'unknown',
+        artifact_hash: artifactHash,
+      },
+      payload: { type: 'dir', ref: source.rootDir },
+    });
+    scan.evidence = scan.evidence.filter(item => {
+      if (isDevelopmentOnlyPath(item.file)) return false;
+      if (item.tag !== 'DSH_PATCH_OVERRIDE') return true;
+      const id = item.match.match(/id:\s*([^\s]+)/i)?.[1];
+      return Boolean(id && detection.cordis.rows.some(row =>
+        row.file === item.file && row.id === id && row.operation === 'replace',
+      ));
+    });
+    scan.risk_tags = [...new Set(scan.evidence.map(item => item.tag))];
+    const riskTags = [...new Set(scan.risk_tags)];
+    const harmlessMismatch = hasHarmlessCapabilityMismatch(detection, pluginKind, capabilityProfile);
+    const findings = toFindings(scan.evidence);
+    if (harmlessMismatch) {
+      riskTags.push('DSH_THEME_ELEVATED_CAPABILITY');
+      findings.push({
+        ruleId: 'DSH_THEME_ELEVATED_CAPABILITY',
+        severity: 'high',
+        file: 'package.json',
+        message: 'Looks harmless, but requests elevated capabilities',
+      });
+    }
+    const riskLevel = calculateDshRisk(riskTags);
+    const scannedAt = scan.metadata?.scan_time ?? new Date().toISOString();
+
+    return {
+      schemaVersion: 1,
+      identity: {
+        name: detection.package.name ?? basename(source.repositoryUrl ?? source.rootDir).replace(/\.git$/, ''),
+        packageName: detection.package.name,
+        version: detection.package.version,
+        repoUrl: source.repositoryUrl ?? detection.package.repositoryUrl,
+        path: source.kind === 'local' ? source.rootDir : undefined,
+        artifactHash,
+        pluginKind,
+        profileName: detection.package.profileBundles.length > 0 ? detection.package.name : undefined,
+        bundleName: detection.package.bundlePatch ? detection.package.name : undefined,
+      },
+      detection: {
+        isDshPlugin: detection.isDshPlugin,
+        confidence: detection.confidence,
+        signals: detection.signals,
+      },
+      riskLevel,
+      riskTags,
+      capabilityProfile,
+      impactLayers,
+      findings,
+      installRecommendation: recommendationFor(riskLevel, capabilityProfile),
+      summary: buildSummary(detection.isDshPlugin, riskLevel, riskTags, harmlessMismatch),
+      harmlessMismatch,
+      scannedAt,
+      filesScanned: scan.metadata?.files_scanned ?? 0,
+      scanDurationMs: scan.metadata?.scan_duration_ms ?? 0,
+      source: {
+        input,
+        kind: source.kind,
+        resolvedPath: source.kind === 'local' ? source.rootDir : source.repositoryUrl ?? input,
+        repositoryUrl: source.repositoryUrl,
+        revision: source.revision,
+        lastCommitAt: source.lastCommitAt,
+      },
+      project: {
+        description: detection.package.description,
+        repositoryUrl: detection.package.repositoryUrl ?? source.repositoryUrl,
+        hasInstallInstructions: await hasInstallInstructions(source.rootDir),
+        manifest: {
+          bundle: Boolean(detection.package.bundlePatch),
+          profile: detection.package.profileBundles.length > 0,
+          client: detection.package.hasClientExtension,
+          cordisFiles: detection.cordis.files,
+        },
+      },
+      diagnostics: { cordisParseErrors: detection.cordis.parseErrors },
+    };
+  } finally {
+    await source.cleanup();
+  }
+}
+
+export { DSH_RULES, RULES as DSH_SCAN_RULES };
