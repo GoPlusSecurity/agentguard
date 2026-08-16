@@ -18,7 +18,7 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. For example, ask DSH: “Use AgentGuard to scan tag `v1.2.3` of `https://github.com/owner/plugin` and report whether I should install it.”
+Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets. For example, ask DSH: “Use AgentGuard to scan tag `v1.2.3` of `https://github.com/owner/plugin` and report whether I should install it.”
 
 The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
 
@@ -42,7 +42,7 @@ Restart the DSH process after an add, update, or remove operation. For a local `
 Verification checklist:
 
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
-2. DSH exposes the `agentguard_dsh_scan` tool.
+2. DSH exposes the `agentguard_dsh_scan` and `agentguard_dsh_scan_batch` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
 4. After removal and restart, the AgentGuard composition row and tool are absent.
 
@@ -142,6 +142,26 @@ Exit codes:
 
 High risk deliberately remains exit code 0 in Phase 1 because it often describes the expected power of a tool or provider plugin. Automation should read `riskLevel` and `installRecommendation` from JSON when its policy needs a stricter gate.
 
+### Batch manifests
+
+Use a JSON manifest to build a bounded review queue. Local paths are resolved relative to the manifest file; GitHub targets may pin a `ref`.
+
+```json
+{
+  "targets": [
+    "./plugins/local-theme",
+    { "target": "https://github.com/owner/plugin", "ref": "v1.2.3" }
+  ]
+}
+```
+
+```bash
+agentguard dsh-scan-batch ./targets.json --format markdown
+agentguard dsh-scan-batch ./targets.json --format json --output batch-report.json
+```
+
+CLI manifests accept at most 25 unique targets and run them sequentially. One failed target is recorded without discarding successful results. Exit code `1` means at least one target failed; otherwise `2` means the completed batch contains a critical repository-risk result, and `0` means all targets completed without critical risk. Markdown is a compact review queue; JSON retains every complete per-target report.
+
 ## Programmatic API
 
 The package exports the scanner and its supporting types:
@@ -149,6 +169,7 @@ The package exports the scanner and its supporting types:
 ```ts
 import {
   scanDshPlugin,
+  scanDshPlugins,
   renderDshHtml,
   renderDshMarkdown,
   type DshPluginScanReport,
@@ -156,6 +177,10 @@ import {
 
 const report: DshPluginScanReport = await scanDshPlugin('./plugin');
 const pinned = await scanDshPlugin('https://github.com/owner/dsh-plugin', { ref: 'v1.2.3' });
+const batch = await scanDshPlugins([
+  { target: './plugin' },
+  { target: 'https://github.com/owner/dsh-plugin', ref: 'v1.2.3' },
+]);
 
 if (report.riskLevel === 'critical') {
   throw new Error(report.summary);

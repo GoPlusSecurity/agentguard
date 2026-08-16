@@ -35,9 +35,12 @@ assert.match(dumped.stdout, /id:\s*agentguard-dsh-plugin/);
 assert.match(dumped.stdout, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
 
 const plugin = await import(`${pathToFileURL(installedPlugin).href}?e2e=${Date.now()}`);
-let registered;
-plugin.apply({ tools: { register(tool) { registered = tool; } } });
-assert.equal(registered?.name, 'agentguard_dsh_scan');
+const registeredTools = [];
+plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
+const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
+const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
+assert.ok(registered);
+assert.ok(registeredBatch);
 const scan = await registered.execute({ target: safeFixture, format: 'json' });
 assert.match(scan.scannerVersion, /^\d+\.\d+\.\d+/);
 assert.equal(scan.rulesBaseline, '367227cc2b8bc064af369bf41e4490f6c4d3ea8b');
@@ -71,6 +74,9 @@ assert.ok(generatedRuntimeReport.runtimeSurfaceRiskTags.includes('DYNAMIC_CODE_E
 assert.ok(!generatedRuntimeReport.runtimeSurfaceRiskTags.includes('OBFUSCATION'));
 assert.ok(generatedRuntimeReport.findings.some(finding =>
   finding.ruleId === 'DYNAMIC_CODE_EXECUTION' && finding.occurrenceCount === 1 && finding.likelyGenerated));
+const batchScan = await registeredBatch.execute({ targets: [{ target: safeFixture }, { target: localLoaderFixture }] });
+assert.equal(batchScan.succeeded, 2);
+assert.equal(batchScan.highestRuntimeSurfaceRisk, 'high');
 
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
@@ -113,6 +119,7 @@ try {
     profileComposed: true,
     runtimeHttpStatus: status,
     tool: registered.name,
+    batchTool: registeredBatch.name,
     scanRisk: scan.riskLevel,
     runtimeSurfaceRisk: scan.runtimeSurfaceRiskLevel,
     scanRecommendation: scan.installRecommendation,

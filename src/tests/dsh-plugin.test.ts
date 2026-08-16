@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, createAgentGuardDshTool } from '../dsh/plugin.js';
+import { apply, createAgentGuardDshBatchTool, createAgentGuardDshTool } from '../dsh/plugin.js';
 import { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE } from '../dsh/metadata.js';
 import { packageVersion } from '../version.js';
 
@@ -15,11 +15,15 @@ afterEach(async () => {
 
 describe('AgentGuard DSH runtime plugin', () => {
   it('registers the read-only scanner tool', () => {
-    let registered: ReturnType<typeof createAgentGuardDshTool> | undefined;
-    apply({ tools: { register(tool) { registered = tool; } } });
-    assert.equal(registered?.name, 'agentguard_dsh_scan');
-    assert.match(registered?.description ?? '', /without installing or executing/i);
-    const properties = registered?.parameters.properties as Record<string, unknown>;
+    const registered: Array<{ name: string }> = [];
+    apply({ tools: { register(tool) { registered.push(tool); } } });
+    const single = createAgentGuardDshTool();
+    const batch = createAgentGuardDshBatchTool();
+    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name]);
+    const registeredSingle = single;
+    assert.equal(registeredSingle.name, 'agentguard_dsh_scan');
+    assert.match(registeredSingle.description, /without installing or executing/i);
+    const properties = registeredSingle.parameters.properties as Record<string, unknown>;
     assert.deepEqual(properties.ref, {
       type: 'string',
       description: 'Optional GitHub branch, tag, fully qualified ref, or full commit SHA.',

@@ -72,11 +72,17 @@ try {
   assert.match(composed, /id:\s*agentguard-dsh-plugin/);
   const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
   const plugin = await import(`${pathToFileURL(installedPlugin).href}?package=${Date.now()}`);
-  let registered;
-  plugin.apply({ tools: { register(tool) { registered = tool; } } });
+  const registeredTools = [];
+  plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
+  const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
+  const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
+  assert.ok(registered);
+  assert.ok(registeredBatch);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
   assert.equal(result.phase, 'phase1-rc2');
+  const batchResult = await registeredBatch.execute({ targets: [{ target: safeFixture }], format: 'json' });
+  assert.equal(batchResult.succeeded, 1);
 
   await dsh(['plugin', '--profile', 'web', 'update', tarball]);
   const updatedManifest = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'));

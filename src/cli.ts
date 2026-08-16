@@ -33,7 +33,9 @@ import type { Advisory, SelfCheckResult } from './feed/types.js';
 import { CloudRequestError } from './cloud/client.js';
 import { notifyOpenClawMessage, notifyOpenClawRegistrationLink } from './cloud/openclaw-notify.js';
 import { scanDshPlugin } from './dsh/scan.js';
+import { parseDshBatchManifest, scanDshPlugins } from './dsh/batch.js';
 import { renderDshHtml, renderDshMarkdown } from './reports/dsh-report.js';
+import { renderDshBatchMarkdown } from './reports/dsh-batch-report.js';
 import {
   installThreatFeedCron,
   removeThreatFeedCron,
@@ -401,6 +403,34 @@ async function main() {
         process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
       }
       process.exitCode = report.riskLevel === 'critical' ? 2 : 0;
+    });
+
+  program
+    .command('dsh-scan-batch')
+    .description('Audit a bounded JSON manifest of DSH plugin directories or GitHub repositories')
+    .argument('<manifest>', 'JSON file containing a targets array')
+    .option('-f, --format <format>', 'Report format: json | markdown', 'markdown')
+    .option('-o, --output <path>', 'Write the report to a file instead of stdout')
+    .action(async (manifest, options) => {
+      const format = String(options.format).toLowerCase();
+      if (!['json', 'markdown'].includes(format)) throw new Error('Invalid format. Use json or markdown.');
+      const manifestPath = resolve(String(manifest));
+      if (statSync(manifestPath).size > 256 * 1024) throw new Error('DSH batch manifest exceeds the 256 KiB limit');
+      const targets = parseDshBatchManifest(JSON.parse(readFileSync(manifestPath, 'utf8'))).map(entry => ({
+        ...entry,
+        target: /^https?:\/\//i.test(entry.target) ? entry.target : resolve(dirname(manifestPath), entry.target),
+      }));
+      const batch = await scanDshPlugins(targets);
+      const rendered = format === 'json' ? `${JSON.stringify(batch, null, 2)}\n` : renderDshBatchMarkdown(batch);
+      if (options.output) {
+        const outputPath = resolve(String(options.output));
+        mkdirSync(dirname(outputPath), { recursive: true });
+        writeFileSync(outputPath, rendered, 'utf8');
+        console.error(`DSH batch scan report written to ${outputPath}`);
+      } else {
+        process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
+      }
+      process.exitCode = batch.failed > 0 ? 1 : batch.highestRisk === 'critical' ? 2 : 0;
     });
 
   program
