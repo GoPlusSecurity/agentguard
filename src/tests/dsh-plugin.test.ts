@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, createAgentGuardDshBatchTool, createAgentGuardDshCompareTool, createAgentGuardDshTool } from '../dsh/plugin.js';
+import {
+  apply,
+  createAgentGuardDshBatchTool,
+  createAgentGuardDshCompareTool,
+  createAgentGuardDshRuntimeSummaryTool,
+  createAgentGuardDshTool,
+} from '../dsh/plugin.js';
 import { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE } from '../dsh/metadata.js';
 import { packageVersion } from '../version.js';
 
@@ -20,7 +26,8 @@ describe('AgentGuard DSH runtime plugin', () => {
     const single = createAgentGuardDshTool();
     const batch = createAgentGuardDshBatchTool();
     const compare = createAgentGuardDshCompareTool();
-    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name, compare.name]);
+    const runtimeSummary = createAgentGuardDshRuntimeSummaryTool();
+    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name, compare.name, runtimeSummary.name]);
     const registeredSingle = single;
     assert.equal(registeredSingle.name, 'agentguard_dsh_scan');
     assert.match(registeredSingle.description, /without installing or executing/i);
@@ -29,6 +36,26 @@ describe('AgentGuard DSH runtime plugin', () => {
       type: 'string',
       description: 'Optional GitHub branch, tag, fully qualified ref, or full commit SHA.',
     });
+  });
+
+  it('exposes a bounded runtime summary without raw tool inputs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentguard-dsh-runtime-summary-tool-'));
+    roots.push(root);
+    const auditPath = join(root, 'audit.jsonl');
+    await writeFile(auditPath, `${JSON.stringify({
+      actionId: 'action-1', sessionId: 'dsh:root-1', agentHost: 'dsh', actionType: 'shell',
+      toolName: 'bash', input: 'TOP_SECRET_VALUE', decision: 'block', riskScore: 95,
+      riskLevel: 'critical', reasons: [{ code: 'REMOTE_CODE_EXECUTION' }], policyVersion: 'test',
+      metadata: { runtimeMode: 'observe', nested: false },
+    })}\n`, 'utf8');
+
+    const tool = createAgentGuardDshRuntimeSummaryTool(() => auditPath);
+    const result = await tool.execute({ limit: 10 });
+    assert.equal(result.total, 1);
+    assert.equal(result.decisions.block, 1);
+    assert.deepEqual(result.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
+    assert.doesNotMatch(JSON.stringify(result), /TOP_SECRET_VALUE/);
+    await assert.rejects(() => tool.execute({ limit: 0 }), /between 1 and 1000/);
   });
 
   it('registers the Phase 2A observer by default and allows disabling it', () => {

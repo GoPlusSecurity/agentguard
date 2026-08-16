@@ -6,6 +6,8 @@ import { renderDshBatchMarkdown } from '../reports/dsh-batch-report.js';
 import { compareDshReports } from './compare.js';
 import { renderDshComparisonMarkdown } from '../reports/dsh-compare-report.js';
 import { createDshPreExecuteObserver, type DshRuntimeConfig, type DshToolExecution, type DshPreExecuteNext } from './runtime.js';
+import { summarizeDshRuntimeAudit, type DshRuntimeSummary } from './runtime-summary.js';
+import { loadConfig } from '../config.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools'];
@@ -27,7 +29,8 @@ type DshPluginContext = {
     register: (tool:
       | ToolDefinition<AgentGuardDshToolArgs, AgentGuardDshToolResult>
       | ToolDefinition<AgentGuardDshBatchToolArgs, AgentGuardDshBatchToolResult>
-      | ToolDefinition<AgentGuardDshCompareToolArgs, AgentGuardDshCompareToolResult>) => unknown;
+      | ToolDefinition<AgentGuardDshCompareToolArgs, AgentGuardDshCompareToolResult>
+      | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>) => unknown;
   };
   on?: (
     event: 'tools/pre-execute',
@@ -99,6 +102,15 @@ export type AgentGuardDshCompareToolResult = {
   modelSummary: string;
   format: 'markdown' | 'json';
   content: string;
+};
+
+export type AgentGuardDshRuntimeSummaryToolArgs = {
+  limit?: number;
+  sessionId?: string;
+};
+
+export type AgentGuardDshRuntimeSummaryToolResult = DshRuntimeSummary & {
+  modelSummary: string;
 };
 
 export function createAgentGuardDshTool(): ToolDefinition<AgentGuardDshToolArgs, AgentGuardDshToolResult> {
@@ -337,10 +349,82 @@ export function createAgentGuardDshCompareTool(): ToolDefinition<AgentGuardDshCo
   };
 }
 
+export function createAgentGuardDshRuntimeSummaryTool(
+  resolveAuditPath: () => string = () => loadConfig().auditPath
+): ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult> {
+  return {
+    name: 'agentguard_dsh_runtime_summary',
+    description:
+      'Summarize recent AgentGuard DSH runtime observations from the local audit log. ' +
+      'Returns aggregate decisions, action types, risk levels, and reason codes without exposing raw tool inputs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          minimum: 1,
+          maximum: 1000,
+          description: 'Maximum number of matching recent DSH events to aggregate. Defaults to 100.',
+        },
+        sessionId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 160,
+          description: 'Optional exact DSH session identifier.',
+        },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          total: { type: 'number' },
+          inspected: { type: 'number' },
+          malformedLines: { type: 'number' },
+          truncated: { type: 'boolean' },
+          sessionId: { type: 'string' },
+          decisions: { type: 'object' },
+          actionTypes: { type: 'object' },
+          riskLevels: { type: 'object' },
+          topReasons: { type: 'array' },
+          nestedCalls: { type: 'number' },
+          latestActionId: { type: 'string' },
+          latestPolicyVersion: { type: 'string' },
+          modelSummary: { type: 'string' },
+        },
+        required: [
+          'total', 'inspected', 'malformedLines', 'truncated', 'decisions',
+          'actionTypes', 'riskLevels', 'topReasons', 'nestedCalls', 'modelSummary',
+        ],
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{ type: 'text', text: value.modelSummary }],
+    },
+    timeoutMs: 10_000,
+    async execute(args = {}) {
+      const summary = summarizeDshRuntimeAudit(resolveAuditPath(), args);
+      const reviewCount = (summary.decisions.warn ?? 0)
+        + (summary.decisions.require_approval ?? 0)
+        + (summary.decisions.block ?? 0);
+      return {
+        ...summary,
+        modelSummary: [
+          `AgentGuard summarized ${summary.total} recent DSH runtime observations.`,
+          `${reviewCount} received warn, approval, or block decisions.`,
+          `${summary.nestedCalls} were nested tool calls.`,
+          'Only aggregate metadata is returned; raw tool inputs are omitted.',
+        ].join(' '),
+      };
+    },
+  };
+}
+
 export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig = {}): void {
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
+  ctx.tools.register(createAgentGuardDshRuntimeSummaryTool());
   if (config.runtime?.mode !== 'off' && ctx.on) {
     ctx.on('tools/pre-execute', createDshPreExecuteObserver({
       onError(error, exec) {

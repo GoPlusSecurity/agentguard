@@ -53,10 +53,16 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(mapDshToolToRuntimeAction('bash'), 'shell');
     assert.equal(mapDshToolToRuntimeAction('read_file'), 'file_read');
     assert.equal(mapDshToolToRuntimeAction('read_image'), 'file_read');
+    assert.equal(mapDshToolToRuntimeAction('view_image'), 'file_read');
+    assert.equal(mapDshToolToRuntimeAction('glob'), 'file_read');
     assert.equal(mapDshToolToRuntimeAction('str_replace_editor'), 'file_write');
+    assert.equal(mapDshToolToRuntimeAction('apply_patch'), 'file_write');
     assert.equal(mapDshToolToRuntimeAction('web_search'), 'web_search');
+    assert.equal(mapDshToolToRuntimeAction('image_query'), 'web_search');
     assert.equal(mapDshToolToRuntimeAction('browser_navigate'), 'network');
+    assert.equal(mapDshToolToRuntimeAction('http_request'), 'network');
     assert.equal(mapDshToolToRuntimeAction('mcp_database_query'), 'mcp_tool');
+    assert.equal(mapDshToolToRuntimeAction('mcp.server.tool'), 'mcp_tool');
     assert.equal(mapDshToolToRuntimeAction('custom_tool'), 'other');
 
     const action = buildDshRuntimeAction(execution({ parent: Symbol('parent') }));

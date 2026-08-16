@@ -49,9 +49,11 @@ try {
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
+  const registeredRuntimeSummary = registeredTools.find(tool => tool.name === 'agentguard_dsh_runtime_summary');
   assert.ok(registered);
   assert.ok(registeredBatch);
   assert.ok(registeredCompare);
+  assert.ok(registeredRuntimeSummary);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
   assert.equal(result.phase, 'phase1-rc2');
@@ -72,6 +74,7 @@ try {
     installComposed: true,
     scanExecuted: true,
     runtimeObserverRegistered: true,
+    runtimeSummaryRegistered: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,
     phase: result.phase,

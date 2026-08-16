@@ -7,7 +7,7 @@ AgentGuard Runtime Phase 2A connects to DSH's native `tools/pre-execute` waterfa
 The shipped mode is `observe`:
 
 1. DSH supplies the immutable tool name, parsed arguments, call identity, root-call identity, optional parent token, and calling agent.
-2. AgentGuard maps recognized tools to `shell`, `file_read`, `file_write`, `web_search`, `network`, `deploy`, `skill_install`, or `mcp_tool`. Unknown tools remain `other` and are still audited.
+2. AgentGuard maps recognized tools—including common command, patch, image, file-search, HTTP, browser, and MCP names—to `shell`, `file_read`, `file_write`, `web_search`, `network`, `deploy`, `skill_install`, or `mcp_tool`. Unknown tools remain `other` and are still audited.
 3. `evaluateRuntimeAction()` resolves Cloud, cached, or bundled-default policy and delegates to the existing `evaluateLocalAction()` / `ActionScanner` path.
 4. AgentGuard records the policy decision, risk score, reasons, call tree metadata, and `sourceAttribution: "unknown"` in `~/.agentguard/audit.jsonl`.
 5. The listener calls the next DSH policy unchanged. AgentGuard never returns its evaluated `deny` or `ask` in Phase 2A.
@@ -15,6 +15,12 @@ The shipped mode is `observe`:
 This means an audit event may contain `decision: "block"` while the action executed. The fields `runtimeMode: "observe"` and `enforcementApplied: false` make that distinction explicit.
 
 AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-observation. Evaluation or audit failures are fail-open in Phase 2A and cannot change DSH behavior.
+
+## Runtime summary tool
+
+The installed bundle registers `agentguard_dsh_runtime_summary`. It reads only the bounded final 1 MiB of the configured local audit log and aggregates up to 1,000 recent DSH observation events. An optional exact `sessionId` filter can isolate one DSH call tree.
+
+The result contains decision, action-type, risk-level, reason-code, and nested-call counts. It deliberately omits raw tool inputs, reason evidence, and command or file contents so asking DSH for a summary does not feed captured secrets back into the model context. Malformed audit lines are counted and ignored. AgentGuard's `agentguard_*` exclusion also prevents the summary request from observing itself.
 
 ## Configuration
 

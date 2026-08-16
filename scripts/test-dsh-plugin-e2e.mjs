@@ -49,9 +49,11 @@ assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute'])
 const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
 const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
 const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
+const registeredRuntimeSummary = registeredTools.find(tool => tool.name === 'agentguard_dsh_runtime_summary');
 assert.ok(registered);
 assert.ok(registeredBatch);
 assert.ok(registeredCompare);
+assert.ok(registeredRuntimeSummary);
 const scan = await registered.execute({ target: safeFixture, format: 'json' });
 assert.match(scan.scannerVersion, /^\d+\.\d+\.\d+/);
 assert.equal(scan.rulesBaseline, '367227cc2b8bc064af369bf41e4490f6c4d3ea8b');
@@ -183,6 +185,12 @@ try {
   assert.equal(nestedEvent?.toolName, 'bash');
   assert.equal(nestedEvent?.metadata?.rootCallId, 'runtime-root-1');
   assert.equal(nestedEvent?.metadata?.nested, true);
+
+  const runtimeSummary = await registeredRuntimeSummary.execute({ limit: 10 });
+  assert.equal(runtimeSummary.total, 3);
+  assert.equal(runtimeSummary.decisions.require_approval, 1);
+  assert.equal(runtimeSummary.nestedCalls, 1);
+  assert.doesNotMatch(JSON.stringify(runtimeSummary), /curl https:\/\/example\.com/);
 } finally {
   await runtimeCtx.fiber.dispose();
 }
@@ -230,6 +238,7 @@ try {
     tool: registered.name,
     batchTool: registeredBatch.name,
     compareTool: registeredCompare.name,
+    runtimeSummaryTool: registeredRuntimeSummary.name,
     scanRisk: scan.riskLevel,
     runtimeSurfaceRisk: scan.runtimeSurfaceRiskLevel,
     scanRecommendation: scan.installRecommendation,
@@ -239,6 +248,7 @@ try {
     generatedRuntimeTag: generatedRuntimeReport.runtimeSurfaceRiskTags.includes('DYNAMIC_CODE_EXECUTION'),
     nativeRuntimePipeline: true,
     nestedRuntimeObserved: true,
+    runtimeSummaryRedacted: true,
   }));
 } finally {
   child.kill('SIGTERM');

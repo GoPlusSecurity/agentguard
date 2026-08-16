@@ -46,11 +46,23 @@ export interface DshRuntimeObservation {
   event: RuntimeAuditEvent;
 }
 
-const SHELL_TOOLS = new Set(['bash', 'terminal', 'shell', 'exec', 'exec_command', 'execute_command', 'execute_code']);
-const READ_TOOLS = new Set(['read', 'read_file', 'file_read', 'read_image']);
-const WRITE_TOOLS = new Set(['write', 'write_file', 'file_write', 'edit', 'patch', 'str_replace_editor']);
-const WEB_SEARCH_TOOLS = new Set(['web_search', 'search_query']);
-const NETWORK_TOOLS = new Set(['web_fetch', 'fetch', 'browser', 'browser_navigate', 'open_url', 'visit_url']);
+const SHELL_TOOLS = new Set([
+  'bash', 'terminal', 'shell', 'exec', 'exec_command', 'execute_command', 'execute_code',
+  'run_command', 'run_shell_command', 'spawn_process',
+]);
+const READ_TOOLS = new Set([
+  'read', 'read_file', 'file_read', 'read_image', 'view_image', 'open_file',
+  'list_directory', 'list_files', 'glob', 'grep', 'search_files',
+]);
+const WRITE_TOOLS = new Set([
+  'write', 'write_file', 'file_write', 'edit', 'patch', 'apply_patch', 'str_replace_editor',
+  'create_file', 'delete_file', 'move_file', 'rename_file', 'copy_file',
+]);
+const WEB_SEARCH_TOOLS = new Set(['web_search', 'search_query', 'image_query']);
+const NETWORK_TOOLS = new Set([
+  'web_fetch', 'fetch', 'browser', 'browser_navigate', 'open_url', 'visit_url',
+  'http_request', 'download', 'navigate',
+]);
 
 /** AgentGuard tools are excluded so the scanner cannot recursively police itself. */
 export function isAgentGuardDshTool(name: string): boolean {
@@ -66,7 +78,7 @@ export function mapDshToolToRuntimeAction(name: string): RuntimeActionType {
   if (NETWORK_TOOLS.has(normalized) || normalized.startsWith('browser_')) return 'network';
   if (normalized.includes('deploy') || normalized.includes('publish')) return 'deploy';
   if (normalized.includes('skill') && normalized.includes('install')) return 'skill_install';
-  if (normalized.startsWith('mcp_')) return 'mcp_tool';
+  if (normalized.startsWith('mcp_') || normalized.startsWith('mcp.')) return 'mcp_tool';
   return 'other';
 }
 

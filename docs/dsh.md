@@ -18,9 +18,9 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets and `agentguard_dsh_compare` for comparing an approved version with a candidate. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
+Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, and `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
-The three AgentGuard DSH tools preserve the Phase 1 boundary: they perform static analysis only and do not install or execute the target plugin. The installed bundle also enables the separate Phase 2A runtime observer described in [DSH runtime observation](dsh-runtime.md).
+The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local Phase 2A audit events and never returns raw tool input. The installed bundle also enables the separate Phase 2A runtime observer described in [DSH runtime observation](dsh-runtime.md).
 
 ### Operate the DSH installation
 
@@ -42,7 +42,7 @@ Restart the DSH process after an add, update, or remove operation. For a local `
 Verification checklist:
 
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
-2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, and `agentguard_dsh_compare` tools.
+2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
 4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`, `runtimeMode: "observe"`, and `enforcementApplied: false` after non-AgentGuard tools run.
 5. After removal and restart, the AgentGuard composition row, tools, and runtime listener are absent.
