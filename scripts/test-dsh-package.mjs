@@ -55,10 +55,15 @@ try {
     'package/dist/index.d.ts',
     'package/dist/dsh/plugin.js',
     'package/dist/dsh/plugin.d.ts',
+    'package/dist/dsh/runtime.js',
+    'package/dist/dsh/runtime.d.ts',
+    'package/dist/runtime/decision.js',
+    'package/dist/runtime/decision.d.ts',
     'package/dist/dsh/scan.js',
     'package/dist/dsh/metadata.js',
     'package/dist/reports/dsh-report.js',
     'package/docs/dsh.md',
+    'package/docs/dsh-runtime.md',
   ];
   for (const path of required) assert.ok(archiveFiles.has(path), `tarball is missing ${path}`);
   assert.ok(![...archiveFiles].some(path => path.startsWith('package/dist/tests/')), 'tarball contains compiled tests');
@@ -70,10 +75,16 @@ try {
 
   const { stdout: composed } = await dsh(['web', '--dump-config']);
   assert.match(composed, /id:\s*agentguard-dsh-plugin/);
+  assert.match(composed, /runtime:\s*\n\s+mode:\s*observe/);
   const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
   const plugin = await import(`${pathToFileURL(installedPlugin).href}?package=${Date.now()}`);
   const registeredTools = [];
-  plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
+  const runtimeEvents = [];
+  plugin.apply({
+    tools: { register(tool) { registeredTools.push(tool); } },
+    on(event, listener) { runtimeEvents.push({ event, listener }); },
+  });
+  assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute']);
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -105,6 +116,7 @@ try {
     compiledTestsExcluded: true,
     installComposed: true,
     scanExecuted: true,
+    runtimeObserverRegistered: true,
     updatePreservedComposition: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,

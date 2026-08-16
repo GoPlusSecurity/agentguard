@@ -4,8 +4,7 @@ import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
-import { evaluateLocalAction } from './evaluator.js';
-import { resolveRuntimePolicy } from './policy.js';
+import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
 import type { RuntimeAction, RuntimeAgentHost, RuntimeAuditEvent, RuntimeActionType, RuntimeDecision } from './types.js';
 
@@ -48,14 +47,14 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(await client.evaluateAction(action));
     policySource = 'cloud-decision';
   } else {
-    const { policy, source } = await resolveRuntimePolicy({
-      cachePath: options.config.policyCachePath,
+    const evaluation = await evaluateRuntimeAction({
+      action,
+      policyCachePath: options.config.policyCachePath,
       fetchPolicy: client.connected ? () => client.fetchEffectivePolicy() : undefined,
-    });
-    decision = normalizeRuntimeDecision(await evaluateLocalAction(policy, action, {
       filesystemAllowlist: options.filesystemAllowlist,
-    }));
-    policySource = source;
+    });
+    decision = normalizeRuntimeDecision(evaluation.decision);
+    policySource = evaluation.policySource;
   }
   const approvedGrant = !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)

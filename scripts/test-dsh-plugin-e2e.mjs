@@ -33,10 +33,16 @@ const dumped = spawnSync(dshBin, ['web', '--dump-config'], {
 assert.equal(dumped.status, 0, dumped.stderr || dumped.stdout);
 assert.match(dumped.stdout, /id:\s*agentguard-dsh-plugin/);
 assert.match(dumped.stdout, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
+assert.match(dumped.stdout, /runtime:\s*\n\s+mode:\s*observe/);
 
 const plugin = await import(`${pathToFileURL(installedPlugin).href}?e2e=${Date.now()}`);
 const registeredTools = [];
-plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
+const runtimeEvents = [];
+plugin.apply({
+  tools: { register(tool) { registeredTools.push(tool); } },
+  on(event, listener) { runtimeEvents.push({ event, listener }); },
+});
+assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute']);
 const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
 const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
 const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');

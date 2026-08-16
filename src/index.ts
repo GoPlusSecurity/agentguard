@@ -104,6 +104,11 @@ export {
 export { AgentGuardCloudClient } from './cloud/client.js';
 export { evaluateLocalAction } from './runtime/evaluator.js';
 export {
+  evaluateRuntimeAction,
+  type EvaluateRuntimeActionOptions,
+  type RuntimeEvaluation,
+} from './runtime/decision.js';
+export {
   protectAction,
   formatProtectResult,
   exitCodeForDecision,

@@ -2,7 +2,7 @@
 
 AgentGuard for DeepSeek Harness (DSH) is an installation-time trust layer for the DSH plugin ecosystem. It identifies DSH bundles, profiles, client extensions, and Cordis configuration, then combines that context with AgentGuard's existing static rules to produce an explainable security report.
 
-Phase 1 is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH.
+The Phase 1 scanner is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH. Runtime Phase 2A separately observes tools executed by the host after AgentGuard is installed; it does not execute scanned targets or enforce its decisions.
 
 ## Install in DSH
 
@@ -20,7 +20,7 @@ dsh plugin --profile web add link:/absolute/path/to/agentguard
 
 Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets and `agentguard_dsh_compare` for comparing an approved version with a candidate. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
-The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
+The three AgentGuard DSH tools preserve the Phase 1 boundary: they perform static analysis only and do not install or execute the target plugin. The installed bundle also enables the separate Phase 2A runtime observer described in [DSH runtime observation](dsh-runtime.md).
 
 ### Operate the DSH installation
 
@@ -44,22 +44,25 @@ Verification checklist:
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
 2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, and `agentguard_dsh_compare` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
-4. After removal and restart, the AgentGuard composition row and tool are absent.
+4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`, `runtimeMode: "observe"`, and `enforcementApplied: false` after non-AgentGuard tools run.
+5. After removal and restart, the AgentGuard composition row, tools, and runtime listener are absent.
 
 If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web process is not listening; it is not evidence of a scanner failure. Start or restart DSH and inspect its terminal output. If the tool is missing while DSH is running, check the explicit profile with `--dump-config`, then confirm the package appears in that profile's dependencies.
 
 ### Capability boundary
 
-| Capability | DSH Phase 1 | Notes |
+| Capability | Current state | Notes |
 |---|---|---|
-| Detect DSH manifests and Cordis configuration | Yes | Parses supported metadata without evaluating `!!js`. |
-| Scan local directories and HTTPS GitHub repositories | Yes | GitHub scans pin the resolved default-branch commit. |
-| Explain capabilities, findings, and installation posture | Yes | Results remain advisory and require human review. |
+| Detect DSH manifests and Cordis configuration | Phase 1 | Parses supported metadata without evaluating `!!js`. |
+| Scan local directories and HTTPS GitHub repositories | Phase 1 | GitHub scans pin the resolved default-branch commit. |
+| Explain capabilities, findings, and installation posture | Phase 1 | Results remain advisory and require human review. |
 | Install or execute the scanned plugin | No | The scanner never invokes a package manager or target lifecycle script. |
-| Intercept commands executed by DSH | No | Runtime enforcement is a separate Phase 2 requirement. |
-| Apply allow, warn, approve, or block decisions inside DSH | No | Requires stable DSH execution hooks and source-plugin attribution. |
+| Observe commands and tool calls executed by DSH | Phase 2A | Uses native `tools/pre-execute`; root and nested calls share the same path. |
+| Evaluate through AgentGuard runtime policy | Phase 2A | Reuses the shared policy resolver and OSS action evaluator. |
+| Apply allow, warn, approve, or block decisions inside DSH | No | Phase 2A records the evaluated decision but always preserves the downstream DSH decision. |
+| Attribute a call to its source plugin | No | Recorded as `unknown`; AgentGuard does not infer ownership from a tool name. |
 
-AgentGuard's runtime protection for other supported hosts must not be interpreted as active DSH protection. Installing this bundle adds the scanner tool only.
+AgentGuard's enforcing protection for other supported hosts must not be interpreted as active DSH enforcement. Installing this bundle adds the scanner tools and an audit-only observer.
 
 ## Why this exists
 
@@ -90,7 +93,7 @@ Phase 1 does not include:
 - Installing a plugin or resolving its lifecycle scripts.
 - Fetching a package by npm name or comparing an npm tarball with its source repository.
 - Resolving every layer of an already-installed DSH profile into one effective runtime tree.
-- Observing runtime calls or enforcing allow, warn, approve, or block decisions.
+- Enforcing runtime allow, warn, approve, or block decisions. Phase 2A observation is documented separately.
 - Persisting scan history or integrating with a DSH marketplace.
 
 ## Command line

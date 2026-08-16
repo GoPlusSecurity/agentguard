@@ -34,12 +34,18 @@ try {
   const { stdout: composed } = await dsh(['web', '--dump-config']);
   assert.match(composed, /id:\s*agentguard-dsh-plugin/);
   assert.match(composed, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
+  assert.match(composed, /runtime:\s*\n\s+mode:\s*observe/);
 
   const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
   await access(installedPlugin);
   const plugin = await import(`${pathToFileURL(installedPlugin).href}?lifecycle=${Date.now()}`);
   const registeredTools = [];
-  plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
+  const runtimeEvents = [];
+  plugin.apply({
+    tools: { register(tool) { registeredTools.push(tool); } },
+    on(event, listener) { runtimeEvents.push({ event, listener }); },
+  });
+  assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute']);
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -65,6 +71,7 @@ try {
     cleanProfile: true,
     installComposed: true,
     scanExecuted: true,
+    runtimeObserverRegistered: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,
     phase: result.phase,

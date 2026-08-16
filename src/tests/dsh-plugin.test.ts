@@ -31,6 +31,20 @@ describe('AgentGuard DSH runtime plugin', () => {
     });
   });
 
+  it('registers the Phase 2A observer by default and allows disabling it', () => {
+    const events: string[] = [];
+    const context = {
+      tools: { register() {} },
+      on(event: 'tools/pre-execute') { events.push(event); },
+    };
+    apply(context);
+    assert.deepEqual(events, ['tools/pre-execute']);
+
+    events.length = 0;
+    apply(context, { runtime: { mode: 'off' } });
+    assert.deepEqual(events, []);
+  });
+
   it('scans a local DSH plugin and renders markdown', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentguard-dsh-plugin-test-'));
     roots.push(root);

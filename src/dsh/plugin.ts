@@ -5,6 +5,7 @@ import { parseDshBatchManifest, scanDshPlugins, type DshBatchTarget } from './ba
 import { renderDshBatchMarkdown } from '../reports/dsh-batch-report.js';
 import { compareDshReports } from './compare.js';
 import { renderDshComparisonMarkdown } from '../reports/dsh-compare-report.js';
+import { createDshPreExecuteObserver, type DshRuntimeConfig, type DshToolExecution, type DshPreExecuteNext } from './runtime.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools'];
@@ -28,7 +29,18 @@ type DshPluginContext = {
       | ToolDefinition<AgentGuardDshBatchToolArgs, AgentGuardDshBatchToolResult>
       | ToolDefinition<AgentGuardDshCompareToolArgs, AgentGuardDshCompareToolResult>) => unknown;
   };
+  on?: (
+    event: 'tools/pre-execute',
+    listener: (exec: DshToolExecution, next: DshPreExecuteNext) => Promise<{ kind: 'allow' | 'deny' | 'ask'; reason?: string }>
+  ) => unknown;
+  logger?: {
+    warn: (message: string) => void;
+  };
 };
+
+export interface AgentGuardDshPluginConfig {
+  runtime?: DshRuntimeConfig;
+}
 
 export type AgentGuardDshToolArgs = {
   target: string;
@@ -325,8 +337,15 @@ export function createAgentGuardDshCompareTool(): ToolDefinition<AgentGuardDshCo
   };
 }
 
-export function apply(ctx: DshPluginContext): void {
+export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig = {}): void {
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
+  if (config.runtime?.mode !== 'off' && ctx.on) {
+    ctx.on('tools/pre-execute', createDshPreExecuteObserver({
+      onError(error, exec) {
+        ctx.logger?.warn(`AgentGuard DSH runtime observation failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    }));
+  }
 }

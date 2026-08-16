@@ -2,3 +2,6 @@
 - insert:
     - id: agentguard-dsh-plugin
       name: '@goplus/agentguard/dist/dsh/plugin.js'
+      config:
+        runtime:
+          mode: observe
