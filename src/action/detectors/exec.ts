@@ -85,6 +85,12 @@ const DOWNLOAD_AND_EXEC_PATTERNS = [
   /\beval\s+["']?\$\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
 ];
 
+const REMOTE_PACKAGE_EXECUTOR_PATTERNS = [
+  /(?:^|(?:&&|\|\||[;|\n])\s*|\b(?:bash|sh|zsh|dash)\s+-c\s+["'])(?:sudo\s+)?(?:npx|bunx)\b([^;&|\n\r]{0,500})/gi,
+  /(?:^|(?:&&|\|\||[;|\n])\s*|\b(?:bash|sh|zsh|dash)\s+-c\s+["'])(?:sudo\s+)?(?:pnpm|yarn)\s+dlx\b([^;&|\n\r]{0,500})/gi,
+  /(?:^|(?:&&|\|\||[;|\n])\s*|\b(?:bash|sh|zsh|dash)\s+-c\s+["'])(?:sudo\s+)?npm\s+exec\b([^;&|\n\r]{0,500})/gi,
+];
+
 const SHORT_LINK_HOSTS = new Set([
   'bit.ly',
   'tinyurl.com',
@@ -258,6 +264,21 @@ export function analyzeExecCommand(
   }
 
   if (riskLevel !== 'critical') {
+    const remotePackageFinding = analyzeRemotePackageExecution(fullCommand);
+    if (remotePackageFinding) {
+      riskTags.push(remotePackageFinding.tag);
+      evidence.push(remotePackageFinding.evidence);
+      if (remotePackageFinding.risk_level === 'high' || riskLevel === 'low') {
+        riskLevel = remotePackageFinding.risk_level;
+      }
+      if (remotePackageFinding.risk_level === 'high') {
+        shouldBlock = true;
+        blockReason = remotePackageFinding.block_reason;
+      }
+    }
+  }
+
+  if (riskLevel !== 'critical') {
     for (const pattern of HIDDEN_NETWORK_PATTERNS) {
       if (pattern.test(fullCommand)) {
         riskTags.push('HIDDEN_NETWORK_COMMAND');
@@ -408,6 +429,81 @@ interface RemoteScriptExecutionFinding {
   tag: 'REMOTE_SCRIPT_EXECUTION' | 'SUSPICIOUS_REMOTE_SCRIPT_EXECUTION' | 'MALICIOUS_REMOTE_SCRIPT_EXECUTION';
   evidence: ActionEvidence;
   block_reason: string;
+}
+
+interface RemotePackageExecutionFinding {
+  risk_level: 'medium' | 'high';
+  tag: 'PINNED_REMOTE_PACKAGE_EXECUTION' | 'REMOTE_PACKAGE_EXECUTION';
+  evidence: ActionEvidence;
+  block_reason: string;
+}
+
+function analyzeRemotePackageExecution(command: string): RemotePackageExecutionFinding | null {
+  for (const pattern of REMOTE_PACKAGE_EXECUTOR_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of command.matchAll(pattern)) {
+      const spec = findRemotePackageSpec(match[1] || '');
+      if (!spec) continue;
+      const pinned = isFullCommitPinnedPackageSpec(spec);
+      return {
+        risk_level: pinned ? 'medium' : 'high',
+        tag: pinned ? 'PINNED_REMOTE_PACKAGE_EXECUTION' : 'REMOTE_PACKAGE_EXECUTION',
+        evidence: {
+          type: 'remote_package_execution',
+          field: 'command',
+          match: spec,
+          description: pinned
+            ? 'Remote package source is executed directly but pinned to a full commit'
+            : 'Unpinned remote package source is downloaded and executed directly',
+        },
+        block_reason: pinned
+          ? 'Pinned remote package execution should be audited'
+          : 'Unpinned remote package execution requires approval',
+      };
+    }
+  }
+  return null;
+}
+
+function findRemotePackageSpec(rawArgs: string): string | null {
+  const normalized = rawArgs.trim().replace(/["']+\s*$/, '');
+  const tokens = shellTokens(normalized);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = stripPackageToken(tokens[index]);
+    if (!token) continue;
+    if (token === '--package' || token === '-p') {
+      const value = stripPackageToken(tokens[index + 1] || '');
+      if (isRemotePackageSpec(value)) return value;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('--package=')) {
+      const value = stripPackageToken(token.slice('--package='.length));
+      if (isRemotePackageSpec(value)) return value;
+      continue;
+    }
+    if (token.startsWith('-')) continue;
+    if (isRemotePackageSpec(token)) return token;
+  }
+  return null;
+}
+
+function isRemotePackageSpec(value: string): boolean {
+  if (!value || value.startsWith('@') || value.startsWith('.') || value.startsWith('/')) return false;
+  if (/^(?:github|gitlab|bitbucket):[^\s]+$/i.test(value)) return true;
+  if (/^git\+(?:https?|ssh):\/\/[^\s]+$/i.test(value)) return true;
+  if (/^(?:https?|ssh):\/\/(?:[^/]+\.)?(?:github\.com|gitlab\.com|bitbucket\.org)\/[^\s]+$/i.test(value)) return true;
+  if (/^git@[^:]+:[^\s]+$/i.test(value)) return true;
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#[A-Za-z0-9_.\/-]+)?$/.test(value);
+}
+
+function isFullCommitPinnedPackageSpec(value: string): boolean {
+  const fragment = value.includes('#') ? value.slice(value.lastIndexOf('#') + 1) : '';
+  return /^[a-f0-9]{40}$/i.test(fragment);
+}
+
+function stripPackageToken(value: string): string {
+  return value.trim().replace(/^["']+|["'),]+$/g, '');
 }
 
 function analyzeRemoteScriptExecution(command: string): RemoteScriptExecutionFinding | null {

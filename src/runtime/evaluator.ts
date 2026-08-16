@@ -399,6 +399,12 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
   if (tag === 'MALICIOUS_REMOTE_SCRIPT_EXECUTION') {
     return reason('REMOTE_CODE_EXECUTION', 'critical', 'Malicious remote script execution', 'The local OSS runtime detected a remote script execution pattern with high-risk indicators.', evidenceText);
   }
+  if (tag === 'REMOTE_PACKAGE_EXECUTION') {
+    return reason('REMOTE_CODE_EXECUTION', 'high', 'Unpinned remote package execution', 'A package runner downloads and executes code directly from an unpinned Git repository.', evidenceText);
+  }
+  if (tag === 'PINNED_REMOTE_PACKAGE_EXECUTION') {
+    return reason('PINNED_REMOTE_PACKAGE_EXECUTION', 'medium', 'Pinned remote package execution', 'A package runner downloads and executes code directly from a Git repository pinned to a full commit.', evidenceText);
+  }
   if (tag === 'SENSITIVE_DATA_ACCESS' || tag === 'SENSITIVE_ENV_VAR') {
     return reason('SECRET_ACCESS', 'high', 'Sensitive data access', 'The local OSS runtime detected access to sensitive data.', evidenceText);
   }

@@ -163,6 +163,8 @@ Update or remove it from the same profile with `dsh plugin --profile web update 
 
 > **DSH Runtime Phase 2A boundary:** the integration now observes DSH's native `tools/pre-execute` lifecycle, preserves native workspace and request context, and evaluates recognized actions through the same local/Cloud policy resolver and OSS `ActionScanner` used by AgentGuard's other runtime hosts. It is deliberately audit-only: evaluated `warn`, `require_approval`, and `block` decisions are recorded in `~/.agentguard/audit.jsonl` but do not change DSH execution. The `agentguard_dsh_runtime_summary` tool provides bounded, input-redacted aggregates for recent observations. Source-plugin attribution remains `unknown` until DSH exposes a reliable ownership field. See the [DSH runtime guide](docs/dsh-runtime.md).
 
+The shared runtime detector treats unpinned Git sources executed through `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, or `bunx` as high-risk remote code execution. Full commit pins reduce this to a warning rather than making remote code implicitly trusted.
+
 Phase 1.1 keeps the conservative full-repository risk while adding a separate runtime-surface risk, evidence source categories, likely-generated markers, and a human-review priority. Tests, examples, docs, and data findings remain visible instead of being silently discarded.
 
 Phase 1.2 treats active `SKILL.md` and agent-instruction files as runtime-relevant, keeps executable source runtime-relevant even under `data/` or `assets/`, distinguishes computed local module loading from remote code execution, and requires concrete credential APIs before reporting keychain access.

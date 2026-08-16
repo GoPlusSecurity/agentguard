@@ -41,6 +41,8 @@ Set `runtime.mode` to `off` in a custom composition to omit the listener. No enf
 
 DSH does not maintain a separate rule engine. The normalized action goes through AgentGuard's shared runtime policy and detector path, so dangerous commands, remote code execution, protected paths, credential access, exfiltration, outbound-network policy, and supported network anomalies retain the same scoring and decision semantics.
 
+Direct Git package execution is part of the shared shell policy. Unpinned `npx`/`npm exec`/`pnpm dlx`/`yarn dlx`/`bunx` Git sources receive a high-risk `REMOTE_CODE_EXECUTION` decision. A Git source pinned to a full 40-character commit remains visible as a medium-risk warning. Ordinary registry package runners and quoted documentation examples are not classified as Git execution.
+
 The host-parity regression matrix evaluates equivalent shell, file, and network actions with DSH, Codex, Claude Code, and OpenClaw host identities. It requires identical decision, risk score, risk level, and reason codes. This protects shared security semantics while allowing host-specific lifecycle behavior at the boundary.
 
 Host behavior intentionally differs at the boundary:
