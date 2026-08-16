@@ -1,0 +1,13 @@
+{
+  "name": "agentguard-toolkit",
+  "version": "0.1.0",
+  "description": "Skill supply-chain security via the GoPlus AgentGuard MCP server: scan skills before use, manage the trust registry, pre-check risky actions, and simulate Web3 transactions before signing.",
+  "author": {
+    "name": "GoPlus Security",
+    "url": "https://github.com/GoPlusSecurity"
+  },
+  "homepage": "https://github.com/GoPlusSecurity/agentguard",
+  "repository": "https://github.com/GoPlusSecurity/agentguard",
+  "license": "MIT",
+  "keywords": ["security", "mcp", "skill-scanner", "trust-registry", "web3", "goplus", "supply-chain"]
+}
