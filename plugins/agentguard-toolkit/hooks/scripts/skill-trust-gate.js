@@ -15,9 +15,11 @@ function resolveRegistryPath() {
 function loadRegistry(registryPath) {
   try {
     const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-    return registry && Array.isArray(registry.records) ? registry : null;
-  } catch {
-    return null;
+    return registry && Array.isArray(registry.records)
+      ? { status: "ok", registry }
+      : { status: "invalid" };
+  } catch (err) {
+    return err && err.code === "ENOENT" ? { status: "missing" } : { status: "invalid" };
   }
 }
 
@@ -33,13 +35,15 @@ function readStdin() {
   });
 }
 
+// Match by declared name only: PreToolUse:Skill supplies no canonical
+// source@version_ref#artifact_hash identity. This defence-in-depth gate is not
+// a cryptographic control, so a renamed artifact will not match a revoked record.
 function recordMatches(record, norm) {
   const skill = record && record.skill && typeof record.skill === "object" ? record.skill : {};
   const id = typeof skill.id === "string" ? skill.id.toLowerCase() : "";
   const sourcePart = typeof skill.source === "string" ? skill.source.split("/").pop() : "";
   const source = sourcePart ? sourcePart.replace(/\.git$/i, "").toLowerCase() : "";
-  const key = typeof record.record_key === "string" ? record.record_key.split("@")[0].toLowerCase() : "";
-  return id === norm || source === norm || key === norm;
+  return id === norm || source === norm;
 }
 
 function isExpired(record) {
@@ -63,6 +67,10 @@ function emit(output) {
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
+function list(v) {
+  return Array.isArray(v) && v.length ? v.join(", ") : "none";
+}
+
 async function main() {
   [fs, os, path] = await Promise.all([
     import("node:fs"),
@@ -83,8 +91,21 @@ async function main() {
   const norm = raw.split(":").pop().split("/").pop().trim().toLowerCase();
   if (!norm) return;
 
-  const registry = loadRegistry(resolveRegistryPath());
-  if (!registry || registry.records.length === 0) return;
+  const registryPath = resolveRegistryPath();
+  const registryResult = loadRegistry(registryPath);
+  if (registryResult.status === "missing") return;
+  if (registryResult.status === "invalid") {
+    // Without parsed records we cannot identify revoked skills; denying every
+    // skill would wedge the session, so stay open and report the failure loudly.
+    emit({
+      hookSpecificOutput: { hookEventName: "PreToolUse" },
+      systemMessage: `AgentGuard: trust registry at ${registryPath} exists but could not be parsed (expected {"records":[...]}). The skill trust gate is inactive this session.`,
+    });
+    return;
+  }
+
+  const registry = registryResult.registry;
+  if (registry.records.length === 0) return;
 
   const matches = registry.records.filter((record) => recordMatches(record, norm));
   if (matches.length === 0) return;
@@ -115,14 +136,30 @@ async function main() {
   }
 
   if (record.trust_level === "restricted") {
-    const capabilities = record.capabilities;
-    const network = capabilities.network_allowlist.length ? capabilities.network_allowlist.join(", ") : "none";
-    const filesystem = capabilities.filesystem_allowlist.length ? capabilities.filesystem_allowlist.join(", ") : "none";
-    const secrets = capabilities.secrets_allowlist.length ? capabilities.secrets_allowlist.join(", ") : "none";
+    const capabilities = record.capabilities && typeof record.capabilities === "object" ? record.capabilities : null;
+    const exec = capabilities && (capabilities.exec === "allow" || capabilities.exec === "deny") ? capabilities.exec : "unspecified";
+    const hasValidCapabilities = capabilities && (
+      exec !== "unspecified"
+      || Array.isArray(capabilities.network_allowlist)
+      || Array.isArray(capabilities.filesystem_allowlist)
+      || Array.isArray(capabilities.secrets_allowlist)
+    );
+    if (!hasValidCapabilities) {
+      emit({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          additionalContext: `AgentGuard: skill '${norm}' is trust-level RESTRICTED but its trust record is malformed (capabilities missing or invalid). Treat it as untrusted and proceed with caution.`,
+        },
+      });
+      return;
+    }
+    const network = list(capabilities.network_allowlist);
+    const filesystem = list(capabilities.filesystem_allowlist);
+    const secrets = list(capabilities.secrets_allowlist);
     emit({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        additionalContext: `AgentGuard: skill '${norm}' is trust-level RESTRICTED. Granted capabilities — exec: ${capabilities.exec}; network allowlist: ${network}; filesystem allowlist: ${filesystem}; secrets allowlist: ${secrets}. Stay within these bounds while this skill runs.`,
+        additionalContext: `AgentGuard: skill '${norm}' is trust-level RESTRICTED. Granted capabilities — exec: ${exec}; network allowlist: ${network}; filesystem allowlist: ${filesystem}; secrets allowlist: ${secrets}. Stay within these bounds while this skill runs.`,
       },
     });
   }

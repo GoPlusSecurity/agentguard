@@ -31,7 +31,7 @@ The `agentguard` MCP server exposes seven tools:
 
 | Hook | Behavior |
 |---|---|
-| `SessionStart` on `startup` | Injects a short MCP usage reminder and local trust-registry summary. |
+| `SessionStart` on `startup` | Injects a short MCP usage reminder. |
 | `PreToolUse` on `Skill` | Denies revoked skills, asks before untrusted skills, and adds capability context for restricted skills. |
 
 Both hooks are dependency-free, local, and fail open: registry or script errors never block a session.
@@ -62,6 +62,12 @@ Validated against `@goplus/agentguard` v1.1.28, the runtime Zod validation diffe
 ## How the trust gate works
 
 The trust gate reads `~/.agentguard/registry.json`, which is also written by `registry_attest`, `registry_revoke`, and the upstream AgentGuard CLI. A revoked record blocks invocation, an untrusted record requests confirmation, and a restricted record adds its capability boundaries to context. Trusted and unknown skills remain silent. Missing, invalid, or unreadable registry data never blocks a session.
+
+**Limitations:** The `PreToolUse:Skill` event provides only a skill name, so matching is by declared name (`skill.id`, or the basename of `skill.source`). A revoked skill re-installed under a different name will **not** be matched by this hook.
+
+Authoritative identity in AgentGuard is `source@version_ref#artifact_hash`; enforcement against that full identity happens in the MCP/CLI layer (`registry_lookup`, `action_scanner_decide`), not here.
+
+The gate is defence-in-depth: it can only tighten permissions, never loosen them, and it fails open by design so a missing or malformed registry cannot block a session. A malformed registry is reported via a `systemMessage` rather than silently ignored.
 
 ## License
 

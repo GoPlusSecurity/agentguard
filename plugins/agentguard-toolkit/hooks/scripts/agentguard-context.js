@@ -15,9 +15,11 @@ function resolveRegistryPath() {
 function loadRegistry(registryPath) {
   try {
     const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-    return registry && Array.isArray(registry.records) ? registry : null;
-  } catch {
-    return null;
+    return registry && Array.isArray(registry.records)
+      ? { status: "ok", registry }
+      : { status: "invalid" };
+  } catch (err) {
+    return err && err.code === "ENOENT" ? { status: "missing" } : { status: "invalid" };
   }
 }
 
@@ -41,20 +43,18 @@ async function main() {
   ]);
 
   await readStdin();
-  const registry = loadRegistry(resolveRegistryPath());
-  const active = registry ? registry.records.filter((record) => record.status === "active").length : 0;
-  const revoked = registry ? registry.records.filter((record) => record.status === "revoked").length : 0;
+  const registryResult = loadRegistry(resolveRegistryPath());
   const sentences = [
     "GoPlus AgentGuard MCP tools are available (server 'agentguard'): skill_scanner_scan, registry_lookup, registry_attest, registry_revoke, registry_list, action_scanner_decide, action_scanner_simulate_web3.",
     "Before installing or first-running any third-party skill, scan it with skill_scanner_scan and check registry_lookup; before any Web3 signing or transaction, run action_scanner_simulate_web3; when unsure whether a risky command, network request, or secret access is safe, run action_scanner_decide.",
   ];
-  if (registry) {
-    sentences.push(`Local trust registry: ${active} active record(s), ${revoked} revoked.`);
-  }
+  const warning = registryResult.status === "invalid"
+    ? " Warning: the local AgentGuard trust registry could not be parsed; the skill trust gate is inactive."
+    : "";
   process.stdout.write(`${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: sentences.join(" "),
+      additionalContext: `${sentences.join(" ")}${warning}`,
     },
   })}\n`);
 }
