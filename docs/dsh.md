@@ -18,7 +18,7 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets. For example, ask DSH: “Use AgentGuard to scan tag `v1.2.3` of `https://github.com/owner/plugin` and report whether I should install it.”
+Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets and `agentguard_dsh_compare` for comparing an approved version with a candidate. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
 The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
 
@@ -42,7 +42,7 @@ Restart the DSH process after an add, update, or remove operation. For a local `
 Verification checklist:
 
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
-2. DSH exposes the `agentguard_dsh_scan` and `agentguard_dsh_scan_batch` tools.
+2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, and `agentguard_dsh_compare` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
 4. After removal and restart, the AgentGuard composition row and tool are absent.
 
@@ -162,6 +162,18 @@ agentguard dsh-scan-batch ./targets.json --format json --output batch-report.jso
 
 CLI manifests accept at most 25 unique targets and run them sequentially. One failed target is recorded without discarding successful results. Exit code `1` means at least one target failed; otherwise `2` means the completed batch contains a critical repository-risk result, and `0` means all targets completed without critical risk. Markdown is a compact review queue; JSON retains every complete per-target report.
 
+### Compare plugin versions
+
+Save JSON reports for the approved and candidate versions, then compare them without rescanning:
+
+```bash
+agentguard dsh-scan https://github.com/owner/plugin --ref v1.2.3 --format json --output approved.json
+agentguard dsh-scan https://github.com/owner/plugin --ref v1.3.0 --format json --output candidate.json
+agentguard dsh-compare approved.json candidate.json --format markdown
+```
+
+The comparison reports repository and runtime risk direction, added and removed risk tags, capability and impact-layer changes, and new or removed findings. `review-required` is returned when risk increases, runtime tags or capabilities are added, high-severity evidence appears, the plugin identity changes, or the two reports use different rule baselines. Exit code `2` means review is required; otherwise the command exits `0`. DSH can perform the same workflow directly with `agentguard_dsh_compare` by supplying `before` and `after` targets with optional refs.
+
 ## Programmatic API
 
 The package exports the scanner and its supporting types:
@@ -170,6 +182,7 @@ The package exports the scanner and its supporting types:
 import {
   scanDshPlugin,
   scanDshPlugins,
+  compareDshReports,
   renderDshHtml,
   renderDshMarkdown,
   type DshPluginScanReport,
@@ -181,6 +194,7 @@ const batch = await scanDshPlugins([
   { target: './plugin' },
   { target: 'https://github.com/owner/dsh-plugin', ref: 'v1.2.3' },
 ]);
+const comparison = compareDshReports(report, pinned);
 
 if (report.riskLevel === 'critical') {
   throw new Error(report.summary);

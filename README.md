@@ -157,6 +157,7 @@ dsh plugin --profile web add @goplus/agentguard
 
 DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.
 It also exposes `agentguard_dsh_scan_batch` for a sequential review queue of up to 10 targets per DSH tool call. The CLI accepts larger JSON manifests of up to 25 targets with `agentguard dsh-scan-batch`.
+Use `agentguard_dsh_compare` or the `agentguard dsh-compare` CLI command to identify new permissions and runtime risks before updating an approved plugin version.
 
 Update or remove it from the same profile with `dsh plugin --profile web update @goplus/agentguard` or `dsh plugin --profile web remove @goplus/agentguard`. The [DSH operations and report guide](docs/dsh.md#operate-the-dsh-installation) includes verification and troubleshooting steps.
 

@@ -39,8 +39,10 @@ const registeredTools = [];
 plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
 const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
 const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
+const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
 assert.ok(registered);
 assert.ok(registeredBatch);
+assert.ok(registeredCompare);
 const scan = await registered.execute({ target: safeFixture, format: 'json' });
 assert.match(scan.scannerVersion, /^\d+\.\d+\.\d+/);
 assert.equal(scan.rulesBaseline, '367227cc2b8bc064af369bf41e4490f6c4d3ea8b');
@@ -77,6 +79,9 @@ assert.ok(generatedRuntimeReport.findings.some(finding =>
 const batchScan = await registeredBatch.execute({ targets: [{ target: safeFixture }, { target: localLoaderFixture }] });
 assert.equal(batchScan.succeeded, 2);
 assert.equal(batchScan.highestRuntimeSurfaceRisk, 'high');
+const comparison = await registeredCompare.execute({ before: { target: safeFixture }, after: { target: localLoaderFixture } });
+assert.equal(comparison.assessment, 'review-required');
+assert.equal(comparison.runtimeSurfaceRiskDirection, 'increased');
 
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
@@ -120,6 +125,7 @@ try {
     runtimeHttpStatus: status,
     tool: registered.name,
     batchTool: registeredBatch.name,
+    compareTool: registeredCompare.name,
     scanRisk: scan.riskLevel,
     runtimeSurfaceRisk: scan.runtimeSurfaceRiskLevel,
     scanRecommendation: scan.installRecommendation,

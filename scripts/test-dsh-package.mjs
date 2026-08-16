@@ -76,8 +76,10 @@ try {
   plugin.apply({ tools: { register(tool) { registeredTools.push(tool); } } });
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
+  const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
   assert.ok(registered);
   assert.ok(registeredBatch);
+  assert.ok(registeredCompare);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
   assert.equal(result.phase, 'phase1-rc2');

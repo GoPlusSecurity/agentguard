@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, createAgentGuardDshBatchTool, createAgentGuardDshTool } from '../dsh/plugin.js';
+import { apply, createAgentGuardDshBatchTool, createAgentGuardDshCompareTool, createAgentGuardDshTool } from '../dsh/plugin.js';
 import { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE } from '../dsh/metadata.js';
 import { packageVersion } from '../version.js';
 
@@ -19,7 +19,8 @@ describe('AgentGuard DSH runtime plugin', () => {
     apply({ tools: { register(tool) { registered.push(tool); } } });
     const single = createAgentGuardDshTool();
     const batch = createAgentGuardDshBatchTool();
-    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name]);
+    const compare = createAgentGuardDshCompareTool();
+    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name, compare.name]);
     const registeredSingle = single;
     assert.equal(registeredSingle.name, 'agentguard_dsh_scan');
     assert.match(registeredSingle.description, /without installing or executing/i);

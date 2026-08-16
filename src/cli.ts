@@ -36,6 +36,8 @@ import { scanDshPlugin } from './dsh/scan.js';
 import { parseDshBatchManifest, scanDshPlugins } from './dsh/batch.js';
 import { renderDshHtml, renderDshMarkdown } from './reports/dsh-report.js';
 import { renderDshBatchMarkdown } from './reports/dsh-batch-report.js';
+import { compareDshReports, parseDshPluginScanReport } from './dsh/compare.js';
+import { renderDshComparisonMarkdown } from './reports/dsh-compare-report.js';
 import {
   installThreatFeedCron,
   removeThreatFeedCron,
@@ -431,6 +433,34 @@ async function main() {
         process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
       }
       process.exitCode = batch.failed > 0 ? 1 : batch.highestRisk === 'critical' ? 2 : 0;
+    });
+
+  program
+    .command('dsh-compare')
+    .description('Compare two saved DSH JSON scan reports before updating a plugin')
+    .argument('<before-report>', 'Previously approved DSH JSON report')
+    .argument('<after-report>', 'Candidate DSH JSON report')
+    .option('-f, --format <format>', 'Report format: json | markdown', 'markdown')
+    .option('-o, --output <path>', 'Write the comparison to a file instead of stdout')
+    .action((beforeInput, afterInput, options) => {
+      const format = String(options.format).toLowerCase();
+      if (!['json', 'markdown'].includes(format)) throw new Error('Invalid format. Use json or markdown.');
+      const readReport = (input: string, label: string) => {
+        const path = resolve(input);
+        if (statSync(path).size > 32 * 1024 * 1024) throw new Error(`${label} exceeds the 32 MiB limit`);
+        return parseDshPluginScanReport(JSON.parse(readFileSync(path, 'utf8')), label);
+      };
+      const comparison = compareDshReports(readReport(String(beforeInput), 'before report'), readReport(String(afterInput), 'after report'));
+      const rendered = format === 'json' ? `${JSON.stringify(comparison, null, 2)}\n` : renderDshComparisonMarkdown(comparison);
+      if (options.output) {
+        const outputPath = resolve(String(options.output));
+        mkdirSync(dirname(outputPath), { recursive: true });
+        writeFileSync(outputPath, rendered, 'utf8');
+        console.error(`DSH comparison written to ${outputPath}`);
+      } else {
+        process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
+      }
+      process.exitCode = comparison.assessment === 'review-required' ? 2 : 0;
     });
 
   program
