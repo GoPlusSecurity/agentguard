@@ -94,6 +94,13 @@ export const DSH_RULES: ScanRule[] = [
     ],
   },
   {
+    id: 'DSH_SCAN_INCOMPLETE',
+    description: 'Security-relevant DSH metadata could not be parsed completely',
+    severity: 'high',
+    file_patterns: ['*'],
+    patterns: [/(?!)/],
+  },
+  {
     id: 'DSH_THEME_ELEVATED_CAPABILITY',
     description: 'Benign-looking UI, theme, skin, or pet plugin requests elevated capabilities',
     severity: 'high',

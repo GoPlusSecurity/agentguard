@@ -1,7 +1,8 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { DshPackageMetadata } from './types.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
+import { inspectRegularFileWithinRoot } from '../scanner/safe-file.js';
 
 const EMPTY_METADATA: DshPackageMetadata = {
   profileBundles: [],
@@ -30,10 +31,11 @@ export async function parseDshPackage(rootDir: string): Promise<DshPackageMetada
   const path = join(rootDir, 'package.json');
   let raw: string;
   try {
-    if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) {
+    const safeFile = await inspectRegularFileWithinRoot(rootDir, path);
+    if (safeFile.size > MAX_SCANNABLE_FILE_BYTES) {
       return { ...EMPTY_METADATA, parseError: `package.json exceeds ${MAX_SCANNABLE_FILE_BYTES} byte scan limit` };
     }
-    raw = await readFile(path, 'utf8');
+    raw = await readFile(safeFile.path, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ...EMPTY_METADATA };
     return { ...EMPTY_METADATA, parseError: (error as Error).message };
@@ -50,8 +52,19 @@ export async function parseDshPackage(rootDir: string): Promise<DshPackageMetada
     const profile = dsh.profile && typeof dsh.profile === 'object'
       ? dsh.profile as Record<string, unknown>
       : {};
-    const client = dsh.client && typeof dsh.client === 'object'
-      ? dsh.client as Record<string, unknown>
+    const clientValue = dsh.client;
+    const clientObject = clientValue && typeof clientValue === 'object' && !Array.isArray(clientValue)
+      ? clientValue as Record<string, unknown>
+      : undefined;
+    const clientPlatform = clientObject?.platform;
+    const clientInject = clientObject?.inject;
+    const validClient = clientObject !== undefined
+      && typeof clientPlatform === 'string'
+      && clientPlatform.trim().length > 0
+      && (clientInject === undefined
+        || (Array.isArray(clientInject) && clientInject.every(value => typeof value === 'string')));
+    const clientError = clientValue !== undefined && !validClient
+      ? 'Invalid dsh.client: expected a non-empty platform string and an optional string-array inject field'
       : undefined;
     const dependencies = {
       ...stringRecord(manifest.dependencies),
@@ -70,10 +83,11 @@ export async function parseDshPackage(rootDir: string): Promise<DshPackageMetada
       profileBundles: Array.isArray(profile.bundles)
         ? profile.bundles.filter((value): value is string => typeof value === 'string')
         : [],
-      hasClientExtension: Boolean(client),
-      clientPlatform: client && typeof client.platform === 'string' ? client.platform : undefined,
+      hasClientExtension: validClient,
+      clientPlatform: validClient ? clientPlatform : undefined,
       scripts: stringRecord(manifest.scripts),
       dependencies: Object.keys(dependencies).sort(),
+      parseError: clientError,
     };
   } catch (error) {
     return { ...EMPTY_METADATA, parseError: `Invalid package.json: ${(error as Error).message}` };

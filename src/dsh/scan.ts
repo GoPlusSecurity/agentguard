@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { SkillScanner } from '../scanner/index.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
 import { ALL_RULES, getRuleById } from '../scanner/rules/index.js';
@@ -14,6 +14,7 @@ import {
 } from './classify-plugin.js';
 import { detectDshPlugin } from './detect.js';
 import { getDshScannerMetadata } from './metadata.js';
+import { inspectRegularFileWithinRoot } from '../scanner/safe-file.js';
 import { addFindingContext, calculateReviewPriority, runtimeSurfaceTags } from './finding-context.js';
 import { resolveDshSource } from './source.js';
 import type {
@@ -85,6 +86,15 @@ function recommendationFor(risk: RiskLevel, capabilities: DshCapabilityProfile):
   return 'safe-to-try';
 }
 
+function recommendationForTags(
+  risk: RiskLevel,
+  capabilities: DshCapabilityProfile,
+  tags: RiskTag[],
+): DshInstallRecommendation {
+  if (tags.includes('DSH_SCAN_INCOMPLETE')) return 'expert-review-required';
+  return recommendationFor(risk, capabilities);
+}
+
 function buildSummary(
   isDsh: boolean,
   risk: RiskLevel,
@@ -105,6 +115,7 @@ function buildSummary(
     DSH_TOOL_REGISTRY_MUTATION: 'tool pipeline changes',
     DSH_PROVIDER_MUTATION: 'model/provider changes',
     DSH_RUNTIME_MUTATION: 'runtime lifecycle changes',
+    DSH_SCAN_INCOMPLETE: 'incomplete security-relevant metadata analysis',
     DSH_THEME_ELEVATED_CAPABILITY: 'elevated capabilities inconsistent with its UI/theme purpose',
   };
   const reasons = tags.map(tag => capabilityLabels[tag]).filter((value): value is string => Boolean(value));
@@ -121,8 +132,9 @@ async function hasReadmeInstallInstructions(rootDir: string): Promise<boolean> {
   for (const file of ['README.md', 'README.mdx', 'README.zh.md', 'README.zh-CN.md', 'readme.md']) {
     try {
       const path = join(rootDir, file);
-      if ((await stat(path)).size > MAX_SCANNABLE_FILE_BYTES) continue;
-      const content = await readFile(path, 'utf8');
+      const safeFile = await inspectRegularFileWithinRoot(rootDir, path);
+      if (safeFile.size > MAX_SCANNABLE_FILE_BYTES) continue;
+      const content = await readFile(safeFile.path, 'utf8');
       if (/(?:^|\n)#{1,4}\s*(?:install|installation|安装)|\b(?:npm|pnpm|yarn)\s+(?:add|install)\b/i.test(content)) {
         return true;
       }
@@ -158,6 +170,23 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
     const riskTags = [...new Set(scan.risk_tags)];
     const harmlessMismatch = hasHarmlessCapabilityMismatch(detection, pluginKind, capabilityProfile);
     const findings = toFindings(scan.evidence);
+    const incompleteInputs = [
+      ...(detection.package.parseError
+        ? [{ file: 'package.json', message: detection.package.parseError }]
+        : []),
+      ...detection.cordis.parseErrors,
+    ];
+    if (incompleteInputs.length > 0) {
+      riskTags.push('DSH_SCAN_INCOMPLETE');
+      for (const incomplete of incompleteInputs) {
+        findings.push({
+          ruleId: 'DSH_SCAN_INCOMPLETE',
+          severity: 'high',
+          file: incomplete.file,
+          message: 'Security-relevant DSH metadata could not be parsed completely; manual review is required',
+        });
+      }
+    }
     const coreOverrides = detection.cordis.rows.filter(row =>
       row.operation === 'replace' && Boolean(row.id && SECURITY_RELEVANT_CORDIS_ROW.test(row.id)),
     );
@@ -216,12 +245,12 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
       riskTags,
       runtimeSurfaceRiskLevel,
       runtimeSurfaceRiskTags: runtimeTags,
-      runtimeSurfaceRecommendation: recommendationFor(runtimeSurfaceRiskLevel, runtimeCapabilities),
+      runtimeSurfaceRecommendation: recommendationForTags(runtimeSurfaceRiskLevel, runtimeCapabilities, runtimeTags),
       reviewPriority: calculateReviewPriority(riskLevel, runtimeSurfaceRiskLevel, runtimeTags),
       capabilityProfile,
       impactLayers,
       findings,
-      installRecommendation: recommendationFor(riskLevel, capabilityProfile),
+      installRecommendation: recommendationForTags(riskLevel, capabilityProfile, riskTags),
       summary: buildSummary(detection.isDshPlugin, riskLevel, riskTags, harmlessMismatch),
       harmlessMismatch,
       scannedAt,

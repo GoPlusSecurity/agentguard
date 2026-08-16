@@ -6,6 +6,8 @@ Phase 1 is a read-only, installation-time static decision aid. It detects DSH ma
 
 Risk-rule semantics are frozen at commit `83db977a566d8a853568a2d2903b142106d80196` for the `phase1-rc1` evaluation baseline. Stabilization changes may improve tests, benchmark infrastructure, documentation, packaging, or confirmed security defects. They must not silently retune risk outcomes to fit one new plugin.
 
+The post-RC security-hardening revision adds fail-closed incomplete-metadata handling and scanner self-protection without retuning findings for successfully parsed artifacts. Its updated provenance identifier is recorded by the scanner and benchmark manifest after the hardening commit is finalized.
+
 ## Acceptance gates
 
 Before merging or releasing the RC:

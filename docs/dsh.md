@@ -308,6 +308,8 @@ Expected capability does not mean safe capability. For example, a plugin-discove
 
 Review priority is intentionally separate from severity. `URGENT` is reserved for direct runtime evidence of remote update or execution, webhook exfiltration, embedded key material, credential access combined with outbound POST behavior, or a dangerous install-script combination. A critical prompt string or credential capability without those combinations remains `HIGH` review priority rather than automatically becoming urgent.
 
+`DSH_SCAN_INCOMPLETE` is a fail-closed exception to ordinary evidence scoring. If `package.json` or a discovered Cordis file is malformed, oversized, structurally unsupported, or otherwise unreadable, both risk views are at least HIGH, review priority is HIGH, and both recommendations become `expert-review-required`. The scanner never returns `safe-to-try` for security-relevant metadata it could not understand.
+
 ## JSON report contract
 
 The top-level report is `DshPluginScanReport`:
@@ -353,14 +355,17 @@ The scanner treats its input as untrusted:
 - No package or configuration code is evaluated.
 - Cordis `!!js` tags are inert.
 - No package manager is invoked.
-- GitHub clones do not initialize submodules or run repository hooks.
+- GitHub acquisition resolves HEAD first, uses a blob-less depth-one fetch, does not initialize submodules or run repository hooks, and monitors the fetch and checkout against a 256 MiB on-disk budget.
+- A remote acquisition is rejected above 100,000 Git objects, both before and after checkout.
+- File reads resolve their real path and reject symlinks that escape the scan root. Symlinks whose final target remains inside the artifact are allowed.
 - Individual scan files are limited to 2 MiB.
 - A scan considers at most 10,000 matching files.
 - Cordis ASTs are limited to 20,000 nodes and 64 levels, and only required map/sequence fields are read without materializing the document through `toJS()`.
 - Common dependency, build, VCS, coverage, lockfile, and binary paths are skipped.
-- HTML report values are escaped before rendering.
+- HTML report values are escaped before rendering. Markdown places artifact-controlled metadata in a JSON-escaped block under an explicit untrusted-data boundary.
+- The native DSH tool renders only a scanner-generated decision summary to the model. Detailed Markdown or JSON remains output data and is explicitly labeled as target-controlled, never as instructions.
 
-Limit warnings and Cordis parse failures matter: skipped or unparsed content may hide behavior and should trigger manual review even when the calculated risk is low.
+Unreadable security metadata produces `DSH_SCAN_INCOMPLETE`, HIGH review priority, and an expert-review recommendation. A hard acquisition-limit or scan-root-containment violation aborts the scan without a risk verdict.
 
 ## Recommended review workflow
 
@@ -384,6 +389,9 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 
 - Bundle, profile, client, and Cordis detection.
 - Safe handling of `!!js` YAML values.
+- Fail-closed handling of malformed Cordis and `dsh.client` metadata.
+- Remote acquisition byte budgets and scan-root symlink containment.
+- Markdown and DSH model-output trust boundaries.
 - Insert-versus-replace interpretation.
 - Oversized Cordis rejection.
 - Low-risk UI themes.

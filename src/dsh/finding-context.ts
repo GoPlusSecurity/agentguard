@@ -26,6 +26,9 @@ export function classifyFindingPath(file: string, tag: RiskTag): {
   if (tag === 'DSH_THEME_ELEVATED_CAPABILITY') {
     return { sourceCategory: 'derived', runtimeRelevance: 'unknown' };
   }
+  if (tag === 'DSH_SCAN_INCOMPLETE') {
+    return { sourceCategory: file === 'package.json' ? 'installation' : 'configuration', runtimeRelevance: 'direct' };
+  }
   if (tag === 'INSTALL_SCRIPT' || normalized === 'package.json') {
     return { sourceCategory: 'installation', runtimeRelevance: 'direct' };
   }
@@ -90,6 +93,7 @@ export function calculateReviewPriority(
   runtimeRisk: RiskLevel,
   runtimeTags: RiskTag[],
 ): DshReviewPriority {
+  if (runtimeTags.includes('DSH_SCAN_INCOMPLETE')) return 'high';
   if (runtimeRisk === 'critical' && runtimeTags.some(tag => URGENT_SINGLE_TAGS.has(tag))) return 'urgent';
   if (runtimeRisk === 'critical'
     && runtimeTags.includes('NET_EXFIL_UNRESTRICTED')

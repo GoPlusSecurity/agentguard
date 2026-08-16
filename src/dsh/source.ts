@@ -1,11 +1,93 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const GITHUB_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+export const MAX_GITHUB_ACQUISITION_BYTES = 256 * 1024 * 1024;
+export const MAX_GITHUB_OBJECTS = 100_000;
+const ACQUISITION_POLL_MS = 100;
+
+async function directoryBytesWithinBudget(rootDir: string, maxBytes: number): Promise<number> {
+  const pending = [rootDir];
+  let bytes = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const info = await lstat(path);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) pending.push(path);
+      else if (info.isFile()) {
+        bytes += info.size;
+        if (bytes > maxBytes) return bytes;
+      }
+    }
+  }
+  return bytes;
+}
+
+export async function assertDshAcquisitionByteBudget(
+  rootDir: string,
+  maxBytes = MAX_GITHUB_ACQUISITION_BYTES,
+): Promise<void> {
+  const bytes = await directoryBytesWithinBudget(rootDir, maxBytes);
+  if (bytes > maxBytes) {
+    throw new Error(`GitHub repository exceeds ${maxBytes} byte acquisition limit`);
+  }
+}
+
+function execBoundedGit(args: string[], rootDir: string, timeout: number): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    let budgetError: Error | undefined;
+    let checking = false;
+    const child = execFile('git', args, {
+      timeout,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (error, stdout, stderr) => {
+      clearInterval(monitor);
+      if (budgetError) reject(budgetError);
+      else if (error) reject(error);
+      else resolvePromise({ stdout, stderr });
+    });
+    const monitor = setInterval(() => {
+      if (checking || child.killed) return;
+      checking = true;
+      void assertDshAcquisitionByteBudget(rootDir).catch(error => {
+        budgetError = error as Error;
+        child.kill('SIGKILL');
+      }).finally(() => {
+        checking = false;
+      });
+    }, ACQUISITION_POLL_MS);
+  });
+}
+
+async function assertGitObjectBudget(rootDir: string): Promise<void> {
+  await assertDshAcquisitionByteBudget(rootDir);
+  const { stdout } = await execFileAsync('git', ['-C', rootDir, 'count-objects', '-v'], {
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+  });
+  const values = Object.fromEntries(stdout.trim().split('\n').map(line => {
+    const [key, value] = line.split(':', 2);
+    return [key, Number(value?.trim())];
+  }));
+  const objects = (values.count || 0) + (values['in-pack'] || 0);
+  if (objects > MAX_GITHUB_OBJECTS) {
+    throw new Error(`GitHub repository exceeds ${MAX_GITHUB_OBJECTS} Git object acquisition limit`);
+  }
+}
 
 /** Normalize the exact HTTPS GitHub repository forms supported by Phase 1. */
 export function normalizeGithubRepositoryUrl(input: string): string | undefined {
@@ -70,16 +152,18 @@ export async function resolveDshSource(input: string): Promise<ResolvedDshSource
       const expectedRevision = await resolveGithubHead(repositoryUrl);
       await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'init', rootDir], { timeout: 10_000 });
       await execFileAsync('git', ['-C', rootDir, 'remote', 'add', 'origin', repositoryUrl], { timeout: 10_000 });
-      await execFileAsync('git', [
+      await execBoundedGit([
         '-c', 'core.hooksPath=/dev/null',
         '-C', rootDir,
-        'fetch', '--depth', '1', '--no-tags', 'origin', expectedRevision,
-      ], { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
-      await execFileAsync('git', [
+        'fetch', '--depth', '1', '--no-tags', '--filter=blob:none', 'origin', expectedRevision,
+      ], rootDir, 120_000);
+      await assertGitObjectBudget(rootDir);
+      await execBoundedGit([
         '-c', 'core.hooksPath=/dev/null',
         '-C', rootDir,
         'checkout', '--detach', expectedRevision,
-      ], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+      ], rootDir, 30_000);
+      await assertGitObjectBudget(rootDir);
       const metadata = await gitMetadata(rootDir);
       if (metadata.revision?.toLowerCase() !== expectedRevision) {
         throw new Error(`Checked out ${metadata.revision ?? 'no revision'} instead of resolved HEAD ${expectedRevision}`);

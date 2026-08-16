@@ -1,6 +1,7 @@
 import { glob } from 'glob';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { inspectRegularFileWithinRoot, UnsafeScanPathError } from './safe-file.js';
 
 /**
  * File info for scanning
@@ -79,12 +80,12 @@ export async function walkDirectory(rootDir: string): Promise<FileInfo[]> {
   // Read file contents
   for (const filePath of matches) {
     try {
-      const info = await fs.stat(filePath);
-      if (info.size > MAX_SCANNABLE_FILE_BYTES) {
-        console.warn(`Skipping oversized scan file: ${filePath} (${info.size} bytes)`);
+      const safeFile = await inspectRegularFileWithinRoot(rootDir, filePath);
+      if (safeFile.size > MAX_SCANNABLE_FILE_BYTES) {
+        console.warn(`Skipping oversized scan file: ${filePath} (${safeFile.size} bytes)`);
         continue;
       }
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await fs.readFile(safeFile.path, 'utf-8');
       const relativePath = path.relative(rootDir, filePath);
       const extension = path.extname(filePath);
 
@@ -95,6 +96,9 @@ export async function walkDirectory(rootDir: string): Promise<FileInfo[]> {
         extension,
       });
     } catch (err) {
+      if (err instanceof UnsafeScanPathError) {
+        throw new Error(`Unsafe scan path ${path.relative(rootDir, filePath)}: ${err.message}`);
+      }
       // Skip unreadable files
       console.warn(`Failed to read file: ${filePath}`);
     }

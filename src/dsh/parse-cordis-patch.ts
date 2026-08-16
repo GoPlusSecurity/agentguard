@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { glob } from 'glob';
 import {
@@ -13,6 +13,7 @@ import {
 } from 'yaml';
 import type { DshCordisAnalysis, DshCordisRow } from './types.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
+import { inspectRegularFileWithinRoot } from '../scanner/safe-file.js';
 
 const CORDIS_FILES = ['**/cordis.yml', '**/cordis.yaml', '**/cordis.patch.yml', '**/cordis.patch.yaml'];
 const MAX_CORDIS_AST_DEPTH = 64;
@@ -118,12 +119,12 @@ export async function parseCordisConfigs(rootDir: string): Promise<DshCordisAnal
   for (const file of files) {
     try {
       const path = join(rootDir, file);
-      const info = await stat(path);
-      if (info.size > MAX_SCANNABLE_FILE_BYTES) {
+      const safeFile = await inspectRegularFileWithinRoot(rootDir, path);
+      if (safeFile.size > MAX_SCANNABLE_FILE_BYTES) {
         parseErrors.push({ file, message: `Cordis file exceeds ${MAX_SCANNABLE_FILE_BYTES} byte scan limit` });
         continue;
       }
-      const raw = await readFile(path, 'utf8');
+      const raw = await readFile(safeFile.path, 'utf8');
       const document = parseDocument(raw, {
         schema: 'core',
         strict: true,
