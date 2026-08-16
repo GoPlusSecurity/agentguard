@@ -45,7 +45,7 @@ try {
     tools: { register(tool) { registeredTools.push(tool); } },
     on(event, listener) { runtimeEvents.push({ event, listener }); },
   });
-  assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute']);
+  assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute', 'tools/post-execute']);
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -74,6 +74,7 @@ try {
     installComposed: true,
     scanExecuted: true,
     runtimeObserverRegistered: true,
+    runtimePostObserverRegistered: true,
     runtimeSummaryRegistered: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,

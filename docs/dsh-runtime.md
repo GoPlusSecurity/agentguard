@@ -1,6 +1,6 @@
 # DSH runtime observation
 
-AgentGuard Runtime Phase 2A connects to DSH's native `tools/pre-execute` waterfall. It translates each non-AgentGuard tool call into the shared `RuntimeAction` vocabulary, resolves the same effective runtime policy used by other AgentGuard hosts, runs the same OSS action evaluator, and writes the evaluated decision to the local audit log.
+AgentGuard Runtime Phase 2A connects to DSH's native `tools/pre-execute` and `tools/post-execute` waterfalls. It translates each non-AgentGuard tool call into the shared `RuntimeAction` vocabulary, resolves the same effective runtime policy used by other AgentGuard hosts, runs the same OSS action evaluator, and writes the evaluated decision to the local audit log.
 
 ## Current behavior
 
@@ -11,8 +11,9 @@ The shipped mode is `observe`:
 3. AgentGuard preserves evaluator-relevant request context such as network method, headers, and body preview. `evaluateRuntimeAction()` then resolves Cloud, cached, or bundled-default policy and delegates to the existing `evaluateLocalAction()` / `ActionScanner` path.
 4. AgentGuard records the policy decision, risk score, reasons, call tree metadata, and `sourceAttribution: "unknown"` in `~/.agentguard/audit.jsonl`.
 5. The listener calls the next DSH policy unchanged. AgentGuard never returns its evaluated `deny` or `ask` in Phase 2A.
+6. Network-tool results pass through a second audit-only observation. AgentGuard extracts a bounded response preview plus available status, content type, headers, and byte count, then evaluates response and network-volume anomalies without replacing or blocking the DSH result.
 
-This means an audit event may contain `decision: "block"` while the action executed. The fields `runtimeMode: "observe"` and `enforcementApplied: false` make that distinction explicit.
+This means an audit event may contain `decision: "block"` while the action executed. The fields `runtimeMode: "observe"` and `enforcementApplied: false` make that distinction explicit. `runtimePhase` distinguishes `pre` request observations from `post` response observations.
 
 AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-observation. Evaluation or audit failures are fail-open in Phase 2A and cannot change DSH behavior.
 
@@ -20,7 +21,7 @@ AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-obs
 
 The installed bundle registers `agentguard_dsh_runtime_summary`. It reads only the bounded final 1 MiB of the configured local audit log and aggregates up to 1,000 recent DSH observation events. An optional exact `sessionId` filter can isolate one DSH call tree.
 
-The result contains decision, action-type, risk-level, reason-code, and nested-call counts. It deliberately omits raw tool inputs, reason evidence, and command or file contents so asking DSH for a summary does not feed captured secrets back into the model context. Malformed audit lines are counted and ignored. AgentGuard's `agentguard_*` exclusion also prevents the summary request from observing itself.
+The result contains decision, action-type, risk-level, pre/post phase, reason-code, and nested-call counts. It deliberately omits raw tool inputs, reason evidence, and command or file contents so asking DSH for a summary does not feed captured secrets back into the model context. Malformed audit lines are counted and ignored. AgentGuard's `agentguard_*` exclusion also prevents the summary request from observing itself.
 
 ## Configuration
 
@@ -50,8 +51,8 @@ Host behavior intentionally differs at the boundary:
 - DSH supplies native call-tree identities rather than a shell-hook payload.
 - Phase 2A uses local audit only; it may fetch an effective Cloud policy when AgentGuard is connected, but it does not upload DSH events.
 - DSH currently supplies no reliable source-plugin ownership field. AgentGuard records `unknown` rather than guessing, so plugin-specific trust and capability enforcement is not yet equivalent.
-- Post-response anomaly enforcement and native `ask`/`deny` translation are deferred to later phases.
-- Phase 2A observes pre-execution request context only. Response status, headers, sizes, and content anomalies require a future `tools/post-execute` observer.
+- Post-response anomaly enforcement and native `ask`/`deny` translation are deferred to later phases; response anomalies are currently recorded only.
+- Pre/post network observations correlate by DSH call identity so one request is not counted twice by replay, rate, or volume behavior analysis.
 
 ## Gate for enforcement
 

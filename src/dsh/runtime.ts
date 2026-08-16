@@ -38,6 +38,26 @@ export interface DshPreToolDecision {
 
 export type DshPreExecuteNext = () => Promise<DshPreToolDecision>;
 
+export interface DshToolExecutionResult {
+  readonly isError: boolean;
+  readonly value?: unknown;
+  readonly content?: ReadonlyArray<{
+    readonly type?: unknown;
+    readonly text?: unknown;
+  }>;
+  readonly error?: {
+    readonly message?: unknown;
+  };
+  readonly meta?: unknown;
+}
+
+export interface DshPostToolDecision {
+  kind: 'accept' | 'block';
+  [key: string]: unknown;
+}
+
+export type DshPostExecuteNext = () => Promise<DshPostToolDecision>;
+
 export interface DshRuntimeDependencies {
   loadAgentGuardConfig?: () => AgentGuardConfig;
   evaluate?: typeof evaluateRuntimeAction;
@@ -119,8 +139,36 @@ export async function observeDshToolCall(
   if (isAgentGuardDshTool(exec.name)) return null;
 
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
   const action = buildDshRuntimeAction(exec);
+  action.metadata = { ...action.metadata, runtimePhase: 'pre' };
+  return evaluateAndAuditDshAction(action, config, dependencies);
+}
+
+export async function observeDshToolResult(
+  exec: DshToolExecution,
+  result: DshToolExecutionResult,
+  dependencies: DshRuntimeDependencies = {}
+): Promise<DshRuntimeObservation | null> {
+  if (isAgentGuardDshTool(exec.name)) return null;
+  const action = buildDshRuntimeAction(exec);
+  if (action.actionType !== 'network' && action.actionType !== 'browser') return null;
+  action.metadata = {
+    ...action.metadata,
+    runtimePhase: 'post',
+    hookPhase: 'post',
+    responseIsError: result.isError,
+    ...responseMetadata(result),
+  };
+  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
+  return evaluateAndAuditDshAction(action, config, dependencies);
+}
+
+async function evaluateAndAuditDshAction(
+  action: RuntimeAction,
+  config: AgentGuardConfig,
+  dependencies: DshRuntimeDependencies
+): Promise<DshRuntimeObservation> {
+  const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
   const evaluation = await evaluate({
     action,
     policyCachePath: config.policyCachePath,
@@ -163,6 +211,24 @@ export function createDshPreExecuteObserver(
       dependencies.onError?.(error, exec);
     }
     // Phase 2A never translates the evaluated decision into enforcement.
+    return next();
+  };
+}
+
+export function createDshPostExecuteObserver(
+  dependencies: DshRuntimeDependencies = {}
+): (
+  exec: DshToolExecution,
+  result: DshToolExecutionResult,
+  next: DshPostExecuteNext
+) => Promise<DshPostToolDecision> {
+  return async (exec, result, next) => {
+    try {
+      await observeDshToolResult(exec, result, dependencies);
+    } catch (error) {
+      dependencies.onError?.(error, exec);
+    }
+    // Response observations are audit-only and never replace or block the result.
     return next();
   };
 }
@@ -210,6 +276,69 @@ function actionMetadata(
     ...(bodyPreview ? { bodyPreview } : {}),
     ...(headers ? { headers } : {}),
   };
+}
+
+function responseMetadata(result: DshToolExecutionResult): Record<string, unknown> {
+  const value = asRecord(result.value);
+  const meta = asRecord(result.meta);
+  const response = firstRecord(value?.response, value?.result, meta?.response);
+  const headers = firstRecord(
+    value?.responseHeaders,
+    value?.headers,
+    response?.headers,
+    meta?.responseHeaders,
+    meta?.headers
+  );
+  const body = firstString(
+    value?.responseBodyPreview,
+    value?.responseBody,
+    value?.body,
+    value?.text,
+    value?.content,
+    response?.body,
+    response?.text,
+    result.error?.message,
+    textContent(result.content)
+  );
+  const contentType = firstString(
+    value?.responseContentType,
+    value?.contentType,
+    value?.content_type,
+    response?.contentType,
+    response?.content_type,
+    meta?.responseContentType,
+    meta?.contentType,
+    meta?.content_type,
+    headerValue(headers, 'content-type')
+  );
+  return {
+    ...definedMetadata('responseStatusCode', value?.responseStatusCode, value?.statusCode, value?.status, response?.statusCode, response?.status, meta?.statusCode, meta?.status),
+    ...definedMetadata('responseBodyBytes', value?.responseBodyBytes, value?.bytes, value?.contentLength, response?.bodyBytes, response?.bytes, response?.contentLength, meta?.responseBodyBytes, meta?.contentLength),
+    ...(headers ? { responseHeaders: headers } : {}),
+    ...(contentType ? { responseContentType: contentType } : {}),
+    ...(body ? { responseBodyPreview: body.slice(0, 8_192) } : {}),
+  };
+}
+
+function textContent(content: DshToolExecutionResult['content']): string {
+  if (!content) return '';
+  return content
+    .filter(block => block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text as string)
+    .join('\n');
+}
+
+function headerValue(headers: Record<string, unknown> | undefined, name: string): string {
+  if (!headers) return '';
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
+  return typeof entry?.[1] === 'string' ? entry[1] : '';
+}
+
+function definedMetadata(key: string, ...values: unknown[]): Record<string, unknown> {
+  for (const value of values) {
+    if (value !== undefined && value !== null) return { [key]: value };
+  }
+  return {};
 }
 
 function resolveDshCwd(explicitCwd: string, sessionCwd: string): string {

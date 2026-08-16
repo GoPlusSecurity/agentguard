@@ -45,7 +45,7 @@ plugin.apply({
   tools: { register(tool) { registeredTools.push(tool); } },
   on(event, listener) { runtimeEvents.push({ event, listener }); },
 });
-assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute']);
+assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute', 'tools/post-execute']);
 const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
 const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
 const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -235,14 +235,20 @@ try {
   assert.equal(networkEvent?.actionType, 'network');
   assert.equal(networkEvent?.metadata?.method, 'DELETE');
   assert.equal(networkEvent?.decision, 'require_approval');
+  const networkPostEvent = runtimeAuditEvents.find(event =>
+    event.metadata?.callId === 'runtime-network-1' && event.metadata?.runtimePhase === 'post');
+  assert.ok(networkPostEvent);
+  assert.equal(networkPostEvent.metadata?.hookPhase, 'post');
+  assert.equal(networkPostEvent.metadata?.enforcementApplied, false);
   const remotePackageEvent = runtimeAuditEvents.find(event => event.metadata?.callId === 'runtime-remote-package-1');
   assert.equal(remotePackageEvent?.decision, 'require_approval');
   assert.ok(remotePackageEvent?.reasons.some(reason => reason.code === 'REMOTE_CODE_EXECUTION'));
 
   const runtimeSummary = await registeredRuntimeSummary.execute({ limit: 10 });
-  assert.equal(runtimeSummary.total, 5);
-  assert.equal(runtimeSummary.decisions.require_approval, 3);
+  assert.equal(runtimeSummary.total, 6);
+  assert.equal(runtimeSummary.decisions.require_approval, 4);
   assert.equal(runtimeSummary.nestedCalls, 1);
+  assert.deepEqual(runtimeSummary.phases, { pre: 5, post: 1 });
   assert.doesNotMatch(JSON.stringify(runtimeSummary), /curl https:\/\/example\.com/);
 } finally {
   await runtimeCtx.fiber.dispose();
@@ -303,6 +309,7 @@ try {
     nestedRuntimeObserved: true,
     nativeNetworkContext: true,
     remotePackageObserved: true,
+    postExecuteObserved: true,
     runtimeSummaryRedacted: true,
   }));
 } finally {

@@ -38,6 +38,7 @@ interface NetworkTarget {
 interface NetworkBehaviorEvent {
   timestamp: number;
   sessionId: string;
+  observationId?: string;
   hostname: string;
   method: string;
   fingerprint?: string;
@@ -473,18 +474,29 @@ function networkBehaviorReasons(action: RuntimeAction, targets: NetworkTarget[])
   );
   const tokenHashes = extractCredentialValues(action.input, headers, bodyPreview).map(hashValue);
   const fingerprint = requestFingerprint(action.input, targets[0], method, headers, bodyPreview);
+  const observationId = stringFromMetadata(action.metadata?.callId);
+  const postPhase = action.metadata?.hookPhase === 'post';
 
   for (const target of targets) {
-    networkBehaviorEvents.push({
-      timestamp,
-      sessionId: action.sessionId,
-      hostname: target.hostname,
-      method,
-      fingerprint,
-      tokenHashes,
-      responseBytes,
-      responseStatus,
-    });
+    const existing = postPhase && observationId
+      ? findNetworkObservation(action.sessionId, observationId, target.hostname)
+      : undefined;
+    if (existing) {
+      existing.responseBytes = responseBytes ?? existing.responseBytes;
+      existing.responseStatus = responseStatus ?? existing.responseStatus;
+    } else {
+      networkBehaviorEvents.push({
+        timestamp,
+        sessionId: action.sessionId,
+        ...(observationId ? { observationId } : {}),
+        hostname: target.hostname,
+        method,
+        fingerprint,
+        tokenHashes,
+        responseBytes,
+        responseStatus,
+      });
+    }
   }
 
   const reasons: PolicyReason[] = [];
@@ -913,6 +925,7 @@ function parseNetworkBehaviorEvent(value: unknown): NetworkBehaviorEvent | null 
   return {
     timestamp: record.timestamp,
     sessionId: record.sessionId,
+    observationId: typeof record.observationId === 'string' ? record.observationId : undefined,
     hostname: record.hostname,
     method: record.method,
     fingerprint: typeof record.fingerprint === 'string' ? record.fingerprint : undefined,
@@ -922,6 +935,24 @@ function parseNetworkBehaviorEvent(value: unknown): NetworkBehaviorEvent | null 
     responseBytes: typeof record.responseBytes === 'number' ? record.responseBytes : undefined,
     responseStatus: typeof record.responseStatus === 'number' ? record.responseStatus : undefined,
   };
+}
+
+function findNetworkObservation(
+  sessionId: string,
+  observationId: string,
+  hostname: string
+): NetworkBehaviorEvent | undefined {
+  for (let index = networkBehaviorEvents.length - 1; index >= 0; index -= 1) {
+    const event = networkBehaviorEvents[index];
+    if (
+      event.sessionId === sessionId &&
+      event.observationId === observationId &&
+      event.hostname === hostname
+    ) {
+      return event;
+    }
+  }
+  return undefined;
 }
 
 function pruneNetworkBehaviorEvents(now: number): void {

@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import type { AgentGuardConfig } from '../config.js';
 import {
   buildDshRuntimeAction,
+  createDshPostExecuteObserver,
   createDshPreExecuteObserver,
   isAgentGuardDshTool,
   mapDshToolToRuntimeAction,
   observeDshToolCall,
+  observeDshToolResult,
   type DshToolExecution,
 } from '../dsh/runtime.js';
 import type { RuntimeDecision } from '../runtime/types.js';
@@ -145,9 +147,61 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(observed.event.decision, 'block');
     assert.equal(observed.event.metadata?.runtimeMode, 'observe');
     assert.equal(observed.event.metadata?.enforcementApplied, false);
+    assert.equal(observed.event.metadata?.runtimePhase, 'pre');
     assert.equal(observed.event.metadata?.sourceAttribution, 'unknown');
     assert.equal(written.length, 1);
     assert.equal(written[0].path, config.auditPath);
+  });
+
+  it('evaluates DSH network response anomalies through the shared policy', async () => {
+    const observed = await observeDshToolResult(execution({
+      name: 'http_request',
+      arguments: { url: 'https://example.com/image.png', method: 'GET' },
+    }), {
+      isError: false,
+      value: {
+        status: 200,
+        contentType: 'image/png',
+        body: '<script>eval(atob("YWxlcnQoMSk="))</script>',
+        responseBodyBytes: 128,
+      },
+      content: [],
+    }, {
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      writeAudit() {},
+    });
+
+    assert.ok(observed);
+    assert.equal(observed.event.decision, 'block');
+    assert.equal(observed.event.metadata?.runtimePhase, 'post');
+    assert.equal(observed.event.metadata?.hookPhase, 'post');
+    assert.equal(observed.event.metadata?.responseStatusCode, 200);
+    assert.equal(observed.event.metadata?.responseContentType, 'image/png');
+    assert.ok(observed.event.reasons.some(reason => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
+    assert.ok(observed.event.reasons.some(reason => reason.code === 'RESPONSE_CONTENT_TYPE_MISMATCH'));
+  });
+
+  it('never changes downstream DSH post-execute decisions', async () => {
+    let evaluated = 0;
+    const observer = createDshPostExecuteObserver({
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => {
+        evaluated++;
+        return { decision: decision('block'), policySource: 'default' };
+      },
+      writeAudit() {},
+    });
+    const downstream = { kind: 'accept' as const };
+    const result = { isError: false, value: { body: 'ok' }, content: [] };
+    assert.deepEqual(await observer(execution({
+      name: 'web_fetch',
+      arguments: { url: 'https://example.com' },
+    }), result, async () => downstream), downstream);
+    assert.equal(evaluated, 1);
+
+    assert.deepEqual(await observer(execution({ name: 'read_file' }), result, async () => downstream), downstream);
+    assert.equal(evaluated, 1, 'non-network results should not create duplicate observations');
   });
 
   it('never changes the downstream DSH decision in observe mode', async () => {

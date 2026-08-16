@@ -29,6 +29,7 @@ export interface DshRuntimeSummary {
   decisions: Partial<Record<CloudPolicyDecision, number>>;
   actionTypes: Partial<Record<RuntimeActionType, number>>;
   riskLevels: Partial<Record<RuntimeRiskLevel, number>>;
+  phases: Partial<Record<'pre' | 'post' | 'unknown', number>>;
   topReasons: DshRuntimeReasonCount[];
   nestedCalls: number;
   latestActionId?: string;
@@ -65,6 +66,7 @@ export function summarizeDshRuntimeAudit(
   const decisions: DshRuntimeSummary['decisions'] = {};
   const actionTypes: DshRuntimeSummary['actionTypes'] = {};
   const riskLevels: DshRuntimeSummary['riskLevels'] = {};
+  const phases: DshRuntimeSummary['phases'] = {};
   const reasons = new Map<string, number>();
   let nestedCalls = 0;
 
@@ -72,6 +74,10 @@ export function summarizeDshRuntimeAudit(
     increment(decisions, event.decision);
     increment(actionTypes, event.actionType);
     increment(riskLevels, event.riskLevel);
+    const phase = event.metadata?.runtimePhase === 'pre' || event.metadata?.runtimePhase === 'post'
+      ? event.metadata.runtimePhase
+      : 'unknown';
+    increment(phases, phase);
     if (event.metadata?.nested === true) nestedCalls++;
     for (const reason of event.reasons ?? []) {
       if (typeof reason.code === 'string' && reason.code) {
@@ -90,6 +96,7 @@ export function summarizeDshRuntimeAudit(
     decisions,
     actionTypes,
     riskLevels,
+    phases,
     topReasons: [...reasons.entries()]
       .sort(([leftCode, leftCount], [rightCode, rightCount]) => rightCount - leftCount || leftCode.localeCompare(rightCode))
       .slice(0, 10)

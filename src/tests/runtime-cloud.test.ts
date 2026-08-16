@@ -571,6 +571,38 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(decision.reasons.some((reason) => reason.code === 'RESPONSE_MALICIOUS_SCRIPT'));
   });
 
+  it('correlates pre and post observations without double-counting network behavior', async () => {
+    __resetNetworkBehaviorForTests();
+    const policy = getDefaultEffectiveRuntimePolicy();
+    policy.network.defaultOutbound = 'allow';
+    let postDecision;
+    for (let index = 0; index < 3; index += 1) {
+      const base = {
+        sessionId: 'sess_pre_post_correlation',
+        agentHost: 'dsh' as const,
+        actionType: 'network' as const,
+        toolName: 'web_fetch',
+        input: 'https://example.com/repeated',
+      };
+      await evaluateLocalAction(policy, {
+        ...base,
+        metadata: { callId: `call-${index}`, method: 'GET' },
+      });
+      postDecision = await evaluateLocalAction(policy, {
+        ...base,
+        metadata: {
+          callId: `call-${index}`,
+          method: 'GET',
+          hookPhase: 'post',
+          responseStatusCode: 200,
+        },
+      });
+    }
+
+    assert.ok(postDecision);
+    assert.ok(!postDecision.reasons.some((reason) => reason.code === 'NETWORK_REPLAY'));
+  });
+
   it('preserves post-tool response anomaly decisions without creating approvals', async () => {
     __resetNetworkBehaviorForTests();
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-post-response-'));

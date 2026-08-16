@@ -5,7 +5,12 @@ import { parseDshBatchManifest, scanDshPlugins, type DshBatchTarget } from './ba
 import { renderDshBatchMarkdown } from '../reports/dsh-batch-report.js';
 import { compareDshReports } from './compare.js';
 import { renderDshComparisonMarkdown } from '../reports/dsh-compare-report.js';
-import { createDshPreExecuteObserver, type DshRuntimeConfig, type DshToolExecution, type DshPreExecuteNext } from './runtime.js';
+import {
+  createDshPostExecuteObserver,
+  createDshPreExecuteObserver,
+  type DshRuntimeConfig,
+  type DshRuntimeDependencies,
+} from './runtime.js';
 import { summarizeDshRuntimeAudit, type DshRuntimeSummary } from './runtime-summary.js';
 import { loadConfig } from '../config.js';
 
@@ -33,8 +38,8 @@ type DshPluginContext = {
       | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>) => unknown;
   };
   on?: (
-    event: 'tools/pre-execute',
-    listener: (exec: DshToolExecution, next: DshPreExecuteNext) => Promise<{ kind: 'allow' | 'deny' | 'ask'; reason?: string }>
+    event: 'tools/pre-execute' | 'tools/post-execute',
+    listener: (...args: any[]) => Promise<unknown>
   ) => unknown;
   logger?: {
     warn: (message: string) => void;
@@ -387,6 +392,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
           decisions: { type: 'object' },
           actionTypes: { type: 'object' },
           riskLevels: { type: 'object' },
+          phases: { type: 'object' },
           topReasons: { type: 'array' },
           nestedCalls: { type: 'number' },
           latestActionId: { type: 'string' },
@@ -395,7 +401,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
         },
         required: [
           'total', 'inspected', 'malformedLines', 'truncated', 'decisions',
-          'actionTypes', 'riskLevels', 'topReasons', 'nestedCalls', 'modelSummary',
+          'actionTypes', 'riskLevels', 'phases', 'topReasons', 'nestedCalls', 'modelSummary',
         ],
         additionalProperties: false,
       },
@@ -426,10 +432,12 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   ctx.tools.register(createAgentGuardDshCompareTool());
   ctx.tools.register(createAgentGuardDshRuntimeSummaryTool());
   if (config.runtime?.mode !== 'off' && ctx.on) {
-    ctx.on('tools/pre-execute', createDshPreExecuteObserver({
+    const dependencies: DshRuntimeDependencies = {
       onError(error, exec) {
         ctx.logger?.warn(`AgentGuard DSH runtime observation failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`);
       },
-    }));
+    };
+    ctx.on('tools/pre-execute', createDshPreExecuteObserver(dependencies));
+    ctx.on('tools/post-execute', createDshPostExecuteObserver(dependencies));
   }
 }

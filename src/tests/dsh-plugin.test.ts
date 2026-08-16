@@ -46,13 +46,14 @@ describe('AgentGuard DSH runtime plugin', () => {
       actionId: 'action-1', sessionId: 'dsh:root-1', agentHost: 'dsh', actionType: 'shell',
       toolName: 'bash', input: 'TOP_SECRET_VALUE', decision: 'block', riskScore: 95,
       riskLevel: 'critical', reasons: [{ code: 'REMOTE_CODE_EXECUTION' }], policyVersion: 'test',
-      metadata: { runtimeMode: 'observe', nested: false },
+      metadata: { runtimeMode: 'observe', runtimePhase: 'pre', nested: false },
     })}\n`, 'utf8');
 
     const tool = createAgentGuardDshRuntimeSummaryTool(() => auditPath);
     const result = await tool.execute({ limit: 10 });
     assert.equal(result.total, 1);
     assert.equal(result.decisions.block, 1);
+    assert.deepEqual(result.phases, { pre: 1 });
     assert.deepEqual(result.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
     assert.doesNotMatch(JSON.stringify(result), /TOP_SECRET_VALUE/);
     await assert.rejects(() => tool.execute({ limit: 0 }), /between 1 and 1000/);
@@ -62,10 +63,10 @@ describe('AgentGuard DSH runtime plugin', () => {
     const events: string[] = [];
     const context = {
       tools: { register() {} },
-      on(event: 'tools/pre-execute') { events.push(event); },
+      on(event: 'tools/pre-execute' | 'tools/post-execute') { events.push(event); },
     };
     apply(context);
-    assert.deepEqual(events, ['tools/pre-execute']);
+    assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
 
     events.length = 0;
     apply(context, { runtime: { mode: 'off' } });
