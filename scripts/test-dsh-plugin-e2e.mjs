@@ -151,6 +151,32 @@ try {
       return { nestedOk: !nested.isError };
     },
   });
+  runtimeCtx.tools.register({
+    name: 'http_request',
+    description: 'DSH runtime network context E2E probe',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        method: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['url', 'method'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+        additionalProperties: false,
+      },
+      render: () => [{ type: 'text', text: 'network probe complete' }],
+    },
+    async execute() {
+      return { ok: true };
+    },
+  });
 
   const observedRisk = await runtimeCtx.tools.execute({
     callId: 'runtime-risk-1',
@@ -169,6 +195,18 @@ try {
   assert.equal(nestedResult.isError, false);
   assert.equal(probeBodyCalls, 2);
 
+  const observedNetwork = await runtimeCtx.tools.execute({
+    callId: 'runtime-network-1',
+    name: 'http_request',
+    arguments: {
+      url: 'https://example.com/resource',
+      method: 'DELETE',
+      body: 'reason=runtime-e2e',
+    },
+    signal: new AbortController().signal,
+  });
+  assert.equal(observedNetwork.isError, false);
+
   const runtimeAuditEvents = (await readFile(join(runtimeAuditHome, 'audit.jsonl'), 'utf8'))
     .trim()
     .split('\n')
@@ -185,10 +223,14 @@ try {
   assert.equal(nestedEvent?.toolName, 'bash');
   assert.equal(nestedEvent?.metadata?.rootCallId, 'runtime-root-1');
   assert.equal(nestedEvent?.metadata?.nested, true);
+  const networkEvent = runtimeAuditEvents.find(event => event.metadata?.callId === 'runtime-network-1');
+  assert.equal(networkEvent?.actionType, 'network');
+  assert.equal(networkEvent?.metadata?.method, 'DELETE');
+  assert.equal(networkEvent?.decision, 'require_approval');
 
   const runtimeSummary = await registeredRuntimeSummary.execute({ limit: 10 });
-  assert.equal(runtimeSummary.total, 3);
-  assert.equal(runtimeSummary.decisions.require_approval, 1);
+  assert.equal(runtimeSummary.total, 4);
+  assert.equal(runtimeSummary.decisions.require_approval, 2);
   assert.equal(runtimeSummary.nestedCalls, 1);
   assert.doesNotMatch(JSON.stringify(runtimeSummary), /curl https:\/\/example\.com/);
 } finally {
@@ -248,6 +290,7 @@ try {
     generatedRuntimeTag: generatedRuntimeReport.runtimeSurfaceRiskTags.includes('DYNAMIC_CODE_EXECUTION'),
     nativeRuntimePipeline: true,
     nestedRuntimeObserved: true,
+    nativeNetworkContext: true,
     runtimeSummaryRedacted: true,
   }));
 } finally {

@@ -59,6 +59,8 @@ If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web proces
 | Install or execute the scanned plugin | No | The scanner never invokes a package manager or target lifecycle script. |
 | Observe commands and tool calls executed by DSH | Phase 2A | Uses native `tools/pre-execute`; root and nested calls share the same path. |
 | Evaluate through AgentGuard runtime policy | Phase 2A | Reuses the shared policy resolver and OSS action evaluator. |
+| Preserve workspace and request context | Phase 2A | Uses the DSH session cwd plus shell workdir and network method/header/body fields supported by the shared evaluator. |
+| Summarize recent runtime decisions | Phase 2A | Bounded local aggregation; raw tool input and reason evidence are omitted. |
 | Apply allow, warn, approve, or block decisions inside DSH | No | Phase 2A records the evaluated decision but always preserves the downstream DSH decision. |
 | Attribute a call to its source plugin | No | Recorded as `unknown`; AgentGuard does not infer ownership from a tool name. |
 

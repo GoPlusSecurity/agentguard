@@ -79,6 +79,33 @@ describe('DSH runtime Phase 2A observer', () => {
     });
   });
 
+  it('preserves native DSH workspace and network request context', () => {
+    const shell = buildDshRuntimeAction(execution({
+      arguments: { command: 'pwd', workdir: 'packages/app' },
+      agent: {
+        id: 'session-1',
+        session: { header: { cwd: '/workspace' } },
+      },
+    }));
+    assert.equal(shell.cwd, '/workspace/packages/app');
+
+    const network = buildDshRuntimeAction(execution({
+      name: 'http_request',
+      arguments: {
+        request: {
+          url: 'https://example.com/resource',
+          method: 'delete',
+          headers: { authorization: 'Bearer test-value' },
+          body: 'reason=cleanup',
+        },
+      },
+    }));
+    assert.equal(network.input, 'https://example.com/resource');
+    assert.equal(network.metadata?.method, 'DELETE');
+    assert.deepEqual(network.metadata?.headers, { authorization: 'Bearer test-value' });
+    assert.equal(network.metadata?.bodyPreview, 'reason=cleanup');
+  });
+
   it('uses the same AgentGuard evaluator and policy semantics as other hosts', async () => {
     const exec = execution();
     const action = buildDshRuntimeAction(exec);

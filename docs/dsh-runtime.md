@@ -6,9 +6,9 @@ AgentGuard Runtime Phase 2A connects to DSH's native `tools/pre-execute` waterfa
 
 The shipped mode is `observe`:
 
-1. DSH supplies the immutable tool name, parsed arguments, call identity, root-call identity, optional parent token, and calling agent.
+1. DSH supplies the immutable tool name, parsed arguments, call identity, root-call identity, optional parent token, and calling agent. AgentGuard uses the official session header for the workspace cwd and resolves a relative shell `workdir` against it.
 2. AgentGuard maps recognized tools—including common command, patch, image, file-search, HTTP, browser, and MCP names—to `shell`, `file_read`, `file_write`, `web_search`, `network`, `deploy`, `skill_install`, or `mcp_tool`. Unknown tools remain `other` and are still audited.
-3. `evaluateRuntimeAction()` resolves Cloud, cached, or bundled-default policy and delegates to the existing `evaluateLocalAction()` / `ActionScanner` path.
+3. AgentGuard preserves evaluator-relevant request context such as network method, headers, and body preview. `evaluateRuntimeAction()` then resolves Cloud, cached, or bundled-default policy and delegates to the existing `evaluateLocalAction()` / `ActionScanner` path.
 4. AgentGuard records the policy decision, risk score, reasons, call tree metadata, and `sourceAttribution: "unknown"` in `~/.agentguard/audit.jsonl`.
 5. The listener calls the next DSH policy unchanged. AgentGuard never returns its evaluated `deny` or `ask` in Phase 2A.
 
@@ -41,12 +41,15 @@ Set `runtime.mode` to `off` in a custom composition to omit the listener. No enf
 
 DSH does not maintain a separate rule engine. The normalized action goes through AgentGuard's shared runtime policy and detector path, so dangerous commands, remote code execution, protected paths, credential access, exfiltration, outbound-network policy, and supported network anomalies retain the same scoring and decision semantics.
 
+The host-parity regression matrix evaluates equivalent shell, file, and network actions with DSH, Codex, Claude Code, and OpenClaw host identities. It requires identical decision, risk score, risk level, and reason codes. This protects shared security semantics while allowing host-specific lifecycle behavior at the boundary.
+
 Host behavior intentionally differs at the boundary:
 
 - DSH supplies native call-tree identities rather than a shell-hook payload.
 - Phase 2A uses local audit only; it may fetch an effective Cloud policy when AgentGuard is connected, but it does not upload DSH events.
 - DSH currently supplies no reliable source-plugin ownership field. AgentGuard records `unknown` rather than guessing, so plugin-specific trust and capability enforcement is not yet equivalent.
 - Post-response anomaly enforcement and native `ask`/`deny` translation are deferred to later phases.
+- Phase 2A observes pre-execution request context only. Response status, headers, sizes, and content anomalies require a future `tools/post-execute` observer.
 
 ## Gate for enforcement
 

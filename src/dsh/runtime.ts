@@ -1,5 +1,6 @@
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import { loadConfig, type AgentGuardConfig } from '../config.js';
+import { isAbsolute, resolve } from 'node:path';
 import { writeAuditLog } from '../runtime/audit.js';
 import {
   evaluateRuntimeAction,
@@ -22,6 +23,11 @@ export interface DshToolExecution {
   readonly parent?: unknown;
   readonly agent?: {
     readonly id?: unknown;
+    readonly session?: {
+      readonly header?: {
+        readonly cwd?: unknown;
+      };
+    };
   };
 }
 
@@ -85,18 +91,23 @@ export function mapDshToolToRuntimeAction(name: string): RuntimeActionType {
 export function buildDshRuntimeAction(exec: DshToolExecution): RuntimeAction {
   const actionType = mapDshToolToRuntimeAction(exec.name);
   const args = asRecord(exec.arguments);
+  const sessionCwd = firstString(exec.agent?.session?.header?.cwd);
+  const explicitCwd = args ? firstString(args.workdir, args.cwd, args.working_directory) : '';
+  const effectiveCwd = resolveDshCwd(explicitCwd, sessionCwd);
   return {
     sessionId: stringValue(exec.agent?.id) || `dsh:${stringValue(exec.rootCallId) || stringValue(exec.callId)}`,
     agentHost: 'dsh',
     actionType,
     toolName: exec.name,
     input: actionInput(actionType, args, exec.arguments),
+    ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
     metadata: {
       rawProtocol: 'dsh-native',
       callId: stringValue(exec.callId),
       rootCallId: stringValue(exec.rootCallId),
       nested: exec.parent !== undefined,
       sourceAttribution: 'unknown',
+      ...actionMetadata(actionType, args),
     },
   };
 }
@@ -163,22 +174,62 @@ function defaultFetchPolicy(config: AgentGuardConfig): (() => Promise<import('..
 
 function actionInput(actionType: RuntimeActionType, args: Record<string, unknown> | null, raw: unknown): string {
   if (args) {
-    if (actionType === 'shell') return firstString(args.command, args.cmd, args.script, args.code) || stableJson(raw);
+    if (actionType === 'shell') return firstString(args.command, args.cmd, args.script, args.code, args.input) || stableJson(raw);
     if (actionType === 'file_read' || actionType === 'file_write') {
-      return firstString(args.path, args.file_path, args.filePath, args.target) || stableJson(raw);
+      return firstString(args.path, args.file_path, args.filePath, args.file, args.filename, args.target, args.destination) || stableJson(raw);
     }
-    if (actionType === 'web_search') return firstString(args.query, args.q, args.search) || stableJson(raw);
+    if (actionType === 'web_search') return firstString(args.query, args.q, args.search, args.term) || stableJson(raw);
     if (actionType === 'network' || actionType === 'browser') {
-      return firstString(args.url, args.uri, args.href, args.target) || stableJson(raw);
+      const request = firstRecord(args.request, args.options);
+      return firstString(args.url, args.uri, args.href, args.target, request?.url, request?.uri) || stableJson(raw);
     }
   }
   return stableJson(raw);
+}
+
+function actionMetadata(
+  actionType: RuntimeActionType,
+  args: Record<string, unknown> | null
+): Record<string, unknown> {
+  if (!args || (actionType !== 'network' && actionType !== 'browser')) return {};
+  const request = firstRecord(args.request, args.options);
+  const method = firstString(args.method, request?.method).toUpperCase();
+  const bodyPreview = firstString(
+    args.body,
+    args.body_preview,
+    args.bodyPreview,
+    args.data,
+    request?.body,
+    request?.body_preview,
+    request?.bodyPreview,
+    request?.data
+  );
+  const headers = firstRecord(args.headers, args.requestHeaders, request?.headers, request?.requestHeaders);
+  return {
+    ...(method ? { method } : {}),
+    ...(bodyPreview ? { bodyPreview } : {}),
+    ...(headers ? { headers } : {}),
+  };
+}
+
+function resolveDshCwd(explicitCwd: string, sessionCwd: string): string {
+  if (!explicitCwd) return sessionCwd;
+  if (isAbsolute(explicitCwd) || !sessionCwd) return explicitCwd;
+  return resolve(sessionCwd, explicitCwd);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (record) return record;
+  }
+  return undefined;
 }
 
 function firstString(...values: unknown[]): string {
