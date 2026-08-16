@@ -43,7 +43,7 @@ try {
   assert.equal(registered?.name, 'agentguard_dsh_scan');
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
-  assert.equal(result.phase, 'phase1-rc1');
+  assert.equal(result.phase, 'phase1-rc2');
   assert.match(result.scannerVersion, /^\d+\.\d+\.\d+/);
   assert.match(result.rulesBaseline, /^[0-9a-f]{40}$/);
 

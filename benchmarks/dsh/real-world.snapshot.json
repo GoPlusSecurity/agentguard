@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "baseline": "phase1-rc1",
-  "rulesFrozenAt": "83db977a566d8a853568a2d2903b142106d80196",
+  "baseline": "phase1-rc2",
+  "rulesFrozenAt": "367227cc2b8bc064af369bf41e4490f6c4d3ea8b",
   "cases": [
     {
       "id": "dsh-deep-whale",

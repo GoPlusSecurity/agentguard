@@ -76,7 +76,7 @@ try {
   plugin.apply({ tools: { register(tool) { registered = tool; } } });
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
-  assert.equal(result.phase, 'phase1-rc1');
+  assert.equal(result.phase, 'phase1-rc2');
 
   await dsh(['plugin', '--profile', 'web', 'update', tarball]);
   const updatedManifest = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'));
