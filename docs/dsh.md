@@ -18,7 +18,7 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL and returns a Markdown or JSON report. For example, ask DSH: “Use AgentGuard to scan `/path/to/plugin` and report whether I should install it.”
+Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. For example, ask DSH: “Use AgentGuard to scan tag `v1.2.3` of `https://github.com/owner/plugin` and report whether I should install it.”
 
 The DSH tool preserves the Phase 1 boundary: it performs static analysis only. It does not install or execute the target plugin.
 
@@ -108,6 +108,7 @@ Options:
 
 | Option | Default | Description |
 |---|---|---|
+| `--ref <ref>` | default branch HEAD | For a GitHub input, scan a branch, tag, fully qualified ref, or full 40-character commit SHA. |
 | `-f, --format <format>` | `markdown` | Select `json`, `markdown`, or `html`. |
 | `-o, --output <path>` | stdout | Write the selected report to a file. |
 
@@ -122,6 +123,10 @@ agentguard dsh-scan ./plugins/example --format json
 
 # Audit a repository's current default branch
 agentguard dsh-scan https://github.com/owner/dsh-plugin --format json
+
+# Reproducibly audit a release tag or exact commit
+agentguard dsh-scan https://github.com/owner/dsh-plugin --ref v1.2.3 --format json
+agentguard dsh-scan https://github.com/owner/dsh-plugin --ref 0123456789abcdef0123456789abcdef01234567 --format json
 
 # Produce a portable review artifact
 agentguard dsh-scan ./plugins/example --format html --output dsh-report.html
@@ -150,6 +155,7 @@ import {
 } from '@goplus/agentguard';
 
 const report: DshPluginScanReport = await scanDshPlugin('./plugin');
+const pinned = await scanDshPlugin('https://github.com/owner/dsh-plugin', { ref: 'v1.2.3' });
 
 if (report.riskLevel === 'critical') {
   throw new Error(report.summary);
@@ -355,7 +361,7 @@ The scanner treats its input as untrusted:
 - No package or configuration code is evaluated.
 - Cordis `!!js` tags are inert.
 - No package manager is invoked.
-- GitHub acquisition resolves HEAD first, uses a blob-less depth-one fetch, does not initialize submodules or run repository hooks, and monitors the fetch and checkout against a 256 MiB on-disk budget.
+- GitHub acquisition resolves the requested branch or tag to an exact commit (or HEAD when no ref is supplied), uses a blob-less depth-one fetch, does not initialize submodules or run repository hooks, and monitors the fetch and checkout against a 256 MiB on-disk budget.
 - A remote acquisition is rejected above 100,000 Git objects, both before and after checkout.
 - File reads resolve their real path and reject symlinks that escape the scan root. Symlinks whose final target remains inside the artifact are allowed.
 - Individual scan files are limited to 2 MiB.
@@ -442,7 +448,7 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 
 - Static analysis cannot prove that a plugin is safe.
 - Computed property access, native code, packed binaries, generated source, and runtime-downloaded behavior can evade pattern matching.
-- GitHub scans follow the current default branch; they do not accept a tag, branch, pull request, or commit selector in Phase 1.
+- GitHub scans accept a branch, tag, fully qualified branch/tag ref, or full commit SHA. Pull-request refs and arbitrary repository subpaths are not accepted.
 - Repository scanning does not prove that an npm package with the same name contains the same files.
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.

@@ -166,6 +166,8 @@ export interface DshPluginScanReport {
     kind: 'local' | 'github';
     resolvedPath: string;
     repositoryUrl?: string;
+    /** User-selected GitHub branch, tag, fully qualified ref, or commit SHA. */
+    requestedRef?: string;
     revision?: string;
     lastCommitAt?: string;
   };

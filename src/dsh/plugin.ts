@@ -25,6 +25,7 @@ type DshPluginContext = {
 
 export type AgentGuardDshToolArgs = {
   target: string;
+  ref?: string;
   format?: 'markdown' | 'json';
 };
 
@@ -54,6 +55,10 @@ export function createAgentGuardDshTool(): ToolDefinition {
         target: {
           type: 'string',
           description: 'Absolute or workspace-relative local directory, or an HTTPS GitHub repository URL.',
+        },
+        ref: {
+          type: 'string',
+          description: 'Optional GitHub branch, tag, fully qualified ref, or full commit SHA.',
         },
         format: {
           type: 'string',
@@ -105,8 +110,11 @@ export function createAgentGuardDshTool(): ToolDefinition {
       if (args.format !== undefined && args.format !== 'markdown' && args.format !== 'json') {
         throw new Error('format must be markdown or json');
       }
+      if (args.ref !== undefined && (typeof args.ref !== 'string' || args.ref.length === 0)) {
+        throw new Error('ref must be a non-empty string');
+      }
 
-      const report = await scanDshPlugin(args.target.trim());
+      const report = await scanDshPlugin(args.target.trim(), { ref: args.ref });
       const format = args.format ?? 'markdown';
       const scanner = report.scanner ?? getDshScannerMetadata();
       const runtimeSurfaceRiskLevel = report.runtimeSurfaceRiskLevel ?? report.riskLevel;

@@ -9,7 +9,11 @@ import { parseCordisConfigs } from '../dsh/parse-cordis-patch.js';
 import { scanDshPlugin } from '../dsh/scan.js';
 import { renderDshHtml, renderDshMarkdown } from '../reports/dsh-report.js';
 import { MAX_SCANNABLE_FILE_BYTES } from '../scanner/file-walker.js';
-import { assertDshAcquisitionByteBudget, normalizeGithubRepositoryUrl } from '../dsh/source.js';
+import {
+  assertDshAcquisitionByteBudget,
+  normalizeGithubRepositoryUrl,
+  resolveAdvertisedGithubRef,
+} from '../dsh/source.js';
 
 const roots: string[] = [];
 
@@ -467,12 +471,16 @@ describe('DSH report rendering', () => {
     assert.match(markdown, /Permission profile/);
     assert.match(markdown, /Runtime-surface risk/);
     assert.match(markdown, /Review priority/);
+    assert.match(markdown, /Requested ref: Not applicable/);
+    assert.match(markdown, /Resolved revision:/);
     assert.match(markdown, /Security boundary/);
     assert.doesNotMatch(markdown, /<script>alert\(1\)<\/script>/);
     assert.doesNotMatch(markdown, /^# forged report$/m);
     assert.match(markdown, /\\u003cscript\\u003e/);
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.match(html, /Requested ref/);
+    assert.match(html, /Not applicable/);
     assert.match(html, /Static analysis can miss/);
   });
 
@@ -523,5 +531,36 @@ describe('DSH GitHub source normalization', () => {
   it('enforces the remote acquisition byte budget before scanning', async () => {
     const root = await fixture({ 'large-object': '0123456789abcdef' });
     await assert.rejects(() => assertDshAcquisitionByteBudget(root, 8), /8 byte acquisition limit/);
+  });
+
+  it('rejects a GitHub ref for local directory scans', async () => {
+    const root = await fixture({ 'package.json': JSON.stringify({ name: 'local-plugin' }) });
+    await assert.rejects(() => scanDshPlugin(root, { ref: 'main' }), /only supported for HTTPS GitHub/);
+  });
+
+  it('resolves advertised branches and annotated or lightweight tags to commits', () => {
+    const branchRevision = '1'.repeat(40);
+    const tagObject = '2'.repeat(40);
+    const tagRevision = '3'.repeat(40);
+    const output = [
+      `${branchRevision}\trefs/heads/release`,
+      `${tagObject}\trefs/tags/v1.0.0`,
+      `${tagRevision}\trefs/tags/v1.0.0^{}`,
+    ].join('\n');
+    assert.equal(resolveAdvertisedGithubRef('release', output), branchRevision);
+    assert.equal(resolveAdvertisedGithubRef('v1.0.0', output), tagRevision);
+    assert.equal(resolveAdvertisedGithubRef('refs/tags/v1.0.0', output), tagRevision);
+  });
+
+  it('rejects ambiguous or unsafe GitHub refs', () => {
+    const branchRevision = '1'.repeat(40);
+    const tagRevision = '2'.repeat(40);
+    const output = [
+      `${branchRevision}\trefs/heads/release`,
+      `${tagRevision}\trefs/tags/release`,
+    ].join('\n');
+    assert.throws(() => resolveAdvertisedGithubRef('release', output), /ambiguous/);
+    assert.throws(() => resolveAdvertisedGithubRef('../main', ''), /Invalid GitHub ref/);
+    assert.throws(() => resolveAdvertisedGithubRef('feature/*', ''), /Invalid GitHub ref/);
   });
 });

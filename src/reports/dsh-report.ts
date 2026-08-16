@@ -129,6 +129,8 @@ ${findings}
 
 ## Scan metadata
 
+- Requested ref: ${report.source.requestedRef ? markdownEscape(report.source.requestedRef) : report.source.kind === 'github' ? 'Default branch HEAD' : 'Not applicable'}
+- Resolved revision: ${report.source.revision ?? 'Unknown'}
 - Last commit: ${report.source.lastCommitAt ?? 'Unknown'}
 - README install instructions: ${report.project.hasReadmeInstallInstructions ? 'Found' : 'Not found'}
 - Artifact hash: ${report.identity.artifactHash ?? 'Unknown'}
@@ -203,7 +205,7 @@ export function renderDshHtml(report: DshPluginScanReport): string {
   <div class="grid">
     <section style="grid-column:1/-1"><h2>Key findings</h2>${findings}</section>
     <section class="recommendation"><h2>Install recommendation</h2><strong>${htmlEscape(RECOMMENDATIONS[report.installRecommendation])}</strong><p>Runtime surface: ${htmlEscape(RECOMMENDATIONS[runtimeSurfaceRecommendation])}</p>${report.harmlessMismatch ? '<p>Looks harmless, but requests elevated capabilities.</p>' : ''}</section>
-    <section><h2>Artifact</h2><dl><dt>Repository</dt><dd>${htmlEscape(report.project.repositoryUrl ?? 'Local directory')}</dd><dt>Last commit</dt><dd>${htmlEscape(report.source.lastCommitAt ?? 'Unknown')}</dd><dt>Files scanned</dt><dd>${report.filesScanned}</dd><dt>Scanned</dt><dd>${htmlEscape(report.scannedAt)}</dd><dt>Hash</dt><dd>${htmlEscape(report.identity.artifactHash ?? 'Unknown')}</dd></dl></section>
+    <section><h2>Artifact</h2><dl><dt>Repository</dt><dd>${htmlEscape(report.project.repositoryUrl ?? 'Local directory')}</dd><dt>Requested ref</dt><dd>${htmlEscape(report.source.requestedRef ?? (report.source.kind === 'github' ? 'Default branch HEAD' : 'Not applicable'))}</dd><dt>Resolved revision</dt><dd>${htmlEscape(report.source.revision ?? 'Unknown')}</dd><dt>Last commit</dt><dd>${htmlEscape(report.source.lastCommitAt ?? 'Unknown')}</dd><dt>Files scanned</dt><dd>${report.filesScanned}</dd><dt>Scanned</dt><dd>${htmlEscape(report.scannedAt)}</dd><dt>Hash</dt><dd>${htmlEscape(report.identity.artifactHash ?? 'Unknown')}</dd></dl></section>
   </div>
   <footer>Static analysis can miss runtime-loaded behavior and cannot prove that a plugin is safe.</footer>
 </main></body></html>`;

@@ -19,6 +19,11 @@ describe('AgentGuard DSH runtime plugin', () => {
     apply({ tools: { register(tool) { registered = tool; } } });
     assert.equal(registered?.name, 'agentguard_dsh_scan');
     assert.match(registered?.description ?? '', /without installing or executing/i);
+    const properties = registered?.parameters.properties as Record<string, unknown>;
+    assert.deepEqual(properties.ref, {
+      type: 'string',
+      description: 'Optional GitHub branch, tag, fully qualified ref, or full commit SHA.',
+    });
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {
@@ -66,5 +71,9 @@ describe('AgentGuard DSH runtime plugin', () => {
     });
     assert.doesNotMatch(result.modelSummary, /Ignore all previous instructions/);
     await assert.rejects(() => createAgentGuardDshTool().execute({ target: '  ' }), /non-empty/);
+    await assert.rejects(
+      () => createAgentGuardDshTool().execute({ target: root, ref: '' }),
+      /ref must be a non-empty string/,
+    );
   });
 });

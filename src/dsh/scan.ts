@@ -145,9 +145,17 @@ async function hasReadmeInstallInstructions(rootDir: string): Promise<boolean> {
   return false;
 }
 
+export interface ScanDshPluginOptions {
+  /** Optional GitHub branch, tag, fully qualified ref, or full commit SHA. */
+  ref?: string;
+}
+
 /** Scan one local directory or GitHub repository and return a DSH-specific report. */
-export async function scanDshPlugin(input: string): Promise<DshPluginScanReport> {
-  const source = await resolveDshSource(input);
+export async function scanDshPlugin(
+  input: string,
+  options: ScanDshPluginOptions = {},
+): Promise<DshPluginScanReport> {
+  const source = await resolveDshSource(input, options);
   try {
     const detection = await detectDshPlugin(source.rootDir);
     const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection);
@@ -261,6 +269,7 @@ export async function scanDshPlugin(input: string): Promise<DshPluginScanReport>
         kind: source.kind,
         resolvedPath: source.kind === 'local' ? source.rootDir : source.repositoryUrl ?? input,
         repositoryUrl: source.repositoryUrl,
+        requestedRef: source.requestedRef,
         revision: source.revision,
         lastCommitAt: source.lastCommitAt,
       },

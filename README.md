@@ -140,6 +140,9 @@ agentguard dsh-scan ./path/to/dsh-plugin
 # Machine-readable report from a GitHub repository
 agentguard dsh-scan https://github.com/owner/dsh-plugin --format json
 
+# Reproducible report for a release tag, branch, or exact commit
+agentguard dsh-scan https://github.com/owner/dsh-plugin --ref v1.2.3 --format json
+
 # Self-contained shareable report page
 agentguard dsh-scan ./path/to/dsh-plugin --format html --output report.html
 ```

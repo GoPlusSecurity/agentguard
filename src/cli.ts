@@ -376,6 +376,7 @@ async function main() {
     .command('dsh-scan')
     .description('Audit a local DSH plugin directory or HTTPS GitHub repository')
     .argument('<repo-or-path>', 'Local directory or https://github.com/owner/repo URL')
+    .option('--ref <ref>', 'GitHub branch, tag, fully qualified ref, or full commit SHA')
     .option('-f, --format <format>', 'Report format: json | markdown | html', 'markdown')
     .option('-o, --output <path>', 'Write the report to a file instead of stdout')
     .action(async (input, options) => {
@@ -383,7 +384,9 @@ async function main() {
       if (!['json', 'markdown', 'html'].includes(format)) {
         throw new Error('Invalid format. Use json, markdown, or html.');
       }
-      const report = await scanDshPlugin(String(input));
+      const report = await scanDshPlugin(String(input), {
+        ref: options.ref === undefined ? undefined : String(options.ref),
+      });
       const rendered = format === 'json'
         ? `${JSON.stringify(report, null, 2)}\n`
         : format === 'html'

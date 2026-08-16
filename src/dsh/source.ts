@@ -100,9 +100,15 @@ export interface ResolvedDshSource {
   kind: 'local' | 'github';
   input: string;
   repositoryUrl?: string;
+  requestedRef?: string;
   revision?: string;
   lastCommitAt?: string;
   cleanup(): Promise<void>;
+}
+
+export interface ResolveDshSourceOptions {
+  /** Optional GitHub branch, tag, fully qualified ref, or full commit SHA. */
+  ref?: string;
 }
 
 async function gitMetadata(rootDir: string): Promise<{ revision?: string; lastCommitAt?: string }> {
@@ -117,11 +123,65 @@ async function gitMetadata(rootDir: string): Promise<{ revision?: string; lastCo
   }
 }
 
-async function resolveGithubHead(repositoryUrl: string): Promise<string> {
+function assertValidGithubRef(ref: string): void {
+  if (ref.length === 0 || ref.length > 255 || ref.trim() !== ref) {
+    throw new Error('GitHub ref must be a non-empty value of at most 255 characters');
+  }
+  if (/^[0-9a-f]{40}$/i.test(ref)) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+    || ref.includes('..')
+    || ref.includes('@{')
+    || ref.includes('//')
+    || ref.endsWith('/')
+    || ref.endsWith('.')
+    || ref.split('/').some(part => part === '' || part.startsWith('.') || part.endsWith('.lock'))) {
+    throw new Error('Invalid GitHub ref; use a branch, tag, fully qualified ref, or full 40-character commit SHA');
+  }
+}
+
+export function resolveAdvertisedGithubRef(ref: string, output: string): string {
+  assertValidGithubRef(ref);
+  const matches = new Map<string, string>();
+  for (const line of output.trim().split('\n')) {
+    if (!line.trim()) continue;
+    const [revision, advertisedRef] = line.trim().split(/\s+/, 2);
+    if (/^[0-9a-f]{40,64}$/i.test(revision ?? '') && advertisedRef) {
+      matches.set(advertisedRef, revision.toLowerCase());
+    }
+  }
+
+  if (ref.startsWith('refs/heads/')) {
+    const revision = matches.get(ref);
+    if (revision) return revision;
+  } else if (ref.startsWith('refs/tags/')) {
+    const revision = matches.get(`${ref}^{}`) ?? matches.get(ref);
+    if (revision) return revision;
+  } else {
+    const branch = matches.get(`refs/heads/${ref}`);
+    const tag = matches.get(`refs/tags/${ref}^{}`) ?? matches.get(`refs/tags/${ref}`);
+    if (branch && tag) {
+      throw new Error(`GitHub ref ${JSON.stringify(ref)} is ambiguous; use refs/heads/... or refs/tags/...`);
+    }
+    if (branch ?? tag) return (branch ?? tag)!;
+  }
+  throw new Error(`GitHub ref ${JSON.stringify(ref)} was not advertised as a branch or tag`);
+}
+
+async function resolveGithubRevision(repositoryUrl: string, requestedRef?: string): Promise<string> {
+  if (requestedRef && /^[0-9a-f]{40}$/i.test(requestedRef)) return requestedRef.toLowerCase();
+  if (requestedRef) assertValidGithubRef(requestedRef);
+  const patterns = !requestedRef
+    ? ['HEAD']
+    : requestedRef.startsWith('refs/heads/')
+      ? [requestedRef]
+      : requestedRef.startsWith('refs/tags/')
+        ? [requestedRef, `${requestedRef}^{}`]
+        : [`refs/heads/${requestedRef}`, `refs/tags/${requestedRef}`, `refs/tags/${requestedRef}^{}`];
   const { stdout } = await execFileAsync('git', [
     '-c', 'core.hooksPath=/dev/null',
-    'ls-remote', '--exit-code', '--', repositoryUrl, 'HEAD',
+    'ls-remote', '--exit-code', '--', repositoryUrl, ...patterns,
   ], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+  if (requestedRef) return resolveAdvertisedGithubRef(requestedRef, stdout);
   const revision = stdout.trim().split(/\s+/)[0];
   if (!revision || !/^[0-9a-f]{40,64}$/i.test(revision)) {
     throw new Error('GitHub repository did not advertise a valid HEAD revision');
@@ -142,14 +202,19 @@ async function requireGitForGithubScan(): Promise<void> {
 }
 
 /** Resolve a local directory or HTTPS GitHub repository into a scan directory. */
-export async function resolveDshSource(input: string): Promise<ResolvedDshSource> {
+export async function resolveDshSource(
+  input: string,
+  options: ResolveDshSourceOptions = {},
+): Promise<ResolvedDshSource> {
   const repositoryUrl = normalizeGithubRepositoryUrl(input);
   if (repositoryUrl) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'agentguard-dsh-'));
     const rootDir = join(tempRoot, 'repo');
     try {
       await requireGitForGithubScan();
-      const expectedRevision = await resolveGithubHead(repositoryUrl);
+      const requestedRef = options.ref;
+      if (requestedRef !== undefined) assertValidGithubRef(requestedRef);
+      const expectedRevision = await resolveGithubRevision(repositoryUrl, requestedRef);
       await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'init', rootDir], { timeout: 10_000 });
       await execFileAsync('git', ['-C', rootDir, 'remote', 'add', 'origin', repositoryUrl], { timeout: 10_000 });
       await execBoundedGit([
@@ -166,13 +231,14 @@ export async function resolveDshSource(input: string): Promise<ResolvedDshSource
       await assertGitObjectBudget(rootDir);
       const metadata = await gitMetadata(rootDir);
       if (metadata.revision?.toLowerCase() !== expectedRevision) {
-        throw new Error(`Checked out ${metadata.revision ?? 'no revision'} instead of resolved HEAD ${expectedRevision}`);
+        throw new Error(`Checked out ${metadata.revision ?? 'no revision'} instead of resolved revision ${expectedRevision}`);
       }
       return {
         rootDir,
         kind: 'github',
         input,
         repositoryUrl,
+        requestedRef,
         ...metadata,
         cleanup: () => rm(tempRoot, { recursive: true, force: true }),
       };
@@ -180,6 +246,10 @@ export async function resolveDshSource(input: string): Promise<ResolvedDshSource
       await rm(tempRoot, { recursive: true, force: true });
       throw new Error(`Failed to fetch GitHub repository: ${(error as Error).message}`);
     }
+  }
+
+  if (options.ref !== undefined) {
+    throw new Error('A GitHub ref is only supported for HTTPS GitHub repository scans');
   }
 
   if (/^https?:\/\//i.test(input)) {
