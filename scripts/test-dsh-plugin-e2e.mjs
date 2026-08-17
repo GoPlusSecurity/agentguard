@@ -39,6 +39,7 @@ assert.match(dumped.stdout, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
 assert.match(dumped.stdout, /runtime:\s*\n\s+mode:\s*observe/);
 
 const plugin = await import(`${pathToFileURL(installedPlugin).href}?e2e=${Date.now()}`);
+const enforcementAdapter = await import(`${pathToFileURL(join(dirname(installedPlugin), 'enforcement-adapter.js')).href}?e2e=${Date.now()}`);
 const registeredTools = [];
 const runtimeEvents = [];
 plugin.apply({
@@ -250,6 +251,49 @@ try {
   assert.equal(runtimeSummary.nestedCalls, 1);
   assert.deepEqual(runtimeSummary.phases, { pre: 5, post: 1 });
   assert.doesNotMatch(JSON.stringify(runtimeSummary), /curl https:\/\/example\.com/);
+
+  let approvalProbeCalls = 0;
+  runtimeCtx.tools.register({
+    name: 'approval_probe',
+    description: 'DSH native approval protocol E2E probe',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    output: {
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+        additionalProperties: false,
+      },
+      render: () => [{ type: 'text', text: 'approval probe complete' }],
+    },
+    async execute() {
+      approvalProbeCalls++;
+      return { ok: true };
+    },
+  });
+  runtimeCtx.on('tools/pre-execute', async (exec, next) => {
+    if (exec.name !== 'approval_probe') return next();
+    return enforcementAdapter.translateDshPreDecision({
+      actionId: 'approval-probe',
+      decision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'REMOTE_CODE_EXECUTION', severity: 'high', title: 'approval probe',
+        description: 'native protocol contract',
+      }],
+      policyVersion: 'runtime-e2e',
+    });
+  });
+  const unavailableApproval = await runtimeCtx.tools.execute({
+    callId: 'runtime-approval-unavailable-1',
+    name: 'approval_probe',
+    arguments: {},
+    signal: new AbortController().signal,
+  });
+  assert.equal(unavailableApproval.isError, true);
+  assert.match(unavailableApproval.error.message, /requires approval/);
+  assert.equal(approvalProbeCalls, 0, 'a missing DSH approval service must fail closed before dispatch');
 } finally {
   await runtimeCtx.fiber.dispose();
 }
@@ -311,6 +355,7 @@ try {
     remotePackageObserved: true,
     postExecuteObserved: true,
     runtimeSummaryRedacted: true,
+    nativeApprovalFailClosed: true,
   }));
 } finally {
   child.kill('SIGTERM');

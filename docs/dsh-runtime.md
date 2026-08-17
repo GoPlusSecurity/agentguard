@@ -29,6 +29,10 @@ The mapping is deliberately pure and deterministic so it can be tested before an
 
 Approval plans carry explicit gates for DSH native approval, headless behavior, and approved-result resume. Post-result blocking also remains gated on suppression validation. The observer only writes this plan to audit metadata; both lifecycle listeners still return the downstream DSH decision unchanged.
 
+AgentGuard also exports a protocol adapter for pre/post decision translation and monotonic composition tests. It is intentionally not registered by the packaged plugin and there is no `enforce` configuration value. The pre adapter returns DSH's native `{ kind: "ask", reason }` for `require_approval`; DSH—not AgentGuard—then owns the one-shot approval request, durable `approval/asked` + `approval/decided` pair, cancellation, and final allow/deny result. AgentGuard does not create a parallel CLI approval entry.
+
+The reason passed into DSH contains only bounded policy metadata and up to five reason codes. Raw tool input, detector descriptions, and evidence are excluded. Composition helpers preserve a downstream `deny`, `ask`, or post-result `block`, so another DSH policy cannot be weakened.
+
 AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-observation. Evaluation or audit failures are fail-open in Phase 2A and cannot change DSH behavior.
 
 ## Runtime summary tool
@@ -80,3 +84,5 @@ An enforcing mode must not be enabled until tests prove all of the following:
 - Missing source attribution remains explicit and cannot silently grant plugin-specific trust.
 
 The shadow mapping satisfies the deterministic-translation design requirement, but it does not satisfy the native approval, cancellation, headless, or post-result-resume gates by itself.
+
+The protocol contract test now proves that a translated `ask` reaches DSH's native tool pipeline and fails closed before tool dispatch when no approval service is composed. Interactive `allowed-once`, explicit rejection, cancellation during an open turn, and post-result resume remain required before an enforcing mode can ship.

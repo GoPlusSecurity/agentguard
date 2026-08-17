@@ -52,10 +52,18 @@ export interface DshToolExecutionResult {
   readonly meta?: unknown;
 }
 
-export interface DshPostToolDecision {
-  kind: 'accept' | 'block';
-  [key: string]: unknown;
+export interface DshContentBlock {
+  readonly type: string;
+  readonly [key: string]: unknown;
 }
+
+export type DshPostToolDecision = {
+  kind: 'accept';
+  content?: ReadonlyArray<DshContentBlock>;
+} | {
+  kind: 'block';
+  feedback: ReadonlyArray<DshContentBlock>;
+};
 
 export type DshPostExecuteNext = () => Promise<DshPostToolDecision>;
 
