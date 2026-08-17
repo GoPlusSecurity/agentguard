@@ -85,4 +85,4 @@ An enforcing mode must not be enabled until tests prove all of the following:
 
 The shadow mapping satisfies the deterministic-translation design requirement, but it does not satisfy the native approval, cancellation, headless, or post-result-resume gates by itself.
 
-The protocol contract test now proves that a translated `ask` reaches DSH's native tool pipeline and fails closed before tool dispatch when no approval service is composed. Interactive `allowed-once`, explicit rejection, cancellation during an open turn, and post-result resume remain required before an enforcing mode can ship.
+The native approval matrix now proves that a translated `ask` reaches DSH's real `ToolRuntime`, `ApprovalService`, and open `Session` turn. It verifies that only `allowed-once` dispatches the tool; explicit rejection, cancellation, an unavailable answerer, headless `never`, a missing approval service, and an agent-less call all fail closed. Composed-service outcomes produce exactly one paired `approval/asked` + `approval/decided` audit record, and `never` does not invoke an interactive answerer. Post-result approval/resume remains required before an enforcing mode can ship.
