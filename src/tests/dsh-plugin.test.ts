@@ -57,6 +57,8 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.equal(result.total, 1);
     assert.equal(result.decisions.block, 1);
     assert.deepEqual(result.phases, { pre: 1 });
+    assert.deepEqual(result.runtimeModes, { observe: 1 });
+    assert.equal(result.enforcementApplied, 0);
     assert.deepEqual(result.shadowDispositions, { 'deny-execution': 1 });
     assert.equal(result.enforcementGated, 0);
     assert.deepEqual(result.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
@@ -64,7 +66,7 @@ describe('AgentGuard DSH runtime plugin', () => {
     await assert.rejects(() => tool.execute({ limit: 0 }), /between 1 and 1000/);
   });
 
-  it('registers the Phase 2A observer by default and allows disabling it', () => {
+  it('registers runtime lifecycle modes and validates configuration', () => {
     const events: string[] = [];
     const context = {
       tools: { register() {} },
@@ -76,6 +78,17 @@ describe('AgentGuard DSH runtime plugin', () => {
     events.length = 0;
     apply(context, { runtime: { mode: 'off' } });
     assert.deepEqual(events, []);
+
+    apply(context, { runtime: { mode: 'protect' } });
+    assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
+    assert.throws(
+      () => apply(context, { runtime: { mode: 'invalid' as 'observe' } }),
+      /unsupported AgentGuard DSH runtime mode/
+    );
+    assert.throws(
+      () => apply(context, { runtime: { failureMode: 'invalid' as 'deny' } }),
+      /unsupported AgentGuard DSH runtime failure mode/
+    );
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {

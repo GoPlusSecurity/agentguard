@@ -66,6 +66,7 @@ try {
     'package/dist/reports/dsh-report.js',
     'package/docs/dsh.md',
     'package/docs/dsh-runtime.md',
+    'package/docs/dsh-complete-candidate.md',
   ];
   for (const path of required) assert.ok(archiveFiles.has(path), `tarball is missing ${path}`);
   assert.ok(![...archiveFiles].some(path => path.startsWith('package/dist/tests/')), 'tarball contains compiled tests');

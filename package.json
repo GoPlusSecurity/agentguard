@@ -29,6 +29,7 @@
     "test": "node --test dist/tests/*.test.js",
     "test:dsh-e2e": "node scripts/test-dsh-plugin-e2e.mjs",
     "test:dsh-approval": "node scripts/test-dsh-native-approval.mjs",
+    "test:dsh-protect": "node scripts/test-dsh-runtime-protect.mjs",
     "test:dsh-post-enforcement": "node scripts/test-dsh-post-enforcement.mjs",
     "test:dsh-lifecycle": "node scripts/test-dsh-plugin-lifecycle.mjs",
     "test:dsh-package": "node scripts/test-dsh-package.mjs",

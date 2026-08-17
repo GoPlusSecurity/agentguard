@@ -33,7 +33,7 @@ function event(overrides: Record<string, unknown> = {}): Record<string, unknown>
 }
 
 describe('DSH runtime audit summary', () => {
-  it('aggregates only observed DSH events and omits raw inputs', async () => {
+  it('aggregates supported DSH runtime modes and omits raw inputs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentguard-dsh-summary-'));
     roots.push(root);
     const auditPath = join(root, 'audit.jsonl');
@@ -50,24 +50,38 @@ describe('DSH runtime audit summary', () => {
           shadowDisposition: 'accept-result', enforcementGates: [],
         },
       }),
+      event({
+        actionId: 'action-3',
+        actionType: 'file_write',
+        decision: 'block',
+        riskLevel: 'critical',
+        metadata: {
+          runtimeMode: 'protect', runtimePhase: 'pre', nested: false,
+          shadowDisposition: 'deny-execution', enforcementApplied: true, enforcementGates: [],
+        },
+      }),
       event({ actionId: 'other-host', agentHost: 'codex' }),
       event({ actionId: 'not-observe', metadata: { runtimeMode: 'enforce' } }),
     ];
     await writeFile(auditPath, `${lines.map(value => JSON.stringify(value)).join('\n')}\nnot-json\n`, 'utf8');
 
     const summary = summarizeDshRuntimeAudit(auditPath);
-    assert.equal(summary.total, 2);
-    assert.equal(summary.inspected, 2);
+    assert.equal(summary.total, 3);
+    assert.equal(summary.inspected, 3);
     assert.equal(summary.malformedLines, 1);
     assert.equal(summary.nestedCalls, 1);
-    assert.deepEqual(summary.decisions, { require_approval: 1, allow: 1 });
-    assert.deepEqual(summary.actionTypes, { shell: 1, file_read: 1 });
-    assert.deepEqual(summary.riskLevels, { high: 1, safe: 1 });
-    assert.deepEqual(summary.phases, { pre: 1, post: 1 });
-    assert.deepEqual(summary.shadowDispositions, { 'request-approval': 1, 'accept-result': 1 });
+    assert.deepEqual(summary.decisions, { require_approval: 1, allow: 1, block: 1 });
+    assert.deepEqual(summary.actionTypes, { shell: 1, file_read: 1, file_write: 1 });
+    assert.deepEqual(summary.riskLevels, { high: 1, safe: 1, critical: 1 });
+    assert.deepEqual(summary.phases, { pre: 2, post: 1 });
+    assert.deepEqual(summary.runtimeModes, { observe: 2, protect: 1 });
+    assert.equal(summary.enforcementApplied, 1);
+    assert.deepEqual(summary.shadowDispositions, {
+      'request-approval': 1, 'accept-result': 1, 'deny-execution': 1,
+    });
     assert.equal(summary.enforcementGated, 1);
-    assert.deepEqual(summary.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
-    assert.equal(summary.latestActionId, 'action-2');
+    assert.deepEqual(summary.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 2 }]);
+    assert.equal(summary.latestActionId, 'action-3');
     assert.doesNotMatch(JSON.stringify(summary), /sensitive raw command/);
   });
 

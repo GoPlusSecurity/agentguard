@@ -2,7 +2,7 @@
 
 AgentGuard for DeepSeek Harness (DSH) is an installation-time trust layer for the DSH plugin ecosystem. It identifies DSH bundles, profiles, client extensions, and Cordis configuration, then combines that context with AgentGuard's existing static rules to produce an explainable security report.
 
-The Phase 1 scanner is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH. Runtime Phase 2A separately observes tools executed by the host after AgentGuard is installed; it does not execute scanned targets or enforce its decisions.
+The Phase 1 scanner is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH. The separate runtime integration can observe DSH tool calls or, when explicitly configured as `protect`, enforce pre-execute policy through DSH's native approval protocol.
 
 ## Install in DSH
 
@@ -20,7 +20,7 @@ dsh plugin --profile web add link:/absolute/path/to/agentguard
 
 Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, and `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
-The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local Phase 2A audit events and never returns raw tool input. The installed bundle also enables the separate Phase 2A runtime observer described in [DSH runtime observation](dsh-runtime.md).
+The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `observe` by default; [DSH runtime guard](dsh-runtime.md) documents explicit `protect` configuration.
 
 ### Operate the DSH installation
 
@@ -44,7 +44,7 @@ Verification checklist:
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
 2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
-4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`, `runtimeMode: "observe"`, and `enforcementApplied: false` after non-AgentGuard tools run.
+4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`. The default composition records `runtimeMode: "observe"`; an explicit protected composition records pre-execute events with `runtimeMode: "protect"` and `enforcementApplied: true`.
 5. After removal and restart, the AgentGuard composition row, tools, and runtime listener are absent.
 
 If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web process is not listening; it is not evidence of a scanner failure. Start or restart DSH and inspect its terminal output. If the tool is missing while DSH is running, check the explicit profile with `--dump-config`, then confirm the package appears in that profile's dependencies.
@@ -57,15 +57,15 @@ If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web proces
 | Scan local directories and HTTPS GitHub repositories | Phase 1 | GitHub scans pin the resolved default-branch commit. |
 | Explain capabilities, findings, and installation posture | Phase 1 | Results remain advisory and require human review. |
 | Install or execute the scanned plugin | No | The scanner never invokes a package manager or target lifecycle script. |
-| Observe commands and tool calls executed by DSH | Phase 2A | Uses native `tools/pre-execute`; root and nested calls share the same path. |
-| Evaluate through AgentGuard runtime policy | Phase 2A | Reuses the shared policy resolver and OSS action evaluator. |
-| Preserve workspace and request context | Phase 2A | Uses the DSH session cwd plus shell workdir and network method/header/body fields supported by the shared evaluator. |
-| Observe network responses | Phase 2A | Uses native `tools/post-execute`; status, content type, headers, bounded text preview, and explicit byte counts feed shared anomaly detection without changing results. |
-| Summarize recent runtime decisions | Phase 2A | Bounded local aggregation; raw tool input and reason evidence are omitted. |
-| Apply allow, warn, approve, or block decisions inside DSH | No | Phase 2A records the evaluated decision but always preserves the downstream DSH decision. |
+| Observe commands and tool calls executed by DSH | Runtime | Uses native `tools/pre-execute`; root and nested calls share the same path. |
+| Evaluate through AgentGuard runtime policy | Runtime | Reuses the shared policy resolver and OSS action evaluator. |
+| Preserve workspace and request context | Runtime | Uses the DSH session cwd plus shell workdir and network method/header/body fields supported by the shared evaluator. |
+| Observe network responses | Runtime | Uses native `tools/post-execute`; status, content type, headers, bounded text preview, and explicit byte counts feed shared anomaly detection without changing results. |
+| Summarize recent runtime decisions | Runtime | Bounded local aggregation; raw tool input and reason evidence are omitted. |
+| Apply allow, warn, approve, or block decisions inside DSH | Opt-in `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; post-response decisions remain audit-only. |
 | Attribute a call to its source plugin | No | Recorded as `unknown`; AgentGuard does not infer ownership from a tool name. |
 
-AgentGuard's enforcing protection for other supported hosts must not be interpreted as active DSH enforcement. Installing this bundle adds the scanner tools and an audit-only observer.
+Installing the bundle is non-disruptive because its packaged composition uses `observe`. Changing the runtime row to `protect` is the explicit opt-in for real-time pre-execute enforcement.
 
 ## Why this exists
 
@@ -96,7 +96,7 @@ Phase 1 does not include:
 - Installing a plugin or resolving its lifecycle scripts.
 - Fetching a package by npm name or comparing an npm tarball with its source repository.
 - Resolving every layer of an already-installed DSH profile into one effective runtime tree.
-- Enforcing runtime allow, warn, approve, or block decisions. Phase 2A observation is documented separately.
+- Automatically enabling runtime enforcement when the scanner is installed. Runtime protection is an explicit composition choice documented separately.
 - Persisting scan history or integrating with a DSH marketplace.
 
 ## Command line
@@ -457,9 +457,12 @@ When a local DSH runtime and profile are installed, run the opt-in integration t
 
 ```bash
 npm run test:dsh-e2e
+npm run test:dsh-protect
+npm run test:dsh-approval
+npm run test:dsh-post-enforcement
 ```
 
-The integration test verifies that the profile composes the AgentGuard bundle, boots the real DSH Web runtime on a temporary loopback port, and executes `agentguard_dsh_scan` from the installed profile. Override discovery paths with `DSH_E2E_BIN` and `DSH_E2E_HOME` when needed.
+The integration tests verify profile composition and Web startup, real pre-execute protection, DSH native approval outcomes, nested calls, unload behavior, and the explicitly unregistered post-result containment adapter. Override discovery paths with `DSH_E2E_BIN` and `DSH_E2E_HOME` when needed.
 
 Before publishing an npm release, validate the exact package artifact:
 
@@ -497,19 +500,19 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - Repository scanning does not prove that an npm package with the same name contains the same files.
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
-- Runtime enforcement and source-plugin attribution are deferred to Phase 2.
+- Runtime source-plugin attribution remains unavailable because DSH does not provide a stable ownership field on lifecycle events.
 - Runtime path relevance is a heuristic. It does not yet resolve package-manager `files`, ignore rules, exports, lifecycle reachability, third-party provenance, or every Cordis composition edge.
 - Phase 1.3 uses a bounded source region for compound auto-update evidence rather than a full language parser or data-flow graph. Unusually large updater functions can therefore still require manual review.
 - Prompt-delivery detection recognizes common DSH and model APIs but cannot prove that every string reaches a model, or that every active instruction artifact is enabled by the final profile.
 - npm tarball acquisition and source-to-published-artifact comparison remain future supply-chain work; a GitHub repository scan must not be presented as proof of what an npm package contains.
 
-## Phase 2 direction
+## Runtime follow-up direction
 
-Phase 2 can build on the report contract to add runtime attribution and policy enforcement:
+The completed pre-execute guard can build on the report contract to add identity-aware policy:
 
 - Attribute a runtime action to the DSH package or Cordis row that initiated it.
 - Compare observed behavior with the installation-time capability profile.
-- Apply allow, warn, approve, or block decisions per plugin and capability.
+- Apply the existing allow, warn, approve, or block decisions per attributed plugin and capability.
 - Detect profile composition changes and require re-approval when the effective artifact hash changes.
 
-Those controls are not implied by the Phase 1 command. Phase 1 remains a static, installation-time decision aid.
+Those identity-aware controls are not implied by the Phase 1 command. Phase 1 remains a static, installation-time decision aid, while current runtime `protect` policy is tool/action based.

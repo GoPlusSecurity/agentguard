@@ -31,6 +31,8 @@ export interface DshRuntimeSummary {
   actionTypes: Partial<Record<RuntimeActionType, number>>;
   riskLevels: Partial<Record<RuntimeRiskLevel, number>>;
   phases: Partial<Record<'pre' | 'post' | 'unknown', number>>;
+  runtimeModes: Partial<Record<'observe' | 'protect', number>>;
+  enforcementApplied: number;
   shadowDispositions: Partial<Record<DshShadowDisposition | 'unknown', number>>;
   enforcementGated: number;
   topReasons: DshRuntimeReasonCount[];
@@ -57,7 +59,7 @@ export function summarizeDshRuntimeAudit(
     try {
       const event = JSON.parse(line) as RuntimeAuditEvent;
       if (event.agentHost !== 'dsh') continue;
-      if (event.metadata?.runtimeMode !== 'observe') continue;
+      if (event.metadata?.runtimeMode !== 'observe' && event.metadata?.runtimeMode !== 'protect') continue;
       if (sessionId && event.sessionId !== sessionId) continue;
       parsed.push(event);
     } catch {
@@ -70,10 +72,12 @@ export function summarizeDshRuntimeAudit(
   const actionTypes: DshRuntimeSummary['actionTypes'] = {};
   const riskLevels: DshRuntimeSummary['riskLevels'] = {};
   const phases: DshRuntimeSummary['phases'] = {};
+  const runtimeModes: DshRuntimeSummary['runtimeModes'] = {};
   const shadowDispositions: DshRuntimeSummary['shadowDispositions'] = {};
   const reasons = new Map<string, number>();
   let nestedCalls = 0;
   let enforcementGated = 0;
+  let enforcementApplied = 0;
 
   for (const event of events) {
     increment(decisions, event.decision);
@@ -83,6 +87,9 @@ export function summarizeDshRuntimeAudit(
       ? event.metadata.runtimePhase
       : 'unknown';
     increment(phases, phase);
+    const runtimeMode = event.metadata?.runtimeMode === 'protect' ? 'protect' : 'observe';
+    increment(runtimeModes, runtimeMode);
+    if (event.metadata?.enforcementApplied === true) enforcementApplied++;
     const shadowDisposition = normalizeShadowDisposition(event.metadata?.shadowDisposition);
     increment(shadowDispositions, shadowDisposition);
     if (Array.isArray(event.metadata?.enforcementGates) && event.metadata.enforcementGates.length > 0) {
@@ -107,6 +114,8 @@ export function summarizeDshRuntimeAudit(
     actionTypes,
     riskLevels,
     phases,
+    runtimeModes,
+    enforcementApplied,
     shadowDispositions,
     enforcementGated,
     topReasons: [...reasons.entries()]

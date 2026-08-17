@@ -5,10 +5,12 @@ import {
   buildDshRuntimeAction,
   createDshPostExecuteObserver,
   createDshPreExecuteObserver,
+  createDshPreExecuteProtector,
   isAgentGuardDshTool,
   mapDshToolToRuntimeAction,
   observeDshToolCall,
   observeDshToolResult,
+  protectDshToolCall,
   type DshToolExecution,
 } from '../dsh/runtime.js';
 import type { RuntimeDecision } from '../runtime/types.js';
@@ -285,5 +287,109 @@ describe('DSH runtime Phase 2A observer', () => {
     });
     assert.equal(observed, null);
     assert.equal(evaluated, false);
+  });
+});
+
+describe('DSH runtime protect mode', () => {
+  it('applies all shared pre-execute decisions through the native DSH contract', async () => {
+    for (const [policy, expectedKind] of [
+      ['allow', 'allow'],
+      ['warn', 'allow'],
+      ['require_approval', 'ask'],
+      ['block', 'deny'],
+    ] as const) {
+      const protector = createDshPreExecuteProtector({
+        loadAgentGuardConfig: () => config,
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => ({ decision: decision(policy), policySource: 'default' }),
+        writeAudit() {},
+      });
+      const result = await protector(execution(), async () => ({ kind: 'allow' }));
+      assert.equal(result.kind, expectedKind, policy);
+    }
+  });
+
+  it('records protect mode and a bounded applied hook decision', async () => {
+    const observed = await protectDshToolCall(execution(), {
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      evaluate: async () => ({ decision: decision('require_approval'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    assert.ok(observed);
+    assert.equal(observed.event.metadata?.runtimeMode, 'protect');
+    assert.equal(observed.event.metadata?.enforcementApplied, true);
+    assert.equal(observed.event.metadata?.hookDecisionApplied, 'ask');
+    assert.deepEqual(observed.event.metadata?.enforcementGates, []);
+  });
+
+  it('preserves stronger downstream policies', async () => {
+    const protector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('require_approval'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    const downstream = { kind: 'deny' as const, reason: 'downstream policy' };
+    assert.deepEqual(await protector(execution(), async () => downstream), downstream);
+  });
+
+  it('fails closed by default and supports an explicit fail-open compatibility option', async () => {
+    const errors: unknown[] = [];
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => { throw new Error('unexpected evaluator failure'); },
+      onError: (error: unknown) => errors.push(error),
+    };
+    const downstream = { kind: 'allow' as const };
+    const closed = await createDshPreExecuteProtector(dependencies)(execution(), async () => downstream);
+    assert.equal(closed.kind, 'deny');
+    assert.doesNotMatch(closed.reason ?? '', /unexpected evaluator failure/);
+
+    const open = await createDshPreExecuteProtector(dependencies, 'allow')(execution(), async () => downstream);
+    assert.deepEqual(open, downstream);
+    assert.equal(errors.length, 2);
+  });
+
+  it('does not recursively protect AgentGuard tools', async () => {
+    let evaluated = false;
+    const protector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => {
+        evaluated = true;
+        return { decision: decision('block'), policySource: 'default' };
+      },
+    });
+    const downstream = { kind: 'allow' as const };
+    assert.deepEqual(
+      await protector(execution({ name: 'agentguard_dsh_runtime_summary' }), async () => downstream),
+      downstream
+    );
+    assert.equal(evaluated, false);
+  });
+
+  it('keeps post-execute response handling audit-only in protect mode', async () => {
+    const observer = createDshPostExecuteObserver({
+      runtimeMode: 'protect',
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    const downstream = { kind: 'accept' as const };
+    assert.deepEqual(await observer(execution({
+      name: 'http_request',
+      arguments: { url: 'https://example.com' },
+    }), { isError: false, value: { body: 'ok' } }, async () => downstream), downstream);
+
+    const observed = await observeDshToolResult(execution({
+      name: 'http_request',
+      arguments: { url: 'https://example.com' },
+    }), { isError: false, value: { body: 'ok' } }, {
+      runtimeMode: 'protect',
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    assert.equal(observed?.event.metadata?.runtimeMode, 'protect');
+    assert.equal(observed?.event.metadata?.enforcementApplied, false);
   });
 });

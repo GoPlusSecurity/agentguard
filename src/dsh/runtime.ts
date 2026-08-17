@@ -8,12 +8,21 @@ import {
 } from '../runtime/decision.js';
 import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent } from '../runtime/types.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
+import {
+  mergeDshPreDecisions,
+  translateDshPreDecision,
+} from './enforcement-adapter.js';
 
 export const DSH_RUNTIME_MODE = 'observe' as const;
+export const DSH_PROTECT_MODE = 'protect' as const;
+export type DshRuntimeMode = 'off' | typeof DSH_RUNTIME_MODE | typeof DSH_PROTECT_MODE;
+export type DshRuntimeFailureMode = 'allow' | 'deny';
 
 export interface DshRuntimeConfig {
-  /** Phase 2A supports observation only. `off` disables the lifecycle listener. */
-  mode?: 'off' | 'observe';
+  /** `protect` enforces pre-execute policy; post-execute remains observation-only. */
+  mode?: DshRuntimeMode;
+  /** Unexpected evaluator failures fail closed by default in protect mode. */
+  failureMode?: DshRuntimeFailureMode;
 }
 
 export interface DshToolExecution {
@@ -73,6 +82,7 @@ export interface DshRuntimeDependencies {
   writeAudit?: typeof writeAuditLog;
   fetchPolicyFor?: (config: AgentGuardConfig) => (() => Promise<import('../runtime/types.js').EffectiveRuntimePolicy | null>) | undefined;
   onError?: (error: unknown, exec: DshToolExecution) => void;
+  runtimeMode?: Exclude<DshRuntimeMode, 'off'>;
 }
 
 export interface DshRuntimeObservation {
@@ -150,7 +160,25 @@ export async function observeDshToolCall(
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   const action = buildDshRuntimeAction(exec);
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
-  return evaluateAndAuditDshAction(action, config, dependencies);
+  return evaluateAndAuditDshAction(
+    action,
+    config,
+    dependencies,
+    dependencies.runtimeMode ?? DSH_RUNTIME_MODE,
+    false
+  );
+}
+
+export async function protectDshToolCall(
+  exec: DshToolExecution,
+  dependencies: DshRuntimeDependencies = {}
+): Promise<DshRuntimeObservation | null> {
+  if (isAgentGuardDshTool(exec.name)) return null;
+
+  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
+  const action = buildDshRuntimeAction(exec);
+  action.metadata = { ...action.metadata, runtimePhase: 'pre' };
+  return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, true);
 }
 
 export async function observeDshToolResult(
@@ -169,13 +197,21 @@ export async function observeDshToolResult(
     ...responseMetadata(result),
   };
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  return evaluateAndAuditDshAction(action, config, dependencies);
+  return evaluateAndAuditDshAction(
+    action,
+    config,
+    dependencies,
+    dependencies.runtimeMode ?? DSH_RUNTIME_MODE,
+    false
+  );
 }
 
 async function evaluateAndAuditDshAction(
   action: RuntimeAction,
   config: AgentGuardConfig,
-  dependencies: DshRuntimeDependencies
+  dependencies: DshRuntimeDependencies,
+  runtimeMode: Exclude<DshRuntimeMode, 'off'>,
+  enforcementApplied: boolean
 ): Promise<DshRuntimeObservation> {
   const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
   const evaluation = await evaluate({
@@ -187,6 +223,9 @@ async function evaluateAndAuditDshAction(
   });
   const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
   const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
+  const remainingGates = runtimeMode === DSH_PROTECT_MODE && phase === 'pre'
+    ? []
+    : shadowPlan.enforcementGates;
   const event: RuntimeAuditEvent = {
     ...action,
     actionId: evaluation.decision.actionId,
@@ -199,11 +238,12 @@ async function evaluateAndAuditDshAction(
       ...action.metadata,
       evaluation: 'local-oss',
       policySource: evaluation.policySource,
-      runtimeMode: DSH_RUNTIME_MODE,
-      enforcementApplied: false,
+      runtimeMode,
+      enforcementApplied,
+      ...(enforcementApplied ? { hookDecisionApplied: shadowPlan.hookDecision } : {}),
       shadowHookDecision: shadowPlan.hookDecision,
       shadowDisposition: shadowPlan.disposition,
-      enforcementGates: shadowPlan.enforcementGates,
+      enforcementGates: remainingGates,
     },
   };
 
@@ -226,6 +266,32 @@ export function createDshPreExecuteObserver(
     }
     // Phase 2A never translates the evaluated decision into enforcement.
     return next();
+  };
+}
+
+export function createDshPreExecuteProtector(
+  dependencies: DshRuntimeDependencies = {},
+  failureMode: DshRuntimeFailureMode = 'deny'
+): (exec: DshToolExecution, next: DshPreExecuteNext) => Promise<DshPreToolDecision> {
+  return async (exec, next) => {
+    if (isAgentGuardDshTool(exec.name)) return next();
+
+    let agentguardDecision: DshPreToolDecision;
+    try {
+      const protectedCall = await protectDshToolCall(exec, dependencies);
+      if (!protectedCall) return next();
+      agentguardDecision = translateDshPreDecision(protectedCall.evaluation.decision);
+    } catch (error) {
+      dependencies.onError?.(error, exec);
+      if (failureMode === 'allow') return next();
+      agentguardDecision = {
+        kind: 'deny',
+        reason: 'AgentGuard denied this tool call because runtime policy evaluation failed.',
+      };
+    }
+
+    const downstream = await next();
+    return mergeDshPreDecisions(agentguardDecision, downstream);
   };
 }
 
