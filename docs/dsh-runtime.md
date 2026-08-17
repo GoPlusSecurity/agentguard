@@ -33,6 +33,8 @@ AgentGuard also exports a protocol adapter for pre/post decision translation and
 
 The reason passed into DSH contains only bounded policy metadata and up to five reason codes. Raw tool input, detector descriptions, and evidence are excluded. Composition helpers preserve a downstream `deny`, `ask`, or post-result `block`, so another DSH policy cannot be weakened.
 
+Policy version, risk level, and reason-code labels are normalized to bounded single-line tokens before entering DSH feedback. A malformed score falls back conservatively to 100. This prevents Cloud-controlled labels or corrupted audit data from turning a security explanation into a prompt/control-text carrier.
+
 AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-observation. Evaluation or audit failures are fail-open in Phase 2A and cannot change DSH behavior.
 
 ## Runtime summary tool
@@ -86,3 +88,12 @@ An enforcing mode must not be enabled until tests prove all of the following:
 The shadow mapping satisfies the deterministic-translation design requirement, but it does not satisfy the native approval, cancellation, headless, or post-result-resume gates by itself.
 
 The native approval matrix now proves that a translated `ask` reaches DSH's real `ToolRuntime`, `ApprovalService`, and open `Session` turn. It verifies that only `allowed-once` dispatches the tool; explicit rejection, cancellation, an unavailable answerer, headless `never`, a missing approval service, and an agent-less call all fail closed. Composed-service outcomes produce exactly one paired `approval/asked` + `approval/decided` audit record, and `never` does not invoke an interactive answerer. Post-result approval/resume remains required before an enforcing mode can ship.
+
+The native post-execute matrix proves the following against the real `ToolRuntime`:
+
+- `allow` and `warn` accept the original successful result.
+- `require_approval` and `block` produce a DSH error result with bounded AgentGuard feedback; the original value, rendered content, detector description, and evidence are absent.
+- A downstream plugin's `block` is preserved, while an AgentGuard block cannot be weakened by a downstream `accept`.
+- A throwing post-policy listener is contained as an error and does not expose the original result.
+
+DSH's post decision vocabulary contains only `accept` and `block`; it has no native `ask` or resumable held-result carrier. Therefore approval-class response anomalies can be safely contained, but cannot yet be resumed after human approval. The adapter remains unregistered until that product behavior is explicitly designed and tested.

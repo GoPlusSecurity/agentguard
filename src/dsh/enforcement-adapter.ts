@@ -59,11 +59,21 @@ export function mergeDshPostDecisions(
 export function formatDshPolicyReason(decision: RuntimeDecision): string {
   const codes = [...new Set(
     decision.reasons
-      .map(item => item.code)
-      .filter(code => typeof code === 'string' && code.length > 0)
+      .map(item => safePolicyToken(item.code, 64))
+      .filter(code => code.length > 0)
   )].slice(0, MAX_REASON_CODES);
   const action = decision.decision === 'block' ? 'blocked' : 'requires approval';
   const suffix = codes.length > 0 ? ` Reasons: ${codes.join(', ')}.` : '';
-  return `AgentGuard ${action} this tool call (risk ${decision.riskScore}/100, ${decision.riskLevel}; policy ${decision.policyVersion}).${suffix}`
+  const riskScore = Number.isFinite(decision.riskScore)
+    ? Math.max(0, Math.min(100, Math.round(decision.riskScore)))
+    : 100;
+  const riskLevel = safePolicyToken(decision.riskLevel, 16) || 'unknown';
+  const policyVersion = safePolicyToken(decision.policyVersion, 64) || 'unknown';
+  return `AgentGuard ${action} this tool call (risk ${riskScore}/100, ${riskLevel}; policy ${policyVersion}).${suffix}`
     .slice(0, MAX_REASON_LENGTH);
+}
+
+function safePolicyToken(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[^A-Za-z0-9._:-]+/g, '_').slice(0, maxLength);
 }

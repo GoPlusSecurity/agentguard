@@ -165,6 +165,8 @@ Update or remove it from the same profile with `dsh plugin --profile web update 
 
 The exported DSH enforcement protocol adapter is test-only infrastructure at this phase: it maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, and preserves stronger downstream policies. The packaged composition does not register it and accepts no enforcing mode.
 
+Native contract gates cover the full pre-execute approval outcome matrix and post-execute result containment. Dangerous post responses can be suppressed without retaining their original value, but DSH currently exposes no native post-approval resume primitive, so the enforcing adapter remains disabled.
+
 The shared runtime detector treats unpinned Git sources executed through `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, or `bunx` as high-risk remote code execution. Full commit pins reduce this to a warning rather than making remote code implicitly trusted.
 
 Phase 1.1 keeps the conservative full-repository risk while adding a separate runtime-surface risk, evidence source categories, likely-generated markers, and a human-review priority. Tests, examples, docs, and data findings remain visible instead of being silently discarded.
