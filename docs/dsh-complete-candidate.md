@@ -33,6 +33,8 @@ DSH profile patches replace the row's entire `config`, so both runtime fields ar
 
 ## Acceptance commands
 
+For guided in-product acceptance, give DSH the Chinese [user acceptance test](dsh-user-acceptance-test.zh-CN.md). It uses shell short-circuit probes so dangerous branches remain inert even if protection is unavailable.
+
 ```bash
 npm run build
 npm test
