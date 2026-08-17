@@ -14,6 +14,7 @@ import {
 import type { RuntimeDecision } from '../runtime/types.js';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
+import { dshRuntimeResponseFixtures } from './fixtures/dsh-runtime-response-fixtures.js';
 
 const config: AgentGuardConfig = {
   version: 1,
@@ -147,10 +148,48 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(observed.event.decision, 'block');
     assert.equal(observed.event.metadata?.runtimeMode, 'observe');
     assert.equal(observed.event.metadata?.enforcementApplied, false);
+    assert.equal(observed.event.metadata?.shadowHookDecision, 'deny');
+    assert.equal(observed.event.metadata?.shadowDisposition, 'deny-execution');
+    assert.deepEqual(observed.event.metadata?.enforcementGates, []);
     assert.equal(observed.event.metadata?.runtimePhase, 'pre');
     assert.equal(observed.event.metadata?.sourceAttribution, 'unknown');
     assert.equal(written.length, 1);
     assert.equal(written[0].path, config.auditPath);
+  });
+
+  it('keeps response anomaly semantics stable across the DSH fixture corpus', async () => {
+    const responseCodes = new Set([
+      'RESPONSE_XSS_ECHO', 'RESPONSE_ERROR_DISCLOSURE', 'RESPONSE_MALICIOUS_SCRIPT',
+      'RESPONSE_PATH_TRAVERSAL', 'RESPONSE_CONTENT_TYPE_MISMATCH', 'RESPONSE_CREDENTIAL_ECHO',
+    ]);
+    for (const [index, fixture] of dshRuntimeResponseFixtures.entries()) {
+      const observed = await observeDshToolResult(execution({
+        callId: `fixture-${index}`,
+        name: 'http_request',
+        arguments: {
+          url: fixture.url,
+          method: 'GET',
+          ...(fixture.requestHeaders ? { headers: fixture.requestHeaders } : {}),
+        },
+      }), {
+        isError: false,
+        value: { status: 200, contentType: fixture.contentType, body: fixture.body },
+        content: [],
+      }, {
+        loadAgentGuardConfig: () => config,
+        fetchPolicyFor: () => undefined,
+        writeAudit() {},
+      });
+
+      assert.ok(observed, fixture.name);
+      assert.deepEqual(
+        observed.event.reasons.map(item => item.code).filter(code => responseCodes.has(code)).sort(),
+        [...fixture.expectedResponseReasons].sort(),
+        fixture.name
+      );
+      assert.equal(observed.event.metadata?.enforcementApplied, false, fixture.name);
+      assert.equal(typeof observed.event.metadata?.shadowDisposition, 'string', fixture.name);
+    }
   });
 
   it('evaluates DSH network response anomalies through the shared policy', async () => {

@@ -46,7 +46,10 @@ describe('AgentGuard DSH runtime plugin', () => {
       actionId: 'action-1', sessionId: 'dsh:root-1', agentHost: 'dsh', actionType: 'shell',
       toolName: 'bash', input: 'TOP_SECRET_VALUE', decision: 'block', riskScore: 95,
       riskLevel: 'critical', reasons: [{ code: 'REMOTE_CODE_EXECUTION' }], policyVersion: 'test',
-      metadata: { runtimeMode: 'observe', runtimePhase: 'pre', nested: false },
+      metadata: {
+        runtimeMode: 'observe', runtimePhase: 'pre', nested: false,
+        shadowDisposition: 'deny-execution', enforcementGates: [],
+      },
     })}\n`, 'utf8');
 
     const tool = createAgentGuardDshRuntimeSummaryTool(() => auditPath);
@@ -54,6 +57,8 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.equal(result.total, 1);
     assert.equal(result.decisions.block, 1);
     assert.deepEqual(result.phases, { pre: 1 });
+    assert.deepEqual(result.shadowDispositions, { 'deny-execution': 1 });
+    assert.equal(result.enforcementGated, 0);
     assert.deepEqual(result.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
     assert.doesNotMatch(JSON.stringify(result), /TOP_SECRET_VALUE/);
     await assert.rejects(() => tool.execute({ limit: 0 }), /between 1 and 1000/);

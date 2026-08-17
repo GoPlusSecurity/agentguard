@@ -12,8 +12,22 @@ The shipped mode is `observe`:
 4. AgentGuard records the policy decision, risk score, reasons, call tree metadata, and `sourceAttribution: "unknown"` in `~/.agentguard/audit.jsonl`.
 5. The listener calls the next DSH policy unchanged. AgentGuard never returns its evaluated `deny` or `ask` in Phase 2A.
 6. Network-tool results pass through a second audit-only observation. AgentGuard extracts a bounded response preview plus available status, content type, headers, and byte count, then evaluates response and network-volume anomalies without replacing or blocking the DSH result.
+7. Each audit event includes a deterministic shadow enforcement plan. It records the DSH-native hook decision and disposition that the current AgentGuard policy would select, plus any integration gates that remain. This metadata is explanatory only and is never returned by the lifecycle listener.
 
-This means an audit event may contain `decision: "block"` while the action executed. The fields `runtimeMode: "observe"` and `enforcementApplied: false` make that distinction explicit. `runtimePhase` distinguishes `pre` request observations from `post` response observations.
+This means an audit event may contain `decision: "block"` and `shadowHookDecision: "deny"` while the action executed. The fields `runtimeMode: "observe"` and `enforcementApplied: false` make that distinction explicit. `runtimePhase` distinguishes `pre` request observations from `post` response observations.
+
+## Shadow enforcement mapping
+
+The mapping is deliberately pure and deterministic so it can be tested before any mutation is enabled:
+
+| AgentGuard decision | Pre-execute plan | Post-execute plan |
+|---|---|---|
+| `allow` | `allow` / proceed | `accept` / accept result |
+| `warn` | `allow` / proceed with warning | `accept` / accept result with warning |
+| `require_approval` | `ask` / request native approval | `block` / hold result for native approval |
+| `block` | `deny` / deny execution | `block` / suppress result |
+
+Approval plans carry explicit gates for DSH native approval, headless behavior, and approved-result resume. Post-result blocking also remains gated on suppression validation. The observer only writes this plan to audit metadata; both lifecycle listeners still return the downstream DSH decision unchanged.
 
 AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-observation. Evaluation or audit failures are fail-open in Phase 2A and cannot change DSH behavior.
 
@@ -21,7 +35,7 @@ AgentGuard's own `agentguard_*` tools are excluded to prevent recursive self-obs
 
 The installed bundle registers `agentguard_dsh_runtime_summary`. It reads only the bounded final 1 MiB of the configured local audit log and aggregates up to 1,000 recent DSH observation events. An optional exact `sessionId` filter can isolate one DSH call tree.
 
-The result contains decision, action-type, risk-level, pre/post phase, reason-code, and nested-call counts. It deliberately omits raw tool inputs, reason evidence, and command or file contents so asking DSH for a summary does not feed captured secrets back into the model context. Malformed audit lines are counted and ignored. AgentGuard's `agentguard_*` exclusion also prevents the summary request from observing itself.
+The result contains decision, action-type, risk-level, pre/post phase, shadow-disposition, gated-enforcement, reason-code, and nested-call counts. It deliberately omits raw tool inputs, reason evidence, and command or file contents so asking DSH for a summary does not feed captured secrets back into the model context. Malformed audit lines are counted and ignored. AgentGuard's `agentguard_*` exclusion also prevents the summary request from observing itself.
 
 ## Configuration
 
@@ -53,6 +67,7 @@ Host behavior intentionally differs at the boundary:
 - DSH currently supplies no reliable source-plugin ownership field. AgentGuard records `unknown` rather than guessing, so plugin-specific trust and capability enforcement is not yet equivalent.
 - Post-response anomaly enforcement and native `ask`/`deny` translation are deferred to later phases; response anomalies are currently recorded only.
 - Pre/post network observations correlate by DSH call identity so one request is not counted twice by replay, rate, or volume behavior analysis.
+- A bounded response fixture corpus locks detection for ordinary JSON, executable markup, obfuscated script staging, binary/HTML mismatch, stack disclosure, local-file disclosure markers, and credential echo.
 
 ## Gate for enforcement
 
@@ -63,3 +78,5 @@ An enforcing mode must not be enabled until tests prove all of the following:
 - Root calls and `run_code` sub-dispatches are covered without duplicate prompts or audit events.
 - Cancellation, missing approval channels, headless policy, listener failure, and unload behavior are defined.
 - Missing source attribution remains explicit and cannot silently grant plugin-specific trust.
+
+The shadow mapping satisfies the deterministic-translation design requirement, but it does not satisfy the native approval, cancellation, headless, or post-result-resume gates by itself.

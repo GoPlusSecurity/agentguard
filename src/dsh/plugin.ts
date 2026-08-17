@@ -393,6 +393,8 @@ export function createAgentGuardDshRuntimeSummaryTool(
           actionTypes: { type: 'object' },
           riskLevels: { type: 'object' },
           phases: { type: 'object' },
+          shadowDispositions: { type: 'object' },
+          enforcementGated: { type: 'number' },
           topReasons: { type: 'array' },
           nestedCalls: { type: 'number' },
           latestActionId: { type: 'string' },
@@ -402,6 +404,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
         required: [
           'total', 'inspected', 'malformedLines', 'truncated', 'decisions',
           'actionTypes', 'riskLevels', 'phases', 'topReasons', 'nestedCalls', 'modelSummary',
+          'shadowDispositions', 'enforcementGated',
         ],
         additionalProperties: false,
       },
@@ -419,6 +422,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
           `AgentGuard summarized ${summary.total} recent DSH runtime observations.`,
           `${reviewCount} received warn, approval, or block decisions.`,
           `${summary.nestedCalls} were nested tool calls.`,
+          `${summary.enforcementGated} observations still have enforcement integration gates.`,
           'Only aggregate metadata is returned; raw tool inputs are omitted.',
         ].join(' '),
       };

@@ -103,6 +103,13 @@ export {
 } from './config.js';
 export { AgentGuardCloudClient } from './cloud/client.js';
 export { evaluateLocalAction } from './runtime/evaluator.js';
+export { planDshEnforcement } from './dsh/enforcement-plan.js';
+export type {
+  DshEnforcementPlan,
+  DshRuntimePhase,
+  DshShadowDisposition,
+  DshShadowHookDecision,
+} from './dsh/enforcement-plan.js';
 export {
   evaluateRuntimeAction,
   type EvaluateRuntimeActionOptions,

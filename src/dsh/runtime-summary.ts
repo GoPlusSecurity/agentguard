@@ -5,6 +5,7 @@ import type {
   RuntimeAuditEvent,
   RuntimeRiskLevel,
 } from '../runtime/types.js';
+import type { DshShadowDisposition } from './enforcement-plan.js';
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
@@ -30,6 +31,8 @@ export interface DshRuntimeSummary {
   actionTypes: Partial<Record<RuntimeActionType, number>>;
   riskLevels: Partial<Record<RuntimeRiskLevel, number>>;
   phases: Partial<Record<'pre' | 'post' | 'unknown', number>>;
+  shadowDispositions: Partial<Record<DshShadowDisposition | 'unknown', number>>;
+  enforcementGated: number;
   topReasons: DshRuntimeReasonCount[];
   nestedCalls: number;
   latestActionId?: string;
@@ -67,8 +70,10 @@ export function summarizeDshRuntimeAudit(
   const actionTypes: DshRuntimeSummary['actionTypes'] = {};
   const riskLevels: DshRuntimeSummary['riskLevels'] = {};
   const phases: DshRuntimeSummary['phases'] = {};
+  const shadowDispositions: DshRuntimeSummary['shadowDispositions'] = {};
   const reasons = new Map<string, number>();
   let nestedCalls = 0;
+  let enforcementGated = 0;
 
   for (const event of events) {
     increment(decisions, event.decision);
@@ -78,6 +83,11 @@ export function summarizeDshRuntimeAudit(
       ? event.metadata.runtimePhase
       : 'unknown';
     increment(phases, phase);
+    const shadowDisposition = normalizeShadowDisposition(event.metadata?.shadowDisposition);
+    increment(shadowDispositions, shadowDisposition);
+    if (Array.isArray(event.metadata?.enforcementGates) && event.metadata.enforcementGates.length > 0) {
+      enforcementGated++;
+    }
     if (event.metadata?.nested === true) nestedCalls++;
     for (const reason of event.reasons ?? []) {
       if (typeof reason.code === 'string' && reason.code) {
@@ -97,6 +107,8 @@ export function summarizeDshRuntimeAudit(
     actionTypes,
     riskLevels,
     phases,
+    shadowDispositions,
+    enforcementGated,
     topReasons: [...reasons.entries()]
       .sort(([leftCode, leftCount], [rightCode, rightCount]) => rightCount - leftCount || leftCode.localeCompare(rightCode))
       .slice(0, 10)
@@ -105,6 +117,17 @@ export function summarizeDshRuntimeAudit(
     ...(latest?.actionId ? { latestActionId: latest.actionId } : {}),
     ...(latest?.policyVersion ? { latestPolicyVersion: latest.policyVersion } : {}),
   };
+}
+
+const SHADOW_DISPOSITIONS = new Set<DshShadowDisposition>([
+  'proceed', 'proceed-with-warning', 'request-approval', 'deny-execution',
+  'accept-result', 'accept-result-with-warning', 'hold-result-for-approval', 'block-result',
+]);
+
+function normalizeShadowDisposition(value: unknown): DshShadowDisposition | 'unknown' {
+  return typeof value === 'string' && SHADOW_DISPOSITIONS.has(value as DshShadowDisposition)
+    ? value as DshShadowDisposition
+    : 'unknown';
 }
 
 function readBoundedTail(path: string): { lines: string[]; truncated: boolean } {

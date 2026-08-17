@@ -24,7 +24,10 @@ function event(overrides: Record<string, unknown> = {}): Record<string, unknown>
     riskLevel: 'high',
     reasons: [{ code: 'REMOTE_CODE_EXECUTION' }],
     policyVersion: 'test-policy',
-    metadata: { runtimeMode: 'observe', runtimePhase: 'pre', nested: false },
+    metadata: {
+      runtimeMode: 'observe', runtimePhase: 'pre', nested: false,
+      shadowDisposition: 'request-approval', enforcementGates: ['native-approval-service'],
+    },
     ...overrides,
   };
 }
@@ -42,7 +45,10 @@ describe('DSH runtime audit summary', () => {
         decision: 'allow',
         riskLevel: 'safe',
         reasons: [],
-        metadata: { runtimeMode: 'observe', runtimePhase: 'post', nested: true },
+        metadata: {
+          runtimeMode: 'observe', runtimePhase: 'post', nested: true,
+          shadowDisposition: 'accept-result', enforcementGates: [],
+        },
       }),
       event({ actionId: 'other-host', agentHost: 'codex' }),
       event({ actionId: 'not-observe', metadata: { runtimeMode: 'enforce' } }),
@@ -58,6 +64,8 @@ describe('DSH runtime audit summary', () => {
     assert.deepEqual(summary.actionTypes, { shell: 1, file_read: 1 });
     assert.deepEqual(summary.riskLevels, { high: 1, safe: 1 });
     assert.deepEqual(summary.phases, { pre: 1, post: 1 });
+    assert.deepEqual(summary.shadowDispositions, { 'request-approval': 1, 'accept-result': 1 });
+    assert.equal(summary.enforcementGated, 1);
     assert.deepEqual(summary.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
     assert.equal(summary.latestActionId, 'action-2');
     assert.doesNotMatch(JSON.stringify(summary), /sensitive raw command/);

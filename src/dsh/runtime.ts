@@ -7,6 +7,7 @@ import {
   type RuntimeEvaluation,
 } from '../runtime/decision.js';
 import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent } from '../runtime/types.js';
+import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 
 export const DSH_RUNTIME_MODE = 'observe' as const;
 
@@ -176,6 +177,8 @@ async function evaluateAndAuditDshAction(
       ? dependencies.fetchPolicyFor(config)
       : defaultFetchPolicy(config),
   });
+  const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
+  const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
   const event: RuntimeAuditEvent = {
     ...action,
     actionId: evaluation.decision.actionId,
@@ -190,6 +193,9 @@ async function evaluateAndAuditDshAction(
       policySource: evaluation.policySource,
       runtimeMode: DSH_RUNTIME_MODE,
       enforcementApplied: false,
+      shadowHookDecision: shadowPlan.hookDecision,
+      shadowDisposition: shadowPlan.disposition,
+      enforcementGates: shadowPlan.enforcementGates,
     },
   };
 
