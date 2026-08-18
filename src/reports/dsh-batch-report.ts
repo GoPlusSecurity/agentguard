@@ -9,10 +9,10 @@ export function renderDshBatchMarkdown(batch: DshBatchScanReport): string {
   const rows = batch.results.map(result => {
     const target = escapeCell(JSON.stringify(result.target));
     if (result.status === 'error') {
-      return `| ${target} | ERROR | — | — | — | ${escapeCell(result.error)} |`;
+      return `| ${target} | ERROR | — | — | — | — | ${escapeCell(result.error)} |`;
     }
     const report = result.report;
-    return `| ${target} | OK | ${report.riskLevel.toUpperCase()} | ${(report.runtimeSurfaceRiskLevel ?? report.riskLevel).toUpperCase()} | ${(report.reviewPriority ?? 'elevated').toUpperCase()} | ${report.installRecommendation} |`;
+    return `| ${target} | OK | ${report.riskLevel.toUpperCase()} | ${(report.runtimeSurfaceRiskLevel ?? report.riskLevel).toUpperCase()} | ${report.scanCoverage?.complete === false ? 'INCOMPLETE' : report.scanCoverage ? 'Complete' : 'Legacy/unknown'} | ${(report.reviewPriority ?? 'elevated').toUpperCase()} | ${report.installRecommendation} |`;
   }).join('\n');
   return `# AgentGuard for DSH batch scan
 
@@ -21,13 +21,14 @@ export function renderDshBatchMarkdown(batch: DshBatchScanReport): string {
 - Targets: ${batch.total}
 - Succeeded: ${batch.succeeded}
 - Failed: ${batch.failed}
+- Incomplete coverage: ${batch.incomplete}
 - Highest repository risk: ${batch.highestRisk?.toUpperCase() ?? 'Unavailable'}
 - Highest runtime-surface risk: ${batch.highestRuntimeSurfaceRisk?.toUpperCase() ?? 'Unavailable'}
 - Scanner: ${batch.scanner.name} ${batch.scanner.version} (${batch.scanner.phase})
 - Rules baseline: ${batch.scanner.rulesBaseline}
 
-| Target | Status | Full risk | Runtime risk | Review | Recommendation / error |
-|---|---|---|---|---|---|
+| Target | Status | Full risk | Runtime risk | Coverage | Review | Recommendation / error |
+|---|---|---|---|---|---|---|
 ${rows}
 
 > Scans run sequentially. A failed target does not suppress successful results. Use JSON output for complete per-target findings and provenance.

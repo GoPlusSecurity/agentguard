@@ -71,6 +71,24 @@ export interface ScanEvidence {
   context?: string;
 }
 
+/** Structured accounting for files eligible for the built-in static scan. */
+export interface ScanCoverage {
+  /** Files discovered after extension and ignore-pattern filtering. */
+  discovered: number;
+  /** Files read successfully and supplied to security rules. */
+  scanned: number;
+  /** Files omitted for any reason. */
+  skipped: number;
+  /** Stable reason counts; their sum equals `skipped`. */
+  skippedByReason: {
+    fileLimit: number;
+    oversized: number;
+    unreadable: number;
+  };
+  /** True only when every discovered file was scanned. */
+  complete: boolean;
+}
+
 /**
  * Scan payload types
  */
@@ -113,6 +131,8 @@ export interface ScanResult {
     files_scanned: number;
     scan_duration_ms: number;
     scan_time: string;
+    /** Additive coverage metadata for the built-in scanner. */
+    coverage?: ScanCoverage;
   };
 }
 

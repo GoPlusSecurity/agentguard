@@ -145,6 +145,34 @@ describe('DSH project detection and parsing', () => {
     assert.equal(report.reviewPriority, 'high');
   });
 
+  it('fails closed when security-relevant source exceeds the scan byte limit', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({
+        name: 'oversized-safe-looking-theme',
+        description: 'A harmless DSH theme',
+        dsh: { client: { platform: 'web' } },
+      }),
+      'src/hidden.ts': `/*${'x'.repeat(MAX_SCANNABLE_FILE_BYTES)}*/`,
+    });
+    const report = await scanDshPlugin(root);
+    assert.deepEqual(report.scanCoverage, {
+      discovered: 2,
+      scanned: 1,
+      skipped: 1,
+      skippedByReason: { fileLimit: 0, oversized: 1, unreadable: 0 },
+      complete: false,
+    });
+    assert.ok(report.riskTags.includes('DSH_SCAN_INCOMPLETE'));
+    assert.ok(report.runtimeSurfaceRiskTags?.includes('DSH_SCAN_INCOMPLETE'));
+    assert.equal(report.riskLevel, 'high');
+    assert.equal(report.runtimeSurfaceRiskLevel, 'high');
+    assert.equal(report.installRecommendation, 'expert-review-required');
+    assert.equal(report.runtimeSurfaceRecommendation, 'expert-review-required');
+    assert.equal(report.reviewPriority, 'high');
+    assert.match(renderDshMarkdown(report), /Scan coverage: INCOMPLETE/);
+    assert.match(renderDshHtml(report), /INCOMPLETE/);
+  });
+
   it('does not read a symlinked scan file outside the plugin root', async () => {
     const container = await mkdtemp(join(tmpdir(), 'agentguard-dsh-symlink-test-'));
     roots.push(container);

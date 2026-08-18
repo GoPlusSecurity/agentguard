@@ -15,6 +15,7 @@ import {
 import { detectDshPlugin } from './detect.js';
 import { getDshScannerMetadata } from './metadata.js';
 import { inspectRegularFileWithinRoot } from '../scanner/safe-file.js';
+import { walkDirectoryWithCoverage } from '../scanner/file-walker.js';
 import { addFindingContext, calculateReviewPriority, runtimeSurfaceTags } from './finding-context.js';
 import { resolveDshSource } from './source.js';
 import type {
@@ -157,12 +158,13 @@ export async function scanDshPlugin(
 ): Promise<DshPluginScanReport> {
   const source = await resolveDshSource(input, options);
   try {
-    const detection = await detectDshPlugin(source.rootDir);
-    const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection);
-    const pluginKind = await classifyDshPlugin(source.rootDir, detection, capabilityProfile);
+    const directory = await walkDirectoryWithCoverage(source.rootDir);
+    const detection = await detectDshPlugin(source.rootDir, directory.files);
+    const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection, directory.files);
+    const pluginKind = await classifyDshPlugin(source.rootDir, detection, capabilityProfile, directory.files);
     const impactLayers = classifyImpactLayers(pluginKind, capabilityProfile, detection);
     const artifactScanner = new SkillScanner({ useExternalScanner: false, additionalRules: DSH_RULES });
-    const artifactHash = await artifactScanner.calculateArtifactHash(source.rootDir);
+    const artifactHash = await artifactScanner.calculateArtifactHash(source.rootDir, directory);
     const scan = await artifactScanner.scan({
       skill: {
         id: detection.package.name ?? basename(source.rootDir),
@@ -171,13 +173,14 @@ export async function scanDshPlugin(
         artifact_hash: artifactHash,
       },
       payload: { type: 'dir', ref: source.rootDir },
-    });
+    }, directory);
     // Cordis overrides are derived from parsed rows below, not regex snippets.
     scan.evidence = scan.evidence.filter(item => item.tag !== 'DSH_PATCH_OVERRIDE');
     scan.risk_tags = [...new Set(scan.evidence.map(item => item.tag))];
     const riskTags = [...new Set(scan.risk_tags)];
     const harmlessMismatch = hasHarmlessCapabilityMismatch(detection, pluginKind, capabilityProfile);
     const findings = toFindings(scan.evidence);
+    const scanCoverage = scan.metadata?.coverage ?? directory.coverage;
     const incompleteInputs = [
       ...(detection.package.parseError
         ? [{ file: 'package.json', message: detection.package.parseError }]
@@ -185,7 +188,7 @@ export async function scanDshPlugin(
       ...detection.cordis.parseErrors,
     ];
     if (incompleteInputs.length > 0) {
-      riskTags.push('DSH_SCAN_INCOMPLETE');
+      if (!riskTags.includes('DSH_SCAN_INCOMPLETE')) riskTags.push('DSH_SCAN_INCOMPLETE');
       for (const incomplete of incompleteInputs) {
         findings.push({
           ruleId: 'DSH_SCAN_INCOMPLETE',
@@ -194,6 +197,17 @@ export async function scanDshPlugin(
           message: 'Security-relevant DSH metadata could not be parsed completely; manual review is required',
         });
       }
+    }
+    if (!scanCoverage.complete) {
+      if (!riskTags.includes('DSH_SCAN_INCOMPLETE')) riskTags.push('DSH_SCAN_INCOMPLETE');
+      const skipped = scanCoverage.skippedByReason;
+      findings.push({
+        ruleId: 'DSH_SCAN_INCOMPLETE',
+        severity: 'high',
+        file: 'scan-coverage',
+        message: `Static analysis skipped ${scanCoverage.skipped} security-relevant file(s); manual review is required`,
+        snippet: `fileLimit=${skipped.fileLimit}; oversized=${skipped.oversized}; unreadable=${skipped.unreadable}`,
+      });
     }
     const coreOverrides = detection.cordis.rows.filter(row =>
       row.operation === 'replace' && Boolean(row.id && SECURITY_RELEVANT_CORDIS_ROW.test(row.id)),
@@ -262,7 +276,8 @@ export async function scanDshPlugin(
       summary: buildSummary(detection.isDshPlugin, riskLevel, riskTags, harmlessMismatch),
       harmlessMismatch,
       scannedAt,
-      filesScanned: scan.metadata?.files_scanned ?? 0,
+      filesScanned: scanCoverage.scanned,
+      scanCoverage,
       scanDurationMs: scan.metadata?.scan_duration_ms ?? 0,
       source: {
         input,

@@ -1,4 +1,4 @@
-import { walkDirectory } from '../scanner/file-walker.js';
+import { walkDirectory, type FileInfo } from '../scanner/file-walker.js';
 import type { DshCapabilityProfile, DshDetection } from './types.js';
 
 const PATTERNS = {
@@ -16,8 +16,12 @@ const PATTERNS = {
 } as const;
 
 /** Infer the plugin's effective capabilities from source, metadata, and Cordis rows. */
-export async function buildCapabilityProfile(rootDir: string, detection: DshDetection): Promise<DshCapabilityProfile> {
-  const files = await walkDirectory(rootDir);
+export async function buildCapabilityProfile(
+  rootDir: string,
+  detection: DshDetection,
+  scannedFiles?: FileInfo[],
+): Promise<DshCapabilityProfile> {
+  const files = scannedFiles ?? await walkDirectory(rootDir);
   const combined = files
     .filter(file => file.extension !== '.md')
     .map(file => file.content)

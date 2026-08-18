@@ -147,7 +147,7 @@ agentguard dsh-scan https://github.com/owner/dsh-plugin --ref v1.2.3 --format js
 agentguard dsh-scan ./path/to/dsh-plugin --format html --output report.html
 ```
 
-Reports include DSH identification confidence, plugin kind, explainable risk level, permission profile, impact layers, source evidence, and an installation recommendation. See [AgentGuard for DSH](docs/dsh.md) for the risk model and current limitations.
+Reports include DSH identification confidence, plugin kind, explainable risk level, permission profile, impact layers, source evidence, structured file-coverage accounting, and an installation recommendation. File-count truncation, oversized matching files, or ordinary read failures produce `DSH_SCAN_INCOMPLETE` and can never return `safe-to-try`. See [AgentGuard for DSH](docs/dsh.md) for the risk model and current limitations.
 
 Install AgentGuard as a native DSH tool plugin, then restart the profile:
 
@@ -161,7 +161,7 @@ Use `agentguard_dsh_compare` or the `agentguard dsh-compare` CLI command to iden
 
 Update or remove it from the same profile with `dsh plugin --profile web update @goplus/agentguard` or `dsh plugin --profile web remove @goplus/agentguard`. The [DSH operations and report guide](docs/dsh.md#operate-the-dsh-installation) includes verification and troubleshooting steps.
 
-> **DSH runtime guard:** the packaged composition uses non-disruptive `observe` mode. An explicit `runtime.mode: protect` applies AgentGuard's shared allow/warn/require-approval/block policy before DSH dispatches a tool, using DSH's native one-shot approval service and monotonic composition with other policies. Optional `runtime.postResponseMode: block-malicious` suppresses only block-class malicious network results; approval-class post results remain audit-only because DSH has no resumable post-result approval protocol. The input-redacted `agentguard_dsh_runtime_summary` tool reports both observed and applied decisions. Exact operator-configured `runtime.attribution.toolOwners` bindings add source ownership without guessing, and `runtime.ownerPolicies` can impose per-owner minimum decisions without weakening shared security policy. Unmapped tools remain `unknown` until DSH exposes a reliable native owner field. See the [DSH runtime guide](docs/dsh-runtime.md).
+> **DSH runtime guard:** the packaged composition uses non-disruptive `observe` mode. Startup logs and the input-redacted `agentguard_dsh_runtime_summary` tool explicitly show the current configured mode and whether pre-execute enforcement is active. An explicit `runtime.mode: protect` applies AgentGuard's shared allow/warn/require-approval/block policy before DSH dispatches a tool, using DSH's native one-shot approval service and monotonic composition with other policies. Optional `runtime.postResponseMode: block-malicious` suppresses only block-class malicious network results; approval-class post results remain audit-only because DSH has no resumable post-result approval protocol. Exact operator-configured `runtime.attribution.toolOwners` bindings add source ownership without guessing, and `runtime.ownerPolicies` can impose per-owner minimum decisions without weakening shared security policy. Unmapped tools remain `unknown` until DSH exposes a reliable native owner field. See the [DSH runtime guide](docs/dsh-runtime.md).
 
 The complete candidate scope, activation override, acceptance gates, and intentional boundaries are collected in [AgentGuard for DSH complete candidate](docs/dsh-complete-candidate.md).
 

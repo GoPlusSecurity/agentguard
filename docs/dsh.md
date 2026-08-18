@@ -359,7 +359,7 @@ Expected capability does not mean safe capability. For example, a plugin-discove
 
 Review priority is intentionally separate from severity. `URGENT` is reserved for direct runtime evidence of remote update or execution, webhook exfiltration, embedded key material, credential access combined with outbound POST behavior, or a dangerous install-script combination. A critical prompt string or credential capability without those combinations remains `HIGH` review priority rather than automatically becoming urgent.
 
-`DSH_SCAN_INCOMPLETE` is a fail-closed exception to ordinary evidence scoring. If `package.json` or a discovered Cordis file is malformed, oversized, structurally unsupported, or otherwise unreadable, both risk views are at least HIGH, review priority is HIGH, and both recommendations become `expert-review-required`. The scanner never returns `safe-to-try` for security-relevant metadata it could not understand.
+`DSH_SCAN_INCOMPLETE` is a fail-closed exception to ordinary evidence scoring. If `package.json` or a discovered Cordis file is malformed, oversized, structurally unsupported, or otherwise unreadable—or if any matching scan file is omitted by the file-count limit, byte limit, or a read failure—both risk views are at least HIGH, review priority is HIGH, and both recommendations become `expert-review-required`. The scanner never returns `safe-to-try` when security-relevant scan coverage is incomplete.
 
 ## JSON report contract
 
@@ -380,6 +380,7 @@ The top-level report is `DshPluginScanReport`:
 | `capabilityProfile` | Static effective-capability booleans. |
 | `impactLayers` | DSH runtime areas the artifact can influence. |
 | `findings` | Rule, severity, representative file/line/snippet, aggregated occurrence count, source category, runtime relevance, and likely-generated marker. |
+| `scanCoverage` | Additive discovered/scanned/skipped counts, stable skip-reason counts (`fileLimit`, `oversized`, `unreadable`), and an explicit `complete` flag. |
 | `installRecommendation` | Suggested isolation or review posture. |
 | `summary` | Short human-readable decision summary. |
 | `harmlessMismatch` | Whether a benign UI label conflicts with elevated behavior. |
@@ -409,14 +410,14 @@ The scanner treats its input as untrusted:
 - GitHub acquisition resolves the requested branch or tag to an exact commit (or HEAD when no ref is supplied), uses a blob-less depth-one fetch, does not initialize submodules or run repository hooks, and monitors the fetch and checkout against a 256 MiB on-disk budget.
 - A remote acquisition is rejected above 100,000 Git objects, both before and after checkout.
 - File reads resolve their real path and reject symlinks that escape the scan root. Symlinks whose final target remains inside the artifact are allowed.
-- Individual scan files are limited to 2 MiB.
-- A scan considers at most 10,000 matching files.
+- Individual scan files are limited to 2 MiB. An oversized matching file makes the report incomplete rather than disappearing from the verdict.
+- A scan considers at most 10,000 matching files. Additional matching files are counted as skipped and make the report incomplete.
 - Cordis ASTs are limited to 20,000 nodes and 64 levels, and only required map/sequence fields are read without materializing the document through `toJS()`.
 - Common dependency, build, VCS, coverage, lockfile, and binary paths are skipped.
 - HTML report values are escaped before rendering. Markdown places artifact-controlled metadata in a JSON-escaped block under an explicit untrusted-data boundary.
 - The native DSH tool renders only a scanner-generated decision summary to the model. Detailed Markdown or JSON remains output data and is explicitly labeled as target-controlled, never as instructions.
 
-Unreadable security metadata produces `DSH_SCAN_INCOMPLETE`, HIGH review priority, and an expert-review recommendation. A hard acquisition-limit or scan-root-containment violation aborts the scan without a risk verdict.
+Unreadable security metadata or source produces `DSH_SCAN_INCOMPLETE`, HIGH review priority, and an expert-review recommendation. A hard acquisition-limit or scan-root-containment violation aborts the scan without a risk verdict.
 
 ## Recommended review workflow
 
@@ -441,6 +442,7 @@ Focused coverage lives in `src/tests/dsh.test.ts` and verifies:
 - Bundle, profile, client, and Cordis detection.
 - Safe handling of `!!js` YAML values.
 - Fail-closed handling of malformed Cordis and `dsh.client` metadata.
+- Structured coverage accounting for normal scans, file-count truncation, oversized source, and ordinary read failures.
 - Remote acquisition byte budgets and scan-root symlink containment.
 - Markdown and DSH model-output trust boundaries.
 - Insert-versus-replace interpretation.

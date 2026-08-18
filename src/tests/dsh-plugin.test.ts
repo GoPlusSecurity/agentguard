@@ -58,29 +58,51 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.equal(result.decisions.block, 1);
     assert.deepEqual(result.phases, { pre: 1 });
     assert.deepEqual(result.runtimeModes, { observe: 1 });
+    assert.equal(result.configuredMode, 'observe');
+    assert.equal(result.preExecuteProtectionActive, false);
+    assert.equal(result.configuredPostResponseMode, 'audit');
+    assert.match(result.modelSummary, /Configured runtime mode is observe/);
     assert.equal(result.enforcementApplied, 0);
     assert.deepEqual(result.shadowDispositions, { 'deny-execution': 1 });
     assert.equal(result.enforcementGated, 0);
     assert.deepEqual(result.topReasons, [{ code: 'REMOTE_CODE_EXECUTION', count: 1 }]);
     assert.doesNotMatch(JSON.stringify(result), /TOP_SECRET_VALUE/);
     await assert.rejects(() => tool.execute({ limit: 0 }), /between 1 and 1000/);
+
+    const protectedResult = await createAgentGuardDshRuntimeSummaryTool(
+      () => auditPath,
+      {
+        configuredMode: 'protect',
+        preExecuteProtectionActive: true,
+        configuredPostResponseMode: 'block-malicious',
+      },
+    ).execute({ limit: 10 });
+    assert.equal(protectedResult.configuredMode, 'protect');
+    assert.equal(protectedResult.preExecuteProtectionActive, true);
+    assert.equal(protectedResult.configuredPostResponseMode, 'block-malicious');
+    assert.match(protectedResult.modelSummary, /mode is protect.*enforcement is active.*block-malicious/i);
   });
 
   it('registers runtime lifecycle modes and validates configuration', () => {
     const events: string[] = [];
+    const logs: string[] = [];
     const context = {
       tools: { register() {} },
       on(event: 'tools/pre-execute' | 'tools/post-execute') { events.push(event); },
+      logger: { info(message: string) { logs.push(message); }, warn() {} },
     };
     apply(context);
     assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
+    assert.match(logs.at(-1) ?? '', /mode: observe.*enforcement inactive/i);
 
     events.length = 0;
     apply(context, { runtime: { mode: 'off' } });
     assert.deepEqual(events, []);
+    assert.match(logs.at(-1) ?? '', /mode: off.*listeners disabled/i);
 
     apply(context, { runtime: { mode: 'protect' } });
     assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
+    assert.match(logs.at(-1) ?? '', /mode: protect.*enforcement active/i);
     assert.throws(
       () => apply(context, { runtime: { mode: 'invalid' as 'observe' } }),
       /unsupported AgentGuard DSH runtime mode/
@@ -124,6 +146,10 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.equal(result.runtimeSurfaceRiskLevel, 'low');
     assert.equal(result.runtimeSurfaceRecommendation, 'safe-to-try');
     assert.equal(result.reviewPriority, 'routine');
+    assert.equal(result.scanComplete, true);
+    assert.equal(result.filesDiscovered, 3);
+    assert.equal(result.filesScanned, 3);
+    assert.equal(result.filesSkipped, 0);
     assert.equal(typeof result.installRecommendation, 'string');
     assert.match(result.modelSummary, /untrusted target-controlled data/);
     assert.deepEqual(createAgentGuardDshTool().output.render({}, result), [

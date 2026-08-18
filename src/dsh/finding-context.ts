@@ -27,6 +27,7 @@ export function classifyFindingPath(file: string, tag: RiskTag): {
     return { sourceCategory: 'derived', runtimeRelevance: 'unknown' };
   }
   if (tag === 'DSH_SCAN_INCOMPLETE') {
+    if (file === 'scan-coverage') return { sourceCategory: 'derived', runtimeRelevance: 'direct' };
     return { sourceCategory: file === 'package.json' ? 'installation' : 'configuration', runtimeRelevance: 'direct' };
   }
   if (tag === 'INSTALL_SCRIPT' || normalized === 'package.json') {

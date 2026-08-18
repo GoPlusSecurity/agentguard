@@ -7,6 +7,7 @@ This candidate completes the agreed installation-time scanner and DSH-native pre
 - DSH detection for bundles, profiles, Cordis patches, tools, providers, UI, sessions, storage, and runtime mutation.
 - Local directory and pinned GitHub scanning with JSON, Markdown, and HTML reports.
 - Full-repository and runtime-surface risk, evidence context, capability profile, impact layers, recommendation, and review priority.
+- Structured scan coverage that fails closed when matching files are truncated, oversized, or unreadable.
 - Bounded batch scanning and version/report comparison.
 - DSH-native tools: `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary`.
 - Native pre/post lifecycle observation with shared AgentGuard policy semantics.
@@ -15,6 +16,7 @@ This candidate completes the agreed installation-time scanner and DSH-native pre
 - Exact operator-configured tool ownership attribution and monotonic per-owner policy floors.
 - Fail-closed unexpected evaluator errors by default, with an explicit compatibility override.
 - Bounded local audit and input-redacted summaries.
+- Explicit startup and summary visibility for the configured `off`, `observe`, or `protect` runtime mode.
 - Real DSH lifecycle, approval, nesting, concurrency, failure, disposal, packaging, update, removal, and Web startup tests.
 
 ## Installation posture

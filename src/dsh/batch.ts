@@ -21,6 +21,8 @@ export interface DshBatchScanReport {
   total: number;
   succeeded: number;
   failed: number;
+  /** Successful reports whose static file coverage was incomplete. */
+  incomplete: number;
   highestRisk?: RiskLevel;
   highestRuntimeSurfaceRisk?: RiskLevel;
   riskCounts: Record<RiskLevel, number>;
@@ -105,6 +107,7 @@ export async function scanDshPlugins(targetsInput: DshBatchTarget[]): Promise<Ds
     total: targets.length,
     succeeded: reports.length,
     failed: targets.length - reports.length,
+    incomplete: reports.filter(report => report.scanCoverage?.complete === false).length,
     highestRisk: highestRisk(reports.map(report => report.riskLevel)),
     highestRuntimeSurfaceRisk: highestRisk(reports.map(report => report.runtimeSurfaceRiskLevel ?? report.riskLevel)),
     riskCounts: Object.fromEntries(risks.map(risk => [risk, reports.filter(report => report.riskLevel === risk).length])) as Record<RiskLevel, number>,

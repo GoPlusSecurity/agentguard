@@ -221,6 +221,8 @@ true || rm -rf /; printf '%s\n' agentguard-block-probe-executed
 
 - `total` 大于 0；
 - `runtimeModes.protect` 大于 0；
+- `configuredMode` 为 `protect`，`preExecuteProtectionActive` 为 `true`；
+- `configuredPostResponseMode` 为 `block-malicious`；
 - `enforcementApplied` 大于 0；
 - 能看到 `allow`、`require_approval`、`block` 中本轮实际触发的计数；
 - `topReasons` 包含本轮命中的规则代码；

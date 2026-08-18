@@ -9,7 +9,13 @@ import type {
   ScanRule,
 } from '../types/scanner.js';
 import type { SkillIdentity } from '../types/skill.js';
-import { walkDirectory, isDirectory, pathExists } from './file-walker.js';
+import {
+  walkDirectory,
+  walkDirectoryWithCoverage,
+  isDirectory,
+  pathExists,
+  type DirectoryScanSnapshot,
+} from './file-walker.js';
 import { ALL_RULES, getRulesForExtension } from './rules/index.js';
 
 /**
@@ -281,9 +287,13 @@ export class SkillScanner {
   /**
    * Run built-in scanner
    */
-  private async runBuiltinScanner(dirPath: string): Promise<ScanResult> {
+  private async runBuiltinScanner(
+    dirPath: string,
+    snapshot?: DirectoryScanSnapshot,
+  ): Promise<ScanResult> {
     const startTime = Date.now();
-    const files = await walkDirectory(dirPath);
+    const directory = snapshot ?? await walkDirectoryWithCoverage(dirPath);
+    const files = directory.files;
     const evidence: ScanEvidence[] = [];
     const riskTags: Set<RiskTag> = new Set();
 
@@ -323,6 +333,7 @@ export class SkillScanner {
         files_scanned: files.length,
         scan_duration_ms: Date.now() - startTime,
         scan_time: new Date().toISOString(),
+        coverage: directory.coverage,
       },
     };
   }
@@ -384,8 +395,11 @@ export class SkillScanner {
   /**
    * Calculate artifact hash for a directory
    */
-  async calculateArtifactHash(dirPath: string): Promise<string> {
-    const files = await walkDirectory(dirPath);
+  async calculateArtifactHash(
+    dirPath: string,
+    snapshot?: DirectoryScanSnapshot,
+  ): Promise<string> {
+    const files = snapshot?.files ?? await walkDirectory(dirPath);
     const hash = crypto.createHash('sha256');
 
     // Sort files for consistent hashing
@@ -402,7 +416,7 @@ export class SkillScanner {
   /**
    * Main scan method
    */
-  async scan(payload: ScanPayload): Promise<ScanResult> {
+  async scan(payload: ScanPayload, snapshot?: DirectoryScanSnapshot): Promise<ScanResult> {
     const { skill, payload: scanPayload, options } = payload;
 
     // Validate payload
@@ -424,7 +438,7 @@ export class SkillScanner {
     }
 
     // Try external scanner first if enabled
-    if (this.options.useExternalScanner) {
+    if (this.options.useExternalScanner && !snapshot) {
       const externalAvailable = await this.checkExternalScanner();
 
       if (externalAvailable) {
@@ -436,7 +450,7 @@ export class SkillScanner {
     }
 
     // Fall back to built-in scanner
-    return this.runBuiltinScanner(dirPath);
+    return this.runBuiltinScanner(dirPath, snapshot);
   }
 
   /**

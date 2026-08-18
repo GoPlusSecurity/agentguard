@@ -1,4 +1,4 @@
-import { walkDirectory } from '../scanner/file-walker.js';
+import { walkDirectory, type FileInfo } from '../scanner/file-walker.js';
 import type { DshCapabilityProfile, DshDetection, DshPluginKind } from './types.js';
 
 const HARMLESS_LABEL = /(?:\btheme\b|\bskin\b|\bwallpaper\b|desktop[ -]?companion|\bmascot\b|\bkawaii\b|\bmaid\b|\bwhale\b|\bpet\b)/i;
@@ -8,12 +8,13 @@ export async function classifyDshPlugin(
   rootDir: string,
   detection: DshDetection,
   capabilities: DshCapabilityProfile,
+  scannedFiles?: FileInfo[],
 ): Promise<DshPluginKind> {
   if (!detection.isDshPlugin) return 'unknown';
   if (detection.package.profileBundles.length > 0) return 'profile';
   if (detection.package.bundlePatch) return 'bundle';
 
-  const files = await walkDirectory(rootDir);
+  const files = scannedFiles ?? await walkDirectory(rootDir);
   const identityText = `${detection.package.name ?? ''}\n${detection.package.description ?? ''}`;
   const text = `${identityText}\n${files.map(file => file.content).join('\n')}`;
   if (HARMLESS_LABEL.test(identityText)) return capabilities.uiInjection ? 'theme' : 'ui';

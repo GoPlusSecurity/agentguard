@@ -1,4 +1,4 @@
-import type { RiskLevel, RiskTag } from '../types/scanner.js';
+import type { RiskLevel, RiskTag, ScanCoverage } from '../types/scanner.js';
 
 /** DSH plugin categories inferred from package metadata, Cordis rows, and source code. */
 export type DshPluginKind =
@@ -160,6 +160,8 @@ export interface DshPluginScanReport {
   harmlessMismatch: boolean;
   scannedAt: string;
   filesScanned: number;
+  /** Additive schema-v1 coverage accounting; absent only in legacy reports. */
+  scanCoverage?: ScanCoverage;
   scanDurationMs: number;
   source: {
     input: string;

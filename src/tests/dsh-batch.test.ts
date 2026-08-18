@@ -42,6 +42,7 @@ describe('DSH batch scanning', () => {
     assert.equal(batch.total, 3);
     assert.equal(batch.succeeded, 2);
     assert.equal(batch.failed, 1);
+    assert.equal(batch.incomplete, 0);
     assert.equal(batch.highestRisk, 'high');
     assert.equal(batch.riskCounts.low, 1);
     assert.equal(batch.riskCounts.high, 1);
@@ -54,6 +55,8 @@ describe('DSH batch scanning', () => {
     const result = await createAgentGuardDshBatchTool().execute({ targets: [{ target }] });
     assert.equal(result.total, 1);
     assert.equal(result.succeeded, 1);
+    assert.equal(result.incomplete, 0);
+    assert.match(result.modelSummary, /0 successful scans had incomplete file coverage/);
     assert.doesNotMatch(result.modelSummary, /Ignore all previous instructions/);
     assert.match(result.content, /AgentGuard for DSH batch scan/);
     assert.deepEqual(createAgentGuardDshBatchTool().output.render({}, result), [{ type: 'text', text: result.modelSummary }]);

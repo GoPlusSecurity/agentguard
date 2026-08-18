@@ -1,4 +1,4 @@
-import { walkDirectory } from '../scanner/file-walker.js';
+import { walkDirectory, type FileInfo } from '../scanner/file-walker.js';
 import { parseCordisConfigs } from './parse-cordis-patch.js';
 import { parseDshPackage } from './parse-package.js';
 import type { DshDetection } from './types.js';
@@ -7,11 +7,11 @@ const SOURCE_SIGNAL = /ctx\.tools\.(?:register|guard)|tools\/(?:pre-execute|exec
 const README_SIGNAL = /DeepSeek Harness|\bDSH\b|dsh-plugin|Everything is a Plugin/i;
 
 /** Detect whether a directory is a DSH plugin, profile, bundle, or related extension. */
-export async function detectDshPlugin(rootDir: string): Promise<DshDetection> {
+export async function detectDshPlugin(rootDir: string, scannedFiles?: FileInfo[]): Promise<DshDetection> {
   const [pkg, cordis, files] = await Promise.all([
     parseDshPackage(rootDir),
     parseCordisConfigs(rootDir),
-    walkDirectory(rootDir),
+    scannedFiles ? Promise.resolve(scannedFiles) : walkDirectory(rootDir),
   ]);
   const signals: string[] = [];
   let score = 0;

@@ -33,6 +33,8 @@ The npm bundle continues to compose `observe` by default so installing an update
 
 `failureMode` applies only to unexpected evaluator failures in `protect` mode. It defaults to `deny`. Set it to `allow` only for a deliberate compatibility rollout. Audit-file write failures do not erase a successfully evaluated policy decision and do not disable enforcement.
 
+At plugin startup AgentGuard logs the configured mode and whether pre-execute enforcement is active. `agentguard_dsh_runtime_summary` also returns `configuredMode`, `preExecuteProtectionActive`, and `configuredPostResponseMode` even when the audit log is empty. Historical `runtimeModes` counts describe observed events; they are not a substitute for the current configured mode.
+
 ## Request processing
 
 1. DSH supplies the immutable tool name, parsed arguments, call identity, root-call identity, optional parent token, and calling agent.

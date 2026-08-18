@@ -60,6 +60,7 @@ export function renderDshMarkdown(report: DshPluginScanReport): string {
   const rulesBaseline = report.scanner?.rulesBaseline ?? 'Unavailable in legacy schema-v1 report';
   const runtimeSurfaceRisk = report.runtimeSurfaceRiskLevel ?? report.riskLevel;
   const runtimeSurfaceRecommendation = report.runtimeSurfaceRecommendation ?? report.installRecommendation;
+  const scanCoverage = report.scanCoverage;
   const capabilities = Object.entries(report.capabilityProfile)
     .map(([key, enabled]) => `| ${CAPABILITY_LABELS[key as keyof typeof CAPABILITY_LABELS]} | ${enabled ? 'Yes' : 'No'} |`)
     .join('\n');
@@ -136,6 +137,9 @@ ${findings}
 - Artifact hash: ${report.identity.artifactHash ?? 'Unknown'}
 - Scanned at: ${report.scannedAt}
 - Files scanned: ${report.filesScanned}
+- Scan coverage: ${scanCoverage
+    ? `${scanCoverage.complete ? 'complete' : 'INCOMPLETE'} (${scanCoverage.scanned}/${scanCoverage.discovered}; skipped ${scanCoverage.skipped}: file limit ${scanCoverage.skippedByReason.fileLimit}, oversized ${scanCoverage.skippedByReason.oversized}, unreadable ${scanCoverage.skippedByReason.unreadable})`
+    : 'Unavailable in legacy schema-v1 report'}
 
 > Static analysis can miss runtime-loaded behavior and cannot prove that a plugin is safe.
 `;
@@ -150,6 +154,10 @@ export function renderDshHtml(report: DshPluginScanReport): string {
   const risk = htmlEscape(report.riskLevel);
   const runtimeSurfaceRisk = report.runtimeSurfaceRiskLevel ?? report.riskLevel;
   const runtimeSurfaceRecommendation = report.runtimeSurfaceRecommendation ?? report.installRecommendation;
+  const scanCoverage = report.scanCoverage;
+  const scanCoverageText = scanCoverage
+    ? `${scanCoverage.complete ? 'Complete' : 'INCOMPLETE'} — ${scanCoverage.scanned}/${scanCoverage.discovered} scanned; ${scanCoverage.skipped} skipped (file limit ${scanCoverage.skippedByReason.fileLimit}, oversized ${scanCoverage.skippedByReason.oversized}, unreadable ${scanCoverage.skippedByReason.unreadable})`
+    : 'Unavailable in legacy schema-v1 report';
   const runtimeRisk = htmlEscape(runtimeSurfaceRisk);
   const capabilities = Object.entries(report.capabilityProfile).map(([key, enabled]) => `
     <div class="capability ${enabled ? 'enabled' : ''}">
@@ -205,7 +213,7 @@ export function renderDshHtml(report: DshPluginScanReport): string {
   <div class="grid">
     <section style="grid-column:1/-1"><h2>Key findings</h2>${findings}</section>
     <section class="recommendation"><h2>Install recommendation</h2><strong>${htmlEscape(RECOMMENDATIONS[report.installRecommendation])}</strong><p>Runtime surface: ${htmlEscape(RECOMMENDATIONS[runtimeSurfaceRecommendation])}</p>${report.harmlessMismatch ? '<p>Looks harmless, but requests elevated capabilities.</p>' : ''}</section>
-    <section><h2>Artifact</h2><dl><dt>Repository</dt><dd>${htmlEscape(report.project.repositoryUrl ?? 'Local directory')}</dd><dt>Requested ref</dt><dd>${htmlEscape(report.source.requestedRef ?? (report.source.kind === 'github' ? 'Default branch HEAD' : 'Not applicable'))}</dd><dt>Resolved revision</dt><dd>${htmlEscape(report.source.revision ?? 'Unknown')}</dd><dt>Last commit</dt><dd>${htmlEscape(report.source.lastCommitAt ?? 'Unknown')}</dd><dt>Files scanned</dt><dd>${report.filesScanned}</dd><dt>Scanned</dt><dd>${htmlEscape(report.scannedAt)}</dd><dt>Hash</dt><dd>${htmlEscape(report.identity.artifactHash ?? 'Unknown')}</dd></dl></section>
+    <section><h2>Artifact</h2><dl><dt>Repository</dt><dd>${htmlEscape(report.project.repositoryUrl ?? 'Local directory')}</dd><dt>Requested ref</dt><dd>${htmlEscape(report.source.requestedRef ?? (report.source.kind === 'github' ? 'Default branch HEAD' : 'Not applicable'))}</dd><dt>Resolved revision</dt><dd>${htmlEscape(report.source.revision ?? 'Unknown')}</dd><dt>Last commit</dt><dd>${htmlEscape(report.source.lastCommitAt ?? 'Unknown')}</dd><dt>Files scanned</dt><dd>${report.filesScanned}</dd><dt>Scan coverage</dt><dd>${htmlEscape(scanCoverageText)}</dd><dt>Scanned</dt><dd>${htmlEscape(report.scannedAt)}</dd><dt>Hash</dt><dd>${htmlEscape(report.identity.artifactHash ?? 'Unknown')}</dd></dl></section>
   </div>
   <footer>Static analysis can miss runtime-loaded behavior and cannot prove that a plugin is safe.</footer>
 </main></body></html>`;
