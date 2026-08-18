@@ -11,6 +11,8 @@ This candidate completes the agreed installation-time scanner and DSH-native pre
 - DSH-native tools: `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary`.
 - Native pre/post lifecycle observation with shared AgentGuard policy semantics.
 - Opt-in `protect` mode for pre-execute allow, warn, DSH-native approval, and block.
+- Optional block-class malicious network-response containment without returning untrusted response content.
+- Exact operator-configured tool ownership attribution and monotonic per-owner policy floors.
 - Fail-closed unexpected evaluator errors by default, with an explicit compatibility override.
 - Bounded local audit and input-redacted summaries.
 - Real DSH lifecycle, approval, nesting, concurrency, failure, disposal, packaging, update, removal, and Web startup tests.
@@ -27,9 +29,16 @@ To confirm protection in a profile, add this complete config override to that pr
     runtime:
       mode: protect
       failureMode: deny
+      postResponseMode: block-malicious
 ```
 
-DSH profile patches replace the row's entire `config`, so both runtime fields are restated. Removing the override returns the bundle to its packaged `observe` configuration after recomposition/restart.
+DSH profile patches replace the row's entire `config`, so the complete runtime configuration is restated. Optional `attribution.toolOwners` entries must contain only exact owner bindings trusted by the operator; a corresponding `ownerPolicies.<owner>.minimumDecision` can raise that owner's calls to `warn`, `require_approval`, or `block`, but cannot weaken the shared policy. Removing the override returns the bundle to its packaged `observe` configuration after recomposition/restart.
+
+## Acceptance status
+
+The complete candidate passed all 11 guided DSH UAT cases on 2026-08-19. The accepted matrix covers tool registration, single and batch scanning, report comparison, safe execution, native one-shot approval, explicit rejection, pre-execute blocking, redacted runtime summaries, block-class malicious response containment, and Web service stability.
+
+Automated DSH gates independently exercise the real `ToolRuntime`, `ApprovalService`, session event pairs, nested and concurrent calls, policy composition, plugin disposal, package lifecycle, and loopback Web startup. The UAT result validates the installed local composition in addition to those repository-level tests.
 
 ## Acceptance commands
 
