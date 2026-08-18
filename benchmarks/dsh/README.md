@@ -8,7 +8,7 @@ This benchmark complements the synthetic fixtures under `src/tests/fixtures/dsh-
 
 The Phase 1 RC baseline contains:
 
-- A low runtime-risk UI bundle (`dsh-deep-whale`).
+- A UI bundle with an oversized generated runtime asset that deliberately exercises incomplete-coverage fail-closed behavior (`dsh-deep-whale`).
 - A medium runtime-risk skill provider (`superdesign-skill`).
 - A generated bundle with expected host command execution (`dsh-open-in-vscode`).
 - A provider-routing plugin with a user-triggered self-update path (`dsh-vision-router`).

@@ -8,6 +8,8 @@ Risk-rule semantics are frozen at commit `83db977a566d8a853568a2d2903b142106d801
 
 The `phase1-rc2` security-hardening baseline is commit `367227cc2b8bc064af369bf41e4490f6c4d3ea8b`. It adds fail-closed incomplete-metadata handling and scanner self-protection without retuning findings for successfully parsed artifacts. The scanner report and benchmark manifest expose this updated provenance identifier.
 
+The `phase1-rc3` coverage-hardening baseline is commit `2337e266cf78f82e8d07f5555f7cc760b6ddc830`. It records discovered, scanned, and skipped files with stable skip reasons. A file-limit truncation, oversized source file, or read failure now emits `DSH_SCAN_INCOMPLETE`, prevents `safe-to-try`, and requires expert review. The same candidate also makes the configured `observe`/`protect` posture explicit at startup and in the runtime summary.
+
 ## Acceptance gates
 
 Before merging or releasing the RC:
@@ -25,7 +27,7 @@ The real-world benchmark requires GitHub network access. The synthetic labeled c
 
 ## Frozen reference set
 
-The versioned manifest and snapshot live under `benchmarks/dsh/`. The initial set deliberately spans LOW through CRITICAL runtime postures and includes generated bundles, active instructions, provider routing, self-update behavior, webhook capability, and credential access.
+The versioned manifest and snapshot live under `benchmarks/dsh/`. The current set deliberately spans MEDIUM through CRITICAL runtime postures and includes incomplete coverage, generated bundles, active instructions, provider routing, self-update behavior, webhook capability, and credential access.
 
 The benchmark is not a popularity ranking. Repository stars, names, and default branches are not security inputs; only the pinned commit and artifact hash identify the reviewed sample.
 

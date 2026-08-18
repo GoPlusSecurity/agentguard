@@ -56,7 +56,7 @@ try {
   assert.ok(registeredRuntimeSummary);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
-  assert.equal(result.phase, 'phase1-rc2');
+  assert.equal(result.phase, 'phase1-rc3');
   assert.match(result.scannerVersion, /^\d+\.\d+\.\d+/);
   assert.match(result.rulesBaseline, /^[0-9a-f]{40}$/);
   const batchResult = await registeredBatch.execute({ targets: [{ target: safeFixture }] });

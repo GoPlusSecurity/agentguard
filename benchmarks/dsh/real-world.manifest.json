@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "baseline": "phase1-rc2",
-  "rulesFrozenAt": "367227cc2b8bc064af369bf41e4490f6c4d3ea8b",
+  "baseline": "phase1-rc3",
+  "rulesFrozenAt": "2337e266cf78f82e8d07f5555f7cc760b6ddc830",
   "snapshot": "real-world.snapshot.json",
   "cases": [
     {

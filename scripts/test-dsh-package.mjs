@@ -98,7 +98,7 @@ try {
   assert.ok(registeredRuntimeSummary);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
-  assert.equal(result.phase, 'phase1-rc2');
+  assert.equal(result.phase, 'phase1-rc3');
   const batchResult = await registeredBatch.execute({ targets: [{ target: safeFixture }], format: 'json' });
   assert.equal(batchResult.succeeded, 1);
 

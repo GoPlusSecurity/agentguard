@@ -494,8 +494,8 @@ describe('DSH report rendering', () => {
     const report = await scanDshPlugin(root);
     const markdown = renderDshMarkdown(report);
     const html = renderDshHtml(report);
-    assert.match(markdown, /Rules baseline:.*367227cc/);
-    assert.match(html, /rules.*367227cc/);
+    assert.match(markdown, /Rules baseline:.*2337e266/);
+    assert.match(html, /rules.*2337e266/);
     assert.match(markdown, /Permission profile/);
     assert.match(markdown, /Runtime-surface risk/);
     assert.match(markdown, /Review priority/);
