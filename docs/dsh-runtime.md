@@ -25,6 +25,9 @@ The npm bundle continues to compose `observe` by default so installing an update
           attribution:
             toolOwners:
               find_dsh_plugin: dsh-find-plugin
+          ownerPolicies:
+            dsh-find-plugin:
+              minimumDecision: require_approval
 ```
 
 `failureMode` applies only to unexpected evaluator failures in `protect` mode. It defaults to `deny`. Set it to `allow` only for a deliberate compatibility rollout. Audit-file write failures do not erase a successfully evaluated policy decision and do not disable enforcement.
@@ -73,6 +76,8 @@ Events are written to `~/.agentguard/audit.jsonl` with:
 - `sourceAttribution: "unknown"` when no reliable owner binding exists.
 
 `runtime.attribution.toolOwners` is an exact, case-sensitive map from a DSH tool name to a stable plugin or package id. It is operator-authored trust metadata, not a tool-name heuristic. Owner ids are bounded and validated, duplicate/ambiguous wildcard matching is not supported, and an unmapped tool remains `unknown`. Do not bind a name when another agent scope may shadow it with a different implementation.
+
+`runtime.ownerPolicies` applies only after a call has a matching `configured-tool-owner`. Each owner declares a `minimumDecision` of `allow`, `warn`, `require_approval`, or `block`. This is a monotonic floor: it can strengthen the shared AgentGuard decision but can never weaken it. In particular, `minimumDecision: allow` means “no additional owner restriction”; it does not bypass a warning, approval, or block produced by the shared policy. An elevation adds the bounded `DSH_OWNER_POLICY` reason code to audit and native approval text.
 
 In `protect`, pre-execute events set `enforcementApplied: true` and record the applied DSH hook decision. Post-execute events remain `false`. DSH session events are the source of truth for the final human approval outcome.
 

@@ -93,6 +93,12 @@ describe('AgentGuard DSH runtime plugin', () => {
       () => apply(context, { runtime: { attribution: { toolOwners: { bash: 'invalid owner' } } } }),
       /invalid AgentGuard DSH owner id/
     );
+    assert.throws(
+      () => apply(context, {
+        runtime: { ownerPolicies: { plugin: { minimumDecision: 'deny' as 'block' } } },
+      }),
+      /requires minimumDecision/
+    );
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {

@@ -15,6 +15,7 @@ import {
 } from './runtime.js';
 import { summarizeDshRuntimeAudit, type DshRuntimeSummary } from './runtime-summary.js';
 import { loadConfig } from '../config.js';
+import { normalizeDshOwnerPolicies } from './owner-policy.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools'];
@@ -452,6 +453,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
     throw new Error(`unsupported AgentGuard DSH runtime failure mode: ${String(failureMode)}`);
   }
   const attribution = normalizeDshRuntimeAttribution(config.runtime?.attribution);
+  const ownerPolicies = normalizeDshOwnerPolicies(config.runtime?.ownerPolicies);
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
@@ -460,6 +462,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
     const dependencies: DshRuntimeDependencies = {
       runtimeMode,
       attribution,
+      ownerPolicies,
       onError(error, exec) {
         ctx.logger?.warn(`AgentGuard DSH runtime ${runtimeMode} failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`);
       },

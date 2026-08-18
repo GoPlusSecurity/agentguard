@@ -105,6 +105,12 @@ export { AgentGuardCloudClient } from './cloud/client.js';
 export { evaluateLocalAction } from './runtime/evaluator.js';
 export { planDshEnforcement } from './dsh/enforcement-plan.js';
 export {
+  applyDshOwnerPolicy,
+  normalizeDshOwnerPolicies,
+  type DshOwnerPolicies,
+  type DshOwnerPolicy,
+} from './dsh/owner-policy.js';
+export {
   formatDshPolicyReason,
   mergeDshPostDecisions,
   mergeDshPreDecisions,

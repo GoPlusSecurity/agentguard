@@ -12,6 +12,10 @@ import {
   mergeDshPreDecisions,
   translateDshPreDecision,
 } from './enforcement-adapter.js';
+import {
+  applyDshOwnerPolicy,
+  type DshOwnerPolicies,
+} from './owner-policy.js';
 
 export const DSH_RUNTIME_MODE = 'observe' as const;
 export const DSH_PROTECT_MODE = 'protect' as const;
@@ -25,6 +29,8 @@ export interface DshRuntimeConfig {
   failureMode?: DshRuntimeFailureMode;
   /** Operator-authored exact tool-name to plugin/package owner bindings. */
   attribution?: DshRuntimeAttributionConfig;
+  /** Per-owner monotonic decision floors; cannot weaken shared policy. */
+  ownerPolicies?: DshOwnerPolicies;
 }
 
 export interface DshRuntimeAttributionConfig {
@@ -93,6 +99,7 @@ export interface DshRuntimeDependencies {
   onError?: (error: unknown, exec: DshToolExecution) => void;
   runtimeMode?: Exclude<DshRuntimeMode, 'off'>;
   attribution?: DshRuntimeAttributionConfig;
+  ownerPolicies?: DshOwnerPolicies;
 }
 
 export interface DshRuntimeObservation {
@@ -265,13 +272,14 @@ async function evaluateAndAuditDshAction(
   enforcementApplied: boolean
 ): Promise<DshRuntimeObservation> {
   const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
-  const evaluation = await evaluate({
+  const sharedEvaluation = await evaluate({
     action,
     policyCachePath: config.policyCachePath,
     fetchPolicy: dependencies.fetchPolicyFor
       ? dependencies.fetchPolicyFor(config)
       : defaultFetchPolicy(config),
   });
+  const evaluation = applyDshOwnerPolicy(sharedEvaluation, action, dependencies.ownerPolicies);
   const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
   const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
   const remainingGates = runtimeMode === DSH_PROTECT_MODE && phase === 'pre'

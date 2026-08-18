@@ -58,6 +58,7 @@ npm run benchmark:dsh
 - Static reports are decision aids, not safety certificates.
 - The package does not automatically install or execute a scanned target.
 - Source-plugin ownership supports exact operator-configured `runtime.attribution.toolOwners` bindings; unmapped tools remain explicit `unknown` because current DSH lifecycle events do not expose a reliable owner/provider identity.
+- Per-owner `minimumDecision` policy floors can raise attributed calls to warn, native approval, or block, but never downgrade a shared AgentGuard decision.
 - Runtime policy is therefore action/tool based, not plugin-trust based.
 - Post-response anomalies remain audit-only because DSH has no resumable post-result approval contract.
 - npm artifact/source equivalence, marketplace reputation, team policy, badges, and cloud history remain later platform work; they are not prerequisites for this local complete candidate.

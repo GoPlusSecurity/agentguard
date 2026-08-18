@@ -345,6 +345,24 @@ describe('DSH runtime protect mode', () => {
     }
   });
 
+  it('applies an attributed owner decision floor before DSH translation', async () => {
+    const written: Array<{ event: any }> = [];
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      attribution: { toolOwners: { custom_tool: 'example-plugin' } },
+      ownerPolicies: { 'example-plugin': { minimumDecision: 'require_approval' as const } },
+      evaluate: async () => ({ decision: decision('allow'), policySource: 'default' as const }),
+      writeAudit(_path: string, event: any) { written.push({ event }); },
+    };
+    const protector = createDshPreExecuteProtector(dependencies);
+    const result = await protector(execution({ name: 'custom_tool', arguments: {} }), async () => ({ kind: 'allow' }));
+    assert.equal(result.kind, 'ask');
+    assert.equal(written[0]?.event.decision, 'require_approval');
+    assert.equal(written[0]?.event.metadata.sourceOwner, 'example-plugin');
+    assert.ok(written[0]?.event.reasons.some((reason: { code: string }) => reason.code === 'DSH_OWNER_POLICY'));
+  });
+
   it('records protect mode and a bounded applied hook decision', async () => {
     const observed = await protectDshToolCall(execution(), {
       loadAgentGuardConfig: () => config,
