@@ -10,7 +10,7 @@ The runtime integration accepts three explicit modes:
 |---|---|---|---|
 | `off` | no listener | no listener | scanner tools only |
 | `observe` | evaluate and audit; preserve downstream decision | evaluate network responses and audit | packaged default and rollout baseline |
-| `protect` | apply `allow`, `warn`, native `ask`, or `deny` | evaluate network responses and audit only | explicit real-time protection |
+| `protect` | apply `allow`, `warn`, native `ask`, or `deny` | audit by default; optionally suppress block-class malicious results | explicit real-time protection |
 
 The npm bundle continues to compose `observe` by default so installing an update does not silently change tool execution. Enable protection in a custom DSH composition:
 
@@ -22,6 +22,7 @@ The npm bundle continues to compose `observe` by default so installing an update
         runtime:
           mode: protect
           failureMode: deny
+          postResponseMode: block-malicious
           attribution:
             toolOwners:
               find_dsh_plugin: dsh-find-plugin
@@ -55,13 +56,13 @@ DSH owns the one-shot approval interaction and its durable `approval/asked` plus
 
 The reason passed into DSH contains only a bounded risk score, normalized policy metadata, and up to five reason codes. Raw tool input, detector descriptions, evidence, and untrusted control text are excluded.
 
-## Response observation boundary
+## Response containment boundary
 
 Network results pass through `tools/post-execute`. AgentGuard extracts a bounded response preview plus available status, content type, headers, and byte count, then evaluates response and network-volume anomalies.
 
-Post-execute remains audit-only in both `observe` and `protect`. DSH currently exposes `accept` and `block`, but no native post-result `ask` or resumable held-result carrier. Blocking approval-class results would therefore make an approved result impossible to resume. AgentGuard records the decision and the remaining integration gates instead of claiming protection it cannot safely provide.
+Post-execute remains audit-only in `observe` and in the default `protect` configuration. Set `postResponseMode: block-malicious` together with `mode: protect` to suppress only results whose final AgentGuard post-execute decision is `block`. The original result value and rendered content are not returned; DSH receives bounded AgentGuard feedback that excludes the untrusted preview and evidence. A stronger downstream block is preserved.
 
-The post protocol adapter and containment matrix remain available for future DSH API evolution. They prove that an explicit block suppresses original values/content and preserves a downstream block, but the packaged plugin does not register post-result enforcement.
+Approval-class post results remain audit-only because DSH has no native post-result `ask` or resumable held-result carrier. AgentGuard records the remaining `native-post-result-approval` and `approved-result-resume` gates rather than destroying a result that could not be resumed. Unexpected post evaluator errors fail open for the result path and remain available to downstream DSH policies; this avoids irrecoverable response loss caused by an internal guard failure.
 
 ## Audit and summary
 
@@ -79,7 +80,7 @@ Events are written to `~/.agentguard/audit.jsonl` with:
 
 `runtime.ownerPolicies` applies only after a call has a matching `configured-tool-owner`. Each owner declares a `minimumDecision` of `allow`, `warn`, `require_approval`, or `block`. This is a monotonic floor: it can strengthen the shared AgentGuard decision but can never weaken it. In particular, `minimumDecision: allow` means “no additional owner restriction”; it does not bypass a warning, approval, or block produced by the shared policy. An elevation adds the bounded `DSH_OWNER_POLICY` reason code to audit and native approval text.
 
-In `protect`, pre-execute events set `enforcementApplied: true` and record the applied DSH hook decision. Post-execute events remain `false`. DSH session events are the source of truth for the final human approval outcome.
+In `protect`, pre-execute events set `enforcementApplied: true` and record the applied DSH hook decision. With `postResponseMode: block-malicious`, block-class post-execute events also set it to `true` and record `hookDecisionApplied: block`; approval-class post events remain `false`. DSH session events are the source of truth for the final human approval outcome.
 
 `agentguard_dsh_runtime_summary` reads only the bounded final 1 MiB of the audit log and aggregates up to 1,000 recent DSH events. It reports decisions, action types, risks, phases, modes, applied-enforcement count, dispositions, gates, reason-code counts, nested calls, attribution coverage, invocation sources, session origins, and the top configured owners. Raw tool inputs and reason evidence are never returned to the model. An exact optional `sessionId` filter isolates one DSH call tree.
 
@@ -103,7 +104,7 @@ The real DSH `ToolRuntime`, `ApprovalService`, and `Session` tests cover:
 - stronger downstream policies;
 - fail-closed and explicit fail-open evaluator errors;
 - bounded audit output and explicit unknown attribution;
-- audit-only response anomaly handling;
+- audit-only approval-class response handling and optional block-class response suppression;
 - plugin disposal removing the policy listener;
 - install, update, uninstall, packaged assets, and live HTTP startup.
 

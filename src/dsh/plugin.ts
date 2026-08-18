@@ -7,6 +7,7 @@ import { compareDshReports } from './compare.js';
 import { renderDshComparisonMarkdown } from '../reports/dsh-compare-report.js';
 import {
   createDshPostExecuteObserver,
+  createDshPostExecuteProtector,
   createDshPreExecuteObserver,
   createDshPreExecuteProtector,
   normalizeDshRuntimeAttribution,
@@ -434,7 +435,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
           `${reviewCount} received warn, approval, or block decisions.`,
           `${summary.nestedCalls} were nested tool calls.`,
           `${summary.sourceAttributions['configured-tool-owner'] ?? 0} had an operator-configured source owner.`,
-          `${summary.enforcementApplied} pre-execute decisions were applied by protect mode.`,
+          `${summary.enforcementApplied} runtime decisions were applied by protect mode.`,
           `${summary.enforcementGated} observations still have enforcement integration gates.`,
           'Only aggregate metadata is returned; raw tool inputs are omitted.',
         ].join(' '),
@@ -454,6 +455,10 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   }
   const attribution = normalizeDshRuntimeAttribution(config.runtime?.attribution);
   const ownerPolicies = normalizeDshOwnerPolicies(config.runtime?.ownerPolicies);
+  const postResponseMode = config.runtime?.postResponseMode ?? 'audit';
+  if (!['audit', 'block-malicious'].includes(postResponseMode)) {
+    throw new Error(`unsupported AgentGuard DSH post-response mode: ${String(postResponseMode)}`);
+  }
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
@@ -473,6 +478,11 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
         ? createDshPreExecuteProtector(dependencies, failureMode)
         : createDshPreExecuteObserver(dependencies)
     );
-    ctx.on('tools/post-execute', createDshPostExecuteObserver(dependencies));
+    ctx.on(
+      'tools/post-execute',
+      runtimeMode === 'protect' && postResponseMode === 'block-malicious'
+        ? createDshPostExecuteProtector(dependencies)
+        : createDshPostExecuteObserver(dependencies)
+    );
   }
 }

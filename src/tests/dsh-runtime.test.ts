@@ -4,6 +4,7 @@ import type { AgentGuardConfig } from '../config.js';
 import {
   buildDshRuntimeAction,
   createDshPostExecuteObserver,
+  createDshPostExecuteProtector,
   createDshPreExecuteObserver,
   createDshPreExecuteProtector,
   isAgentGuardDshTool,
@@ -12,6 +13,7 @@ import {
   observeDshToolCall,
   observeDshToolResult,
   protectDshToolCall,
+  protectDshToolResult,
   type DshToolExecution,
 } from '../dsh/runtime.js';
 import type { RuntimeDecision } from '../runtime/types.js';
@@ -281,6 +283,56 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(evaluated, 1, 'non-network results should not create duplicate observations');
   });
 
+  it('suppresses only block-class malicious results in post-response protect mode', async () => {
+    const written: Array<{ event: any }> = [];
+    const result = {
+      isError: false,
+      value: { body: 'UNTRUSTED_RAW_RESPONSE' },
+      content: [{ type: 'text', text: 'UNTRUSTED_RAW_RESPONSE' }],
+    };
+    const protector = createDshPostExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+      writeAudit(_path, event) { written.push({ event }); },
+    });
+    const protectedDecision = await protector(execution({
+      name: 'http_request', arguments: { url: 'https://example.com' },
+    }), result, async () => ({ kind: 'accept' }));
+    assert.equal(protectedDecision.kind, 'block');
+    assert.doesNotMatch(JSON.stringify(protectedDecision), /UNTRUSTED_RAW_RESPONSE/);
+    assert.equal(written[0]?.event.metadata.enforcementApplied, true);
+    assert.equal(written[0]?.event.metadata.hookDecisionApplied, 'block');
+    assert.deepEqual(written[0]?.event.metadata.enforcementGates, []);
+
+    written.length = 0;
+    const approvalClass = createDshPostExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('require_approval'), policySource: 'default' }),
+      writeAudit(_path, event) { written.push({ event }); },
+    });
+    assert.deepEqual(await approvalClass(execution({
+      name: 'http_request', arguments: { url: 'https://example.com' },
+    }), result, async () => ({ kind: 'accept' })), { kind: 'accept' });
+    assert.equal(written[0]?.event.metadata.enforcementApplied, false);
+    assert.deepEqual(written[0]?.event.metadata.enforcementGates, [
+      'native-post-result-approval', 'approved-result-resume',
+    ]);
+  });
+
+  it('records post-result protection metadata through the shared evaluator', async () => {
+    const observed = await protectDshToolResult(execution({
+      name: 'http_request', arguments: { url: 'https://example.com' },
+    }), { isError: false, value: { body: 'response' }, content: [] }, {
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    assert.ok(observed);
+    assert.equal(observed.event.metadata?.runtimeMode, 'protect');
+    assert.equal(observed.event.metadata?.runtimePhase, 'post');
+    assert.equal(observed.event.metadata?.enforcementApplied, true);
+  });
+
   it('never changes the downstream DSH decision in observe mode', async () => {
     let evaluated = 0;
     const observer = createDshPreExecuteObserver({
@@ -421,7 +473,7 @@ describe('DSH runtime protect mode', () => {
     assert.equal(evaluated, false);
   });
 
-  it('keeps post-execute response handling audit-only in protect mode', async () => {
+  it('keeps the default protect post-response mode audit-only', async () => {
     const observer = createDshPostExecuteObserver({
       runtimeMode: 'protect',
       loadAgentGuardConfig: () => config,

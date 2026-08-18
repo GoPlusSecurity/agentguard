@@ -26,7 +26,9 @@ try {
   await ctx.plugin(SystemPrompt);
   await ctx.plugin(ToolRuntime, { mode: 'native' });
   await ctx.plugin(ApprovalService, { policy: 'ask' });
-  pluginFiber = await ctx.plugin(plugin, { runtime: { mode: 'protect' } });
+  pluginFiber = await ctx.plugin(plugin, {
+    runtime: { mode: 'protect', postResponseMode: 'block-malicious' },
+  });
 
   ctx.on('approval/request', async () => {
     approvalRequests++;
@@ -120,7 +122,8 @@ try {
     method: 'GET',
     responseBody: '<script>eval(atob("YWxlcnQoMSk="))</script>',
   }, agent);
-  assert.equal(postObserved.isError, false, 'post-response policy remains audit-only');
+  assert.equal(postObserved.isError, true, 'block-class post responses must be suppressed');
+  assert.doesNotMatch(JSON.stringify(postObserved), /YWxlcnQoMSk/);
   assert.equal(bodyCalls, 7);
 
   const audit = (await readFile(join(auditHome, 'audit.jsonl'), 'utf8'))
@@ -143,7 +146,7 @@ try {
   assert.equal(nestedEvent.metadata.rootCallId, 'nested-root-1');
   const postEvent = findEvent(audit, 'post-network-1', 'post');
   assert.equal(postEvent.metadata.runtimeMode, 'protect');
-  assert.equal(postEvent.metadata.enforcementApplied, false);
+  assert.equal(postEvent.metadata.enforcementApplied, true);
   assert.equal(postEvent.decision, 'block');
 
   const asked = session.events.filter(event => event.type === 'approval/asked');
@@ -169,7 +172,7 @@ try {
     remoteExecutionApproval: true,
     remoteExecutionRejection: true,
     nestedSingleApproval: true,
-    postResponseAuditOnly: true,
+    maliciousPostResponseSuppressed: true,
     sourceAttributionExplicit: true,
     unloadRemovesPolicy: true,
     approvalPairs: asked.length,

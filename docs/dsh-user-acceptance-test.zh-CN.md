@@ -8,6 +8,7 @@
 - 单插件扫描、批量扫描和版本对比结果可用；
 - runtime 审计汇总不会回显原始敏感输入；
 - `protect` 模式能够放行安全动作、请求原生审批并在执行前阻断危险动作；
+- `block-malicious` 能够隔离 block 级网络响应且不回传恶意原文；
 - 测试过程不真正执行破坏性命令、不上传凭据、不安装被扫描插件。
 
 ## 2. 必须遵守的安全约束
@@ -29,7 +30,7 @@ DSH 执行本测试时必须遵守：
 - AgentGuard 本地源码：`/Users/mike/Documents/ChatGPT/agentgaurd dsh版本`
 - 安全扫描样本：`/Users/mike/Documents/ChatGPT/agentgaurd dsh版本/src/tests/fixtures/dsh-eval/safe-theme`
 - 高风险对比样本：`/Users/mike/Documents/ChatGPT/agentgaurd dsh版本/src/tests/fixtures/dsh-eval/data-local-loader`
-- 预期 runtime 配置：`mode: protect`、`failureMode: deny`
+- 预期 runtime 配置：`mode: protect`、`failureMode: deny`、`postResponseMode: block-malicious`
 
 版本字段必须区分：
 
@@ -226,7 +227,27 @@ true || rm -rf /; printf '%s\n' agentguard-block-probe-executed
 - 汇总结果中不得出现完整审批探针、完整阻断探针或其他原始工具输入；
 - 调用汇总工具本身不会递归生成 AgentGuard 对 AgentGuard 的审计事件。
 
-### UAT-10：服务稳定性
+### UAT-10：恶意网络响应隔离
+
+在 AgentGuard 源码目录运行内置的 DSH lifecycle 回归：
+
+```bash
+cd '/Users/mike/Documents/ChatGPT/agentgaurd dsh版本' && npm run test:dsh-protect
+```
+
+该脚本使用内存中的真实 DSH `ToolRuntime` 和本地构造响应，不访问外部网络，也不会执行它包含的危险命令字符串。
+
+预期：
+
+- 命令退出码为 0；
+- JSON 摘要包含 `"maliciousPostResponseSuppressed":true`；
+- 同一摘要仍包含 `"nativeApproval":true`、`"rejectedApproval":true` 和 `"preBlock":true`；
+- 输出中不出现测试响应的 base64 恶意载荷；
+- 对应 post 审计为 `decision: block`、`runtimePhase: post`、`enforcementApplied: true`、`hookDecisionApplied: block`。
+
+注意：`require_approval` 级 post 响应仍只能审计，因为 DSH 没有可恢复的 post-result 审批协议；本用例只要求隔离最终决策为 `block` 的响应。
+
+### UAT-11：服务稳定性
 
 完成以上测试后，再访问：
 
@@ -240,9 +261,9 @@ http://127.0.0.1:3080/
 
 以下行为属于当前已确认边界：
 
-- 网络工具返回的恶意响应目前只记录 post-execute 审计，不阻断或替换结果；DSH 尚无可恢复的 post-result 审批协议。
+- `require_approval` 级网络响应只记录 post-execute 审计；DSH 尚无可恢复的 post-result 审批协议。配置 `postResponseMode: block-malicious` 时，最终决策为 `block` 的响应会被隔离。
 - `sourceAttribution` 对 `runtime.attribution.toolOwners` 中精确配置的工具可标记为 `configured-tool-owner`；未配置工具仍为 `unknown`，因为 DSH lifecycle 尚未提供可靠的原生来源插件/工具所有者字段。
-- 运行时策略目前按工具与动作生效，还不能按已归因插件建立独立信任策略。
+- DSH 尚不能自动提供原生插件所有者；精确配置的 tool-owner 可以应用单调增强的 owner policy，未归因调用不能获得插件级策略。
 - 静态扫描结论是安装决策辅助，不是安全认证。
 - DSH 模型不一定能看到 UI 审批过程；审批是否发生以 session 的 `approval/asked` / `approval/decided` 事件为准。
 
@@ -285,7 +306,8 @@ http://127.0.0.1:3080/
 | UAT-07 拒绝 | | | |
 | UAT-08 执行前阻断 | | | |
 | UAT-09 汇总脱敏 | | | |
-| UAT-10 服务稳定性 | | | |
+| UAT-10 响应隔离 | | | |
+| UAT-11 服务稳定性 | | | |
 
 ## Runtime 汇总
 
@@ -304,4 +326,4 @@ http://127.0.0.1:3080/
 
 ## 8. 可直接交给 DSH 的任务说明
 
-> 请严格按照 `/Users/mike/Documents/ChatGPT/agentgaurd dsh版本/docs/dsh-user-acceptance-test.zh-CN.md` 执行 AgentGuard for DSH 验收。先验证四个工具，再按 UAT-02 至 UAT-10 顺序测试。严格遵守安全约束：不要安装扫描目标，不要执行真实危险命令，不要读取真实凭据；危险规则只能原样使用文档中的 `true ||` 短路探针，不得改写。遇到停止条件立即停止。最后只按文档第 7 节模板输出报告。
+> 请严格按照 `/Users/mike/Documents/ChatGPT/agentgaurd dsh版本/docs/dsh-user-acceptance-test.zh-CN.md` 执行 AgentGuard for DSH 验收。先验证四个工具，再按 UAT-02 至 UAT-11 顺序测试。严格遵守安全约束：不要安装扫描目标，不要执行真实危险命令，不要读取真实凭据；危险规则只能原样使用文档中的 `true ||` 短路探针，不得改写。遇到停止条件立即停止。最后只按文档第 7 节模板输出报告。

@@ -60,7 +60,7 @@ npm run benchmark:dsh
 - Source-plugin ownership supports exact operator-configured `runtime.attribution.toolOwners` bindings; unmapped tools remain explicit `unknown` because current DSH lifecycle events do not expose a reliable owner/provider identity.
 - Per-owner `minimumDecision` policy floors can raise attributed calls to warn, native approval, or block, but never downgrade a shared AgentGuard decision.
 - Runtime policy is therefore action/tool based, not plugin-trust based.
-- Post-response anomalies remain audit-only because DSH has no resumable post-result approval contract.
+- Post-response anomalies are audit-only by default. Explicit `postResponseMode: block-malicious` suppresses block-class malicious results; approval-class results remain audit-only because DSH has no resumable post-result approval contract.
 - npm artifact/source equivalence, marketplace reputation, team policy, badges, and cloud history remain later platform work; they are not prerequisites for this local complete candidate.
 
 ## Confirmation decision
@@ -70,5 +70,5 @@ Confirm this candidate if the following product contract is acceptable:
 1. installation remains observation-first;
 2. protection is explicit and fails closed on unexpected evaluator errors;
 3. approval is owned by DSH rather than a duplicate AgentGuard queue;
-4. pre-execute protection is real, while post-response enforcement is not overstated;
+4. pre-execute protection is real, and optional post-response containment applies only to block-class results;
 5. unattributed calls never receive plugin-specific trust automatically.

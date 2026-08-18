@@ -23,9 +23,9 @@ export function translateDshPreDecision(decision: RuntimeDecision): DshPreToolDe
 }
 
 /**
- * Translate post-response policy into DSH result containment. Approval-class
- * results are held because the post hook has no `ask` decision; resuming an
- * approved result remains a separate integration gate.
+ * Translate post-response policy into DSH result containment. The live
+ * protector invokes this only for block-class results. Direct approval-class
+ * translation remains available to model the future held-result contract.
  */
 export function translateDshPostDecision(decision: RuntimeDecision): DshPostToolDecision {
   if (decision.decision === 'allow' || decision.decision === 'warn') {

@@ -99,6 +99,10 @@ describe('AgentGuard DSH runtime plugin', () => {
       }),
       /requires minimumDecision/
     );
+    assert.throws(
+      () => apply(context, { runtime: { postResponseMode: 'invalid' as 'audit' } }),
+      /unsupported AgentGuard DSH post-response mode/
+    );
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {

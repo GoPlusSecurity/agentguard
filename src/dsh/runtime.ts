@@ -9,7 +9,9 @@ import {
 import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent } from '../runtime/types.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
+  mergeDshPostDecisions,
   mergeDshPreDecisions,
+  translateDshPostDecision,
   translateDshPreDecision,
 } from './enforcement-adapter.js';
 import {
@@ -21,9 +23,10 @@ export const DSH_RUNTIME_MODE = 'observe' as const;
 export const DSH_PROTECT_MODE = 'protect' as const;
 export type DshRuntimeMode = 'off' | typeof DSH_RUNTIME_MODE | typeof DSH_PROTECT_MODE;
 export type DshRuntimeFailureMode = 'allow' | 'deny';
+export type DshPostResponseMode = 'audit' | 'block-malicious';
 
 export interface DshRuntimeConfig {
-  /** `protect` enforces pre-execute policy; post-execute remains observation-only. */
+  /** `protect` enforces pre-execute policy and enables explicit post containment. */
   mode?: DshRuntimeMode;
   /** Unexpected evaluator failures fail closed by default in protect mode. */
   failureMode?: DshRuntimeFailureMode;
@@ -31,6 +34,8 @@ export interface DshRuntimeConfig {
   attribution?: DshRuntimeAttributionConfig;
   /** Per-owner monotonic decision floors; cannot weaken shared policy. */
   ownerPolicies?: DshOwnerPolicies;
+  /** `block-malicious` suppresses post-execute results only when policy returns block. */
+  postResponseMode?: DshPostResponseMode;
 }
 
 export interface DshRuntimeAttributionConfig {
@@ -264,12 +269,31 @@ export async function observeDshToolResult(
   );
 }
 
+export async function protectDshToolResult(
+  exec: DshToolExecution,
+  result: DshToolExecutionResult,
+  dependencies: DshRuntimeDependencies = {}
+): Promise<DshRuntimeObservation | null> {
+  if (isAgentGuardDshTool(exec.name)) return null;
+  const action = buildDshRuntimeAction(exec, dependencies.attribution);
+  if (action.actionType !== 'network' && action.actionType !== 'browser') return null;
+  action.metadata = {
+    ...action.metadata,
+    runtimePhase: 'post',
+    hookPhase: 'post',
+    responseIsError: result.isError,
+    ...responseMetadata(result),
+  };
+  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
+  return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, 'block-only');
+}
+
 async function evaluateAndAuditDshAction(
   action: RuntimeAction,
   config: AgentGuardConfig,
   dependencies: DshRuntimeDependencies,
   runtimeMode: Exclude<DshRuntimeMode, 'off'>,
-  enforcementApplied: boolean
+  enforcementApplied: boolean | 'block-only'
 ): Promise<DshRuntimeObservation> {
   const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
   const sharedEvaluation = await evaluate({
@@ -282,9 +306,10 @@ async function evaluateAndAuditDshAction(
   const evaluation = applyDshOwnerPolicy(sharedEvaluation, action, dependencies.ownerPolicies);
   const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
   const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
-  const remainingGates = runtimeMode === DSH_PROTECT_MODE && phase === 'pre'
-    ? []
-    : shadowPlan.enforcementGates;
+  const decisionApplied = enforcementApplied === 'block-only'
+    ? phase === 'post' && evaluation.decision.decision === 'block'
+    : enforcementApplied;
+  const remainingGates = decisionApplied ? [] : shadowPlan.enforcementGates;
   const event: RuntimeAuditEvent = {
     ...action,
     actionId: evaluation.decision.actionId,
@@ -298,8 +323,8 @@ async function evaluateAndAuditDshAction(
       evaluation: 'local-oss',
       policySource: evaluation.policySource,
       runtimeMode,
-      enforcementApplied,
-      ...(enforcementApplied ? { hookDecisionApplied: shadowPlan.hookDecision } : {}),
+      enforcementApplied: decisionApplied,
+      ...(decisionApplied ? { hookDecisionApplied: shadowPlan.hookDecision } : {}),
       shadowHookDecision: shadowPlan.hookDecision,
       shadowDisposition: shadowPlan.disposition,
       enforcementGates: remainingGates,
@@ -369,6 +394,31 @@ export function createDshPostExecuteObserver(
     }
     // Response observations are audit-only and never replace or block the result.
     return next();
+  };
+}
+
+export function createDshPostExecuteProtector(
+  dependencies: DshRuntimeDependencies = {}
+): (
+  exec: DshToolExecution,
+  result: DshToolExecutionResult,
+  next: DshPostExecuteNext
+) => Promise<DshPostToolDecision> {
+  return async (exec, result, next) => {
+    let observed: DshRuntimeObservation | null;
+    try {
+      observed = await protectDshToolResult(exec, result, dependencies);
+    } catch (error) {
+      dependencies.onError?.(error, exec);
+      // Post-result evaluation has no resumable failure channel; preserve downstream behavior.
+      return next();
+    }
+    const downstream = await next();
+    if (!observed || observed.evaluation.decision.decision !== 'block') return downstream;
+    return mergeDshPostDecisions(
+      translateDshPostDecision(observed.evaluation.decision),
+      downstream
+    );
   };
 }
 
