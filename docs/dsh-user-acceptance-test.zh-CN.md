@@ -50,6 +50,13 @@ DSH 原生审批是工具调用之外的 UI/会话事件。模型在审批结束
 
 DSH 集成使用 DSH 原生 approval service。`~/.agentguard/approvals.json` 属于 AgentGuard CLI 的独立审批流程，不是 DSH 的对接点，不得据此判断 DSH 是否完成审批接线，也不要将两个审批队列串联。
 
+不要在被测 DSH shell 工具体内使用 `tail -1 ~/.agentguard/audit.jsonl`、执行前后行数差或读取 `approvals.json` 来判断当前调用。AgentGuard 在 shell 工具体开始前就写入 pre-execute audit，因此：
+
+- 工具体内的“执行前”计数已经包含当前调用，前后差可能为 0；
+- 后续诊断 shell 会先写入自己的 `allow/low` 记录，`tail -1` 读到的是诊断命令自身，而不是上一条审批探针；
+- 必须通过 audit 的 `metadata.callId` 与 DSH session 的 `tool/call.callId` 精确关联，不能按文件尾部位置猜测；
+- DSH 审批结果只看 session 的 `approval/asked` / `approval/decided`，不看 CLI `approvals.json`。
+
 ## 4. 验收流程
 
 ### UAT-01：工具可用性
