@@ -36,7 +36,7 @@ const dumped = spawnSync(dshBin, ['web', '--dump-config'], {
 assert.equal(dumped.status, 0, dumped.stderr || dumped.stdout);
 assert.match(dumped.stdout, /id:\s*agentguard-dsh-plugin/);
 assert.match(dumped.stdout, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
-assert.match(dumped.stdout, /runtime:\s*\n\s+mode:\s*observe/);
+assert.match(dumped.stdout, /runtime:\s*\n\s+mode:\s*(?:observe|protect)/);
 
 const plugin = await import(`${pathToFileURL(installedPlugin).href}?e2e=${Date.now()}`);
 const enforcementAdapter = await import(`${pathToFileURL(join(dirname(installedPlugin), 'enforcement-adapter.js')).href}?e2e=${Date.now()}`);

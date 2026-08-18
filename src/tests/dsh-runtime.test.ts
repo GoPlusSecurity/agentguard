@@ -8,6 +8,7 @@ import {
   createDshPreExecuteProtector,
   isAgentGuardDshTool,
   mapDshToolToRuntimeAction,
+  normalizeDshRuntimeAttribution,
   observeDshToolCall,
   observeDshToolResult,
   protectDshToolCall,
@@ -80,8 +81,43 @@ describe('DSH runtime Phase 2A observer', () => {
       callId: 'call-1',
       rootCallId: 'root-1',
       nested: true,
+      invocationSource: 'nested-tool',
+      sessionOrigin: 'top-level',
       sourceAttribution: 'unknown',
     });
+  });
+
+  it('attributes exact configured tool owners and preserves verified DSH call context', () => {
+    const attribution = normalizeDshRuntimeAttribution({
+      toolOwners: { bash: '@deepseek-ai/dsh-tool-bash' },
+    });
+    const action = buildDshRuntimeAction(execution({
+      parent: Symbol('parent'),
+      agent: {
+        id: 'session-1',
+        session: {
+          header: {
+            cwd: '/workspace',
+            origin: 'subagent',
+            delegationDepth: 2,
+            agentPreset: 'researcher',
+          },
+        },
+      },
+    }), attribution);
+
+    assert.equal(action.metadata?.sourceAttribution, 'configured-tool-owner');
+    assert.equal(action.metadata?.sourceOwner, '@deepseek-ai/dsh-tool-bash');
+    assert.equal(action.metadata?.invocationSource, 'nested-tool');
+    assert.equal(action.metadata?.sessionOrigin, 'subagent');
+    assert.equal(action.metadata?.delegationDepth, 2);
+    assert.equal(action.metadata?.agentPreset, 'researcher');
+
+    assert.throws(() => normalizeDshRuntimeAttribution({ toolOwners: [] }), /must be an object/);
+    assert.throws(
+      () => normalizeDshRuntimeAttribution({ toolOwners: { bash: 'bad owner with spaces' } }),
+      /invalid AgentGuard DSH owner id/
+    );
   });
 
   it('preserves native DSH workspace and network request context', () => {

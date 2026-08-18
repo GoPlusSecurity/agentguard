@@ -89,6 +89,10 @@ describe('AgentGuard DSH runtime plugin', () => {
       () => apply(context, { runtime: { failureMode: 'invalid' as 'deny' } }),
       /unsupported AgentGuard DSH runtime failure mode/
     );
+    assert.throws(
+      () => apply(context, { runtime: { attribution: { toolOwners: { bash: 'invalid owner' } } } }),
+      /invalid AgentGuard DSH owner id/
+    );
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {

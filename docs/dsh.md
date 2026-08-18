@@ -63,7 +63,7 @@ If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web proces
 | Observe network responses | Runtime | Uses native `tools/post-execute`; status, content type, headers, bounded text preview, and explicit byte counts feed shared anomaly detection without changing results. |
 | Summarize recent runtime decisions | Runtime | Bounded local aggregation; raw tool input and reason evidence are omitted. |
 | Apply allow, warn, approve, or block decisions inside DSH | Opt-in `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; post-response decisions remain audit-only. |
-| Attribute a call to its source plugin | No | Recorded as `unknown`; AgentGuard does not infer ownership from a tool name. |
+| Attribute a call to its source plugin | Partial | Exact operator-configured tool-owner bindings are recorded; unmapped tools remain `unknown` and AgentGuard does not guess. |
 
 Installing the bundle is non-disruptive because its packaged composition uses `observe`. Changing the runtime row to `protect` is the explicit opt-in for real-time pre-execute enforcement.
 
@@ -500,7 +500,7 @@ Changes that alter JSON field meaning or remove a field require a report schema 
 - Repository scanning does not prove that an npm package with the same name contains the same files.
 - The scanner does not resolve transitive dependencies into the plugin's capability profile.
 - The current scanner reports a plugin in isolation rather than the final composed profile and every interaction between bundles.
-- Runtime source-plugin attribution remains unavailable because DSH does not provide a stable ownership field on lifecycle events.
+- Runtime source-plugin attribution accepts exact operator-configured tool-owner bindings. Automatic native attribution remains unavailable because DSH does not provide a stable ownership field on lifecycle events.
 - Runtime path relevance is a heuristic. It does not yet resolve package-manager `files`, ignore rules, exports, lifecycle reachability, third-party provenance, or every Cordis composition edge.
 - Phase 1.3 uses a bounded source region for compound auto-update evidence rather than a full language parser or data-flow graph. Unusually large updater functions can therefore still require manual review.
 - Prompt-delivery detection recognizes common DSH and model APIs but cannot prove that every string reaches a model, or that every active instruction artifact is enabled by the final profile.

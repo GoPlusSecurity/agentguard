@@ -48,6 +48,8 @@ describe('DSH runtime audit summary', () => {
         metadata: {
           runtimeMode: 'observe', runtimePhase: 'post', nested: true,
           shadowDisposition: 'accept-result', enforcementGates: [],
+          invocationSource: 'nested-tool', sessionOrigin: 'subagent',
+          sourceAttribution: 'configured-tool-owner', sourceOwner: '@example/network-plugin',
         },
       }),
       event({
@@ -70,6 +72,10 @@ describe('DSH runtime audit summary', () => {
     assert.equal(summary.inspected, 3);
     assert.equal(summary.malformedLines, 1);
     assert.equal(summary.nestedCalls, 1);
+    assert.deepEqual(summary.sourceAttributions, { unknown: 2, 'configured-tool-owner': 1 });
+    assert.deepEqual(summary.invocationSources, { unknown: 2, 'nested-tool': 1 });
+    assert.deepEqual(summary.sessionOrigins, { unknown: 2, subagent: 1 });
+    assert.deepEqual(summary.topSourceOwners, [{ owner: '@example/network-plugin', count: 1 }]);
     assert.deepEqual(summary.decisions, { require_approval: 1, allow: 1, block: 1 });
     assert.deepEqual(summary.actionTypes, { shell: 1, file_read: 1, file_write: 1 });
     assert.deepEqual(summary.riskLevels, { high: 1, safe: 1, critical: 1 });

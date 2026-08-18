@@ -23,6 +23,12 @@ export interface DshRuntimeConfig {
   mode?: DshRuntimeMode;
   /** Unexpected evaluator failures fail closed by default in protect mode. */
   failureMode?: DshRuntimeFailureMode;
+  /** Operator-authored exact tool-name to plugin/package owner bindings. */
+  attribution?: DshRuntimeAttributionConfig;
+}
+
+export interface DshRuntimeAttributionConfig {
+  readonly toolOwners?: Readonly<Record<string, string>>;
 }
 
 export interface DshToolExecution {
@@ -36,6 +42,9 @@ export interface DshToolExecution {
     readonly session?: {
       readonly header?: {
         readonly cwd?: unknown;
+        readonly origin?: unknown;
+        readonly delegationDepth?: unknown;
+        readonly agentPreset?: unknown;
       };
     };
   };
@@ -83,6 +92,7 @@ export interface DshRuntimeDependencies {
   fetchPolicyFor?: (config: AgentGuardConfig) => (() => Promise<import('../runtime/types.js').EffectiveRuntimePolicy | null>) | undefined;
   onError?: (error: unknown, exec: DshToolExecution) => void;
   runtimeMode?: Exclude<DshRuntimeMode, 'off'>;
+  attribution?: DshRuntimeAttributionConfig;
 }
 
 export interface DshRuntimeObservation {
@@ -108,6 +118,34 @@ const NETWORK_TOOLS = new Set([
   'web_fetch', 'fetch', 'browser', 'browser_navigate', 'open_url', 'visit_url',
   'http_request', 'download', 'navigate',
 ]);
+const DSH_OWNER_ID_PATTERN = /^[A-Za-z0-9@][A-Za-z0-9@._/:-]{0,159}$/;
+const MAX_DSH_TOOL_OWNER_BINDINGS = 500;
+
+/** Validate and snapshot operator-authored DSH tool ownership bindings. */
+export function normalizeDshRuntimeAttribution(value: unknown): DshRuntimeAttributionConfig {
+  if (value === undefined) return {};
+  const attribution = asRecord(value);
+  if (!attribution) throw new Error('AgentGuard DSH runtime attribution must be an object');
+  const rawOwners = attribution.toolOwners;
+  if (rawOwners === undefined) return {};
+  const owners = asRecord(rawOwners);
+  if (!owners) throw new Error('AgentGuard DSH runtime attribution.toolOwners must be an object');
+  const entries = Object.entries(owners);
+  if (entries.length > MAX_DSH_TOOL_OWNER_BINDINGS) {
+    throw new Error(`AgentGuard DSH runtime attribution.toolOwners supports at most ${MAX_DSH_TOOL_OWNER_BINDINGS} bindings`);
+  }
+  const toolOwners: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [toolName, ownerValue] of entries) {
+    if (!toolName || toolName !== toolName.trim() || toolName.length > 160) {
+      throw new Error('AgentGuard DSH runtime attribution tool names must be non-empty exact names of at most 160 characters');
+    }
+    if (typeof ownerValue !== 'string' || !DSH_OWNER_ID_PATTERN.test(ownerValue)) {
+      throw new Error(`invalid AgentGuard DSH owner id for tool ${JSON.stringify(toolName)}`);
+    }
+    toolOwners[toolName] = ownerValue;
+  }
+  return { toolOwners };
+}
 
 /** AgentGuard tools are excluded so the scanner cannot recursively police itself. */
 export function isAgentGuardDshTool(name: string): boolean {
@@ -127,12 +165,20 @@ export function mapDshToolToRuntimeAction(name: string): RuntimeActionType {
   return 'other';
 }
 
-export function buildDshRuntimeAction(exec: DshToolExecution): RuntimeAction {
+export function buildDshRuntimeAction(
+  exec: DshToolExecution,
+  attribution: DshRuntimeAttributionConfig = {}
+): RuntimeAction {
   const actionType = mapDshToolToRuntimeAction(exec.name);
   const args = asRecord(exec.arguments);
-  const sessionCwd = firstString(exec.agent?.session?.header?.cwd);
+  const sessionHeader = exec.agent?.session?.header;
+  const sessionCwd = firstString(sessionHeader?.cwd);
   const explicitCwd = args ? firstString(args.workdir, args.cwd, args.working_directory) : '';
   const effectiveCwd = resolveDshCwd(explicitCwd, sessionCwd);
+  const sourceOwner = configuredToolOwner(exec.name, attribution);
+  const agentPreset = firstString(sessionHeader?.agentPreset);
+  const delegationDepth = nonNegativeInteger(sessionHeader?.delegationDepth);
+  const sessionOrigin = sessionHeader?.origin === 'subagent' ? 'subagent' : 'top-level';
   return {
     sessionId: stringValue(exec.agent?.id) || `dsh:${stringValue(exec.rootCallId) || stringValue(exec.callId)}`,
     agentHost: 'dsh',
@@ -145,7 +191,12 @@ export function buildDshRuntimeAction(exec: DshToolExecution): RuntimeAction {
       callId: stringValue(exec.callId),
       rootCallId: stringValue(exec.rootCallId),
       nested: exec.parent !== undefined,
-      sourceAttribution: 'unknown',
+      invocationSource: exec.parent === undefined ? 'model-direct' : 'nested-tool',
+      sessionOrigin,
+      ...(delegationDepth !== undefined ? { delegationDepth } : {}),
+      ...(agentPreset ? { agentPreset } : {}),
+      sourceAttribution: sourceOwner ? 'configured-tool-owner' : 'unknown',
+      ...(sourceOwner ? { sourceOwner } : {}),
       ...actionMetadata(actionType, args),
     },
   };
@@ -158,7 +209,7 @@ export async function observeDshToolCall(
   if (isAgentGuardDshTool(exec.name)) return null;
 
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  const action = buildDshRuntimeAction(exec);
+  const action = buildDshRuntimeAction(exec, dependencies.attribution);
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(
     action,
@@ -176,7 +227,7 @@ export async function protectDshToolCall(
   if (isAgentGuardDshTool(exec.name)) return null;
 
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  const action = buildDshRuntimeAction(exec);
+  const action = buildDshRuntimeAction(exec, dependencies.attribution);
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, true);
 }
@@ -187,7 +238,7 @@ export async function observeDshToolResult(
   dependencies: DshRuntimeDependencies = {}
 ): Promise<DshRuntimeObservation | null> {
   if (isAgentGuardDshTool(exec.name)) return null;
-  const action = buildDshRuntimeAction(exec);
+  const action = buildDshRuntimeAction(exec, dependencies.attribution);
   if (action.actionType !== 'network' && action.actionType !== 'browser') return null;
   action.metadata = {
     ...action.metadata,
@@ -425,6 +476,17 @@ function resolveDshCwd(explicitCwd: string, sessionCwd: string): string {
   if (!explicitCwd) return sessionCwd;
   if (isAbsolute(explicitCwd) || !sessionCwd) return explicitCwd;
   return resolve(sessionCwd, explicitCwd);
+}
+
+function configuredToolOwner(name: string, attribution: DshRuntimeAttributionConfig): string {
+  const owners = attribution.toolOwners;
+  if (!owners || !Object.hasOwn(owners, name)) return '';
+  const owner = owners[name];
+  return typeof owner === 'string' && DSH_OWNER_ID_PATTERN.test(owner) ? owner : '';
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -22,6 +22,9 @@ The npm bundle continues to compose `observe` by default so installing an update
         runtime:
           mode: protect
           failureMode: deny
+          attribution:
+            toolOwners:
+              find_dsh_plugin: dsh-find-plugin
 ```
 
 `failureMode` applies only to unexpected evaluator failures in `protect` mode. It defaults to `deny`. Set it to `allow` only for a deliberate compatibility rollout. Audit-file write failures do not erase a successfully evaluated policy decision and do not disable enforcement.
@@ -62,14 +65,18 @@ The post protocol adapter and containment matrix remain available for future DSH
 Events are written to `~/.agentguard/audit.jsonl` with:
 
 - native call/root identities and nested-call state;
+- verified invocation context (`model-direct` or `nested-tool`), top-level/subagent origin, delegation depth, and agent preset when DSH supplies them;
+- `sourceAttribution: "configured-tool-owner"` plus `sourceOwner` for exact operator-configured tool ownership bindings;
 - shared decision, risk score, risk level, reason codes, and policy version;
 - `runtimeMode`, `runtimePhase`, and `enforcementApplied`;
 - the translated hook decision and disposition;
-- `sourceAttribution: "unknown"` when DSH supplies no reliable owner.
+- `sourceAttribution: "unknown"` when no reliable owner binding exists.
+
+`runtime.attribution.toolOwners` is an exact, case-sensitive map from a DSH tool name to a stable plugin or package id. It is operator-authored trust metadata, not a tool-name heuristic. Owner ids are bounded and validated, duplicate/ambiguous wildcard matching is not supported, and an unmapped tool remains `unknown`. Do not bind a name when another agent scope may shadow it with a different implementation.
 
 In `protect`, pre-execute events set `enforcementApplied: true` and record the applied DSH hook decision. Post-execute events remain `false`. DSH session events are the source of truth for the final human approval outcome.
 
-`agentguard_dsh_runtime_summary` reads only the bounded final 1 MiB of the audit log and aggregates up to 1,000 recent DSH events. It reports decisions, action types, risks, phases, modes, applied-enforcement count, dispositions, gates, reason-code counts, and nested calls. Raw tool inputs and reason evidence are never returned to the model. An exact optional `sessionId` filter isolates one DSH call tree.
+`agentguard_dsh_runtime_summary` reads only the bounded final 1 MiB of the audit log and aggregates up to 1,000 recent DSH events. It reports decisions, action types, risks, phases, modes, applied-enforcement count, dispositions, gates, reason-code counts, nested calls, attribution coverage, invocation sources, session origins, and the top configured owners. Raw tool inputs and reason evidence are never returned to the model. An exact optional `sessionId` filter isolates one DSH call tree.
 
 ## Security parity
 
@@ -97,4 +104,4 @@ The real DSH `ToolRuntime`, `ApprovalService`, and `Session` tests cover:
 
 ## Remaining host limitation
 
-DSH currently supplies no reliable source-plugin ownership field on the lifecycle event. AgentGuard records the tool name and explicit `unknown` attribution rather than guessing. Plugin-specific trust cannot silently bypass policy. When DSH exposes a stable tool-owner/provider identity, it can be added to the adapter without changing the shared evaluator.
+DSH currently supplies no reliable source-plugin ownership field on the lifecycle event. AgentGuard therefore supports exact operator-configured bindings and otherwise records explicit `unknown` attribution rather than guessing. Plugin-specific trust cannot silently bypass policy. When DSH exposes a stable tool-owner/provider identity, it can supersede configured bindings without changing the shared evaluator.

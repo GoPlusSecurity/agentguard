@@ -241,7 +241,7 @@ http://127.0.0.1:3080/
 以下行为属于当前已确认边界：
 
 - 网络工具返回的恶意响应目前只记录 post-execute 审计，不阻断或替换结果；DSH 尚无可恢复的 post-result 审批协议。
-- `sourceAttribution` 当前可能为 `unknown`；DSH lifecycle 尚未提供可靠的来源插件/工具所有者字段。
+- `sourceAttribution` 对 `runtime.attribution.toolOwners` 中精确配置的工具可标记为 `configured-tool-owner`；未配置工具仍为 `unknown`，因为 DSH lifecycle 尚未提供可靠的原生来源插件/工具所有者字段。
 - 运行时策略目前按工具与动作生效，还不能按已归因插件建立独立信任策略。
 - 静态扫描结论是安装决策辅助，不是安全认证。
 - DSH 模型不一定能看到 UI 审批过程；审批是否发生以 session 的 `approval/asked` / `approval/decided` 事件为准。

@@ -21,6 +21,11 @@ export interface DshRuntimeReasonCount {
   count: number;
 }
 
+export interface DshRuntimeSourceOwnerCount {
+  owner: string;
+  count: number;
+}
+
 export interface DshRuntimeSummary {
   total: number;
   inspected: number;
@@ -37,6 +42,10 @@ export interface DshRuntimeSummary {
   enforcementGated: number;
   topReasons: DshRuntimeReasonCount[];
   nestedCalls: number;
+  sourceAttributions: Partial<Record<'configured-tool-owner' | 'unknown', number>>;
+  invocationSources: Partial<Record<'model-direct' | 'nested-tool' | 'unknown', number>>;
+  sessionOrigins: Partial<Record<'top-level' | 'subagent' | 'unknown', number>>;
+  topSourceOwners: DshRuntimeSourceOwnerCount[];
   latestActionId?: string;
   latestPolicyVersion?: string;
 }
@@ -74,6 +83,10 @@ export function summarizeDshRuntimeAudit(
   const phases: DshRuntimeSummary['phases'] = {};
   const runtimeModes: DshRuntimeSummary['runtimeModes'] = {};
   const shadowDispositions: DshRuntimeSummary['shadowDispositions'] = {};
+  const sourceAttributions: DshRuntimeSummary['sourceAttributions'] = {};
+  const invocationSources: DshRuntimeSummary['invocationSources'] = {};
+  const sessionOrigins: DshRuntimeSummary['sessionOrigins'] = {};
+  const sourceOwners = new Map<string, number>();
   const reasons = new Map<string, number>();
   let nestedCalls = 0;
   let enforcementGated = 0;
@@ -96,6 +109,24 @@ export function summarizeDshRuntimeAudit(
       enforcementGated++;
     }
     if (event.metadata?.nested === true) nestedCalls++;
+    const sourceAttribution = event.metadata?.sourceAttribution === 'configured-tool-owner'
+      ? 'configured-tool-owner'
+      : 'unknown';
+    increment(sourceAttributions, sourceAttribution);
+    const invocationSource = event.metadata?.invocationSource === 'model-direct'
+      || event.metadata?.invocationSource === 'nested-tool'
+      ? event.metadata.invocationSource
+      : 'unknown';
+    increment(invocationSources, invocationSource);
+    const sessionOrigin = event.metadata?.sessionOrigin === 'top-level'
+      || event.metadata?.sessionOrigin === 'subagent'
+      ? event.metadata.sessionOrigin
+      : 'unknown';
+    increment(sessionOrigins, sessionOrigin);
+    const sourceOwner = normalizedSourceOwner(event.metadata?.sourceOwner);
+    if (sourceAttribution === 'configured-tool-owner' && sourceOwner) {
+      sourceOwners.set(sourceOwner, (sourceOwners.get(sourceOwner) ?? 0) + 1);
+    }
     for (const reason of event.reasons ?? []) {
       if (typeof reason.code === 'string' && reason.code) {
         reasons.set(reason.code, (reasons.get(reason.code) ?? 0) + 1);
@@ -123,9 +154,24 @@ export function summarizeDshRuntimeAudit(
       .slice(0, 10)
       .map(([code, count]) => ({ code, count })),
     nestedCalls,
+    sourceAttributions,
+    invocationSources,
+    sessionOrigins,
+    topSourceOwners: [...sourceOwners.entries()]
+      .sort(([leftOwner, leftCount], [rightOwner, rightCount]) => rightCount - leftCount || leftOwner.localeCompare(rightOwner))
+      .slice(0, 10)
+      .map(([owner, count]) => ({ owner, count })),
     ...(latest?.actionId ? { latestActionId: latest.actionId } : {}),
     ...(latest?.policyVersion ? { latestPolicyVersion: latest.policyVersion } : {}),
   };
+}
+
+function normalizedSourceOwner(value: unknown): string {
+  return typeof value === 'string'
+    && value.length <= 160
+    && /^[A-Za-z0-9@][A-Za-z0-9@._/:-]*$/.test(value)
+    ? value
+    : '';
 }
 
 const SHADOW_DISPOSITIONS = new Set<DshShadowDisposition>([

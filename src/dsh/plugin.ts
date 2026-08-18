@@ -9,6 +9,7 @@ import {
   createDshPostExecuteObserver,
   createDshPreExecuteObserver,
   createDshPreExecuteProtector,
+  normalizeDshRuntimeAttribution,
   type DshRuntimeConfig,
   type DshRuntimeDependencies,
 } from './runtime.js';
@@ -400,6 +401,10 @@ export function createAgentGuardDshRuntimeSummaryTool(
           enforcementGated: { type: 'number' },
           topReasons: { type: 'array' },
           nestedCalls: { type: 'number' },
+          sourceAttributions: { type: 'object' },
+          invocationSources: { type: 'object' },
+          sessionOrigins: { type: 'object' },
+          topSourceOwners: { type: 'array' },
           latestActionId: { type: 'string' },
           latestPolicyVersion: { type: 'string' },
           modelSummary: { type: 'string' },
@@ -409,6 +414,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
           'actionTypes', 'riskLevels', 'phases', 'topReasons', 'nestedCalls', 'modelSummary',
           'runtimeModes', 'enforcementApplied',
           'shadowDispositions', 'enforcementGated',
+          'sourceAttributions', 'invocationSources', 'sessionOrigins', 'topSourceOwners',
         ],
         additionalProperties: false,
       },
@@ -426,6 +432,7 @@ export function createAgentGuardDshRuntimeSummaryTool(
           `AgentGuard summarized ${summary.total} recent DSH runtime observations.`,
           `${reviewCount} received warn, approval, or block decisions.`,
           `${summary.nestedCalls} were nested tool calls.`,
+          `${summary.sourceAttributions['configured-tool-owner'] ?? 0} had an operator-configured source owner.`,
           `${summary.enforcementApplied} pre-execute decisions were applied by protect mode.`,
           `${summary.enforcementGated} observations still have enforcement integration gates.`,
           'Only aggregate metadata is returned; raw tool inputs are omitted.',
@@ -444,6 +451,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   if (!['allow', 'deny'].includes(failureMode)) {
     throw new Error(`unsupported AgentGuard DSH runtime failure mode: ${String(failureMode)}`);
   }
+  const attribution = normalizeDshRuntimeAttribution(config.runtime?.attribution);
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
@@ -451,6 +459,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   if (runtimeMode !== 'off' && ctx.on) {
     const dependencies: DshRuntimeDependencies = {
       runtimeMode,
+      attribution,
       onError(error, exec) {
         ctx.logger?.warn(`AgentGuard DSH runtime ${runtimeMode} failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`);
       },
