@@ -297,4 +297,48 @@ describe('Agent template installers', () => {
     assert.deepEqual(config.plugins.allow, ['existing', 'agentguard']);
     assert.equal(config.plugins.entries.agentguard.enabled, true);
   });
+
+  it('installs Cline skill, hooks (copied directly, no shim), and runtime plugin', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-cline-'));
+    const result = installAgentTemplates('cline', { cwd: dir });
+
+    const skillDir = join(dir, '.cline', 'skills', 'agentguard');
+    const preHookPath = join(dir, '.cline', 'hooks', 'PreToolUse.js');
+    const postHookPath = join(dir, '.cline', 'hooks', 'PostToolUse.js');
+    const pluginDir = join(dir, '.cline', 'plugins', 'agentguard');
+    const sourceHookPath = join(
+      __dirname,
+      '..',
+      '..',
+      'skills',
+      'agentguard',
+      'scripts',
+      'cline-hook.js'
+    );
+
+    assert.equal(result.agent, 'cline');
+    assert.ok(existsSync(skillDir));
+    assert.ok(existsSync(preHookPath));
+    assert.ok(existsSync(postHookPath));
+    assert.ok(existsSync(join(pluginDir, 'index.ts')));
+    assert.ok(existsSync(join(pluginDir, 'package.json')));
+
+    // Hooks are the engine bridge copied verbatim — no spawnSync shim. Verifies
+    // the high-severity review fix where the shim could lose stdin.
+    const preContents = readFileSync(preHookPath, 'utf8');
+    const sourceContents = readFileSync(sourceHookPath, 'utf8');
+    assert.equal(preContents, sourceContents);
+    assert.equal(readFileSync(postHookPath, 'utf8'), sourceContents);
+    assert.ok(!preContents.includes('spawnSync'), 'hook should not be a spawn shim');
+    assert.ok(preContents.includes("#!/usr/bin/env node"), 'hook must have a node shebang');
+  });
+
+  it('makes Cline hooks executable so Cline can run them via shebang', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-cline-mode-'));
+    installAgentTemplates('cline', { cwd: dir });
+    if (process.platform === 'win32') return; // mode bits are a no-op on Windows
+    const { statSync } = require('node:fs') as typeof import('node:fs');
+    const mode = statSync(join(dir, '.cline', 'hooks', 'PreToolUse.js')).mode & 0o777;
+    assert.ok((mode & 0o111) !== 0, `expected executable bit on PreToolUse.js, got ${mode.toString(8)}`);
+  });
 });

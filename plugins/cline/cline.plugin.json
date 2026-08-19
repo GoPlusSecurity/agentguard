@@ -1,0 +1,12 @@
+{
+  "name": "agentguard",
+  "displayName": "GoPlus AgentGuard",
+  "version": "1.1.28",
+  "description": "Security guardrails for Cline — blocks risky shell, file, and network actions before they execute.",
+  "author": "GoPlusSecurity",
+  "homepage": "https://github.com/GoPlusSecurity/agentguard",
+  "license": "MIT",
+  "entry": "./index.ts",
+  "capabilities": ["hooks"],
+  "hooks": ["beforeTool", "afterTool"]
+}

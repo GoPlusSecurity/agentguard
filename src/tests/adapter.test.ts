@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
+import { ClineAdapter } from '../adapters/cline.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -498,6 +499,256 @@ describe('HermesAdapter', () => {
       });
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ClineAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ClineAdapter', () => {
+  const adapter = new ClineAdapter();
+
+  it('should have name "cline"', () => {
+    assert.equal(adapter.name, 'cline');
+  });
+
+  describe('parseInput', () => {
+    it('should parse Cline file-hook PreToolUse payload (tool_call shape)', () => {
+      const raw = {
+        hookName: 'tool_call',
+        taskId: 'conv-123',
+        workspaceRoots: ['/repo'],
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo hello' } },
+      };
+      const input = adapter.parseInput(raw);
+      assert.equal(input.toolName, 'run_commands');
+      assert.equal(input.eventType, 'pre');
+      assert.deepEqual(input.toolInput, { command: 'echo hello' });
+      assert.equal(input.sessionId, 'conv-123');
+      assert.equal(input.cwd, '/repo');
+    });
+
+    it('should parse Cline runtime-plugin payload (toolCall.toolName shape)', () => {
+      const raw = {
+        hookName: 'beforeTool',
+        toolCall: { id: 'c1', toolName: 'write_to_file', input: { path: '/tmp/x' } },
+      };
+      const input = adapter.parseInput(raw);
+      assert.equal(input.toolName, 'write_to_file');
+      assert.equal(input.eventType, 'pre');
+      assert.deepEqual(input.toolInput, { path: '/tmp/x' });
+    });
+
+    it('should parse Cline file-hook PostToolUse (tool_result) payload', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_result',
+        tool_call: { id: 'c1', name: 'write_to_file', input: { path: '/tmp/x' } },
+      });
+      assert.equal(input.eventType, 'post');
+      assert.equal(input.toolName, 'write_to_file');
+    });
+
+    it('should derive cwd from workspaceRoots[0] when cwd is absent', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        workspaceRoots: ['/repo', '/other'],
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'pwd' } },
+      });
+      assert.equal(input.cwd, '/repo');
+    });
+
+    it('should fall back to preToolUse.parameters when tool_call.input is empty', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'run_commands' },
+        preToolUse: { toolName: 'run_commands', parameters: { command: 'ls' } },
+      });
+      assert.deepEqual(input.toolInput, { command: 'ls' });
+    });
+
+    it('should handle missing fields gracefully', () => {
+      const input = adapter.parseInput({});
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+      assert.equal(input.eventType, 'pre');
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('should map shell tools to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('run_commands'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('execute_command'), 'exec_command');
+    });
+
+    it('should map write tools to write_file', () => {
+      assert.equal(adapter.mapToolToActionType('write_to_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('write_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('replace_in_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('editor'), 'write_file');
+    });
+
+    it('should map read tools to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('read_files'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
+    });
+
+    it('should split web_search from network tools', () => {
+      assert.equal(adapter.mapToolToActionType('web_search'), 'web_search');
+      assert.equal(adapter.mapToolToActionType('web_fetch'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('browser_action'), 'network_request');
+    });
+
+    it('should return null for unknown / out-of-scope tools', () => {
+      assert.equal(adapter.mapToolToActionType('use_mcp_tool'), null);
+      assert.equal(adapter.mapToolToActionType('ask_followup_question'), null);
+      assert.equal(adapter.mapToolToActionType(''), null);
+      assert.equal(adapter.mapToolToActionType('UnknownTool'), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('should build exec_command envelope from run_commands', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        taskId: 'task-1',
+        workspaceRoots: ['/repo'],
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'ls -la' } },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'exec_command');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).command, 'ls -la');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).cwd, '/repo');
+      assert.equal(envelope!.context.session_id, 'task-1');
+    });
+
+    it('should join run_commands.commands array into a single command string', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'run_commands',
+          input: { commands: ['pwd', 'ls'] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).command, 'pwd && ls');
+    });
+
+    it('should build write_file envelope from write_to_file', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'write_to_file', input: { path: '/project/.env' } },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'write_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/project/.env');
+    });
+
+    it('should build read_file envelope from read_files with files array', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'read_files',
+          input: { files: [{ path: '/tmp/readme.md' }] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'read_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/readme.md');
+    });
+
+    it('should prefer a sensitive path when read_files lists multiple files', () => {
+      // Locks in the medium-severity review fix: multi-file reads must not
+      // smuggle a sensitive target alongside benign ones into a single envelope.
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'read_files',
+          input: { files: ['/tmp/readme.md', '/project/.env', '/tmp/other.md'] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.path, '/project/.env');
+      assert.equal(data.sensitive_path, '/project/.env');
+      assert.deepEqual(data.paths, ['/tmp/readme.md', '/project/.env', '/tmp/other.md']);
+    });
+
+    it('should include the paths list for non-sensitive multi-file reads', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: {
+          id: 'c1',
+          name: 'read_files',
+          input: { paths: ['/tmp/a.md', '/tmp/b.md'] },
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.path, '/tmp/a.md');
+      assert.deepEqual(data.paths, ['/tmp/a.md', '/tmp/b.md']);
+      assert.equal(data.sensitive_path, undefined);
+    });
+
+    it('should build network_request envelope from web_fetch URL', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'web_fetch', input: { url: 'https://example.com/page' } },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'network_request');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'https://example.com/page');
+    });
+
+    it('should build web_search envelope from web_search query', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'web_search', input: { query: 'cline plugins' } },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'web_search');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).query, 'cline plugins');
+    });
+
+    it('should return null for unmapped tools', () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'use_mcp_tool', input: {} },
+      });
+      assert.equal(adapter.buildEnvelope(input), null);
+    });
+  });
+
+  describe('inferInitiatingSkill', () => {
+    it('should return null when Cline provides no skill metadata', async () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo' } },
+      });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, null);
+    });
+
+    it('should honor initiating_skill metadata when present', async () => {
+      const input = adapter.parseInput({
+        hookName: 'tool_call',
+        initiating_skill: 'my-cline-rule',
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo' } },
+      });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, 'my-cline-rule');
     });
   });
 });

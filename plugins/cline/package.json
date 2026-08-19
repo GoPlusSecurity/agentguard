@@ -1,0 +1,30 @@
+{
+  "name": "@goplus/agentguard-cline-plugin",
+  "version": "1.1.28",
+  "description": "GoPlus AgentGuard security guardrails for Cline. Hooks every tool call through the AgentGuard decision engine and blocks risky shell, file, and network actions before they execute.",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "keywords": [
+    "cline",
+    "cline-plugin",
+    "agentguard",
+    "security",
+    "ai-safety",
+    "tool-gate"
+  ],
+  "author": "GoPlusSecurity",
+  "license": "MIT",
+  "homepage": "https://github.com/GoPlusSecurity/agentguard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoPlusSecurity/agentguard.git",
+    "directory": "plugins/cline"
+  },
+  "peerDependencies": {
+    "@cline/core": "*",
+    "@goplus/agentguard": ">=1.1.28"
+  }
+}

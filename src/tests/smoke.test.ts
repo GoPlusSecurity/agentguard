@@ -15,6 +15,7 @@ import { SkillScanner } from '../scanner/index.js';
 const projectRoot = resolve(__dirname, '..', '..');
 const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'guard-hook.js');
 const HERMES_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'hermes-hook.js');
+const CLINE_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'cline-hook.js');
 const TRUST_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'trust-cli.js');
 const ACTION_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'action-cli.js');
 
@@ -51,6 +52,28 @@ function runHermesHookRaw(input: string): Promise<{
   stderr: string;
 }> {
   return runNodeHookRaw(HERMES_HOOK_PATH, input);
+}
+
+function runClineHook(
+  input: Record<string, unknown>,
+  env: Record<string, string> = {}
+): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return runNodeHook(CLINE_HOOK_PATH, input, env);
+}
+
+function runClineHookRaw(
+  input: string,
+  env: Record<string, string> = {}
+): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return runNodeHookRaw(CLINE_HOOK_PATH, input, env);
 }
 
 function runNodeHook(
@@ -351,6 +374,142 @@ describe('Smoke: hermes-hook.js E2E', () => {
     const payload = JSON.parse(stdout) as { action?: string; message?: string };
     assert.equal(payload.action, 'block');
     assert.ok(payload.message?.includes('invalid or missing Hermes hook payload'));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E2: cline-hook.js subprocess E2E
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Smoke: cline-hook.js E2E', () => {
+  it('should allow echo hello with empty JSON output', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      taskId: 't1',
+      tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo hello' } },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block rm -rf / with Cline cancel protocol', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      taskId: 't1',
+      tool_call: { id: 'c1', name: 'run_commands', input: { command: 'rm -rf /' } },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { cancel?: boolean; errorMessage?: string };
+    assert.equal(payload.cancel, true);
+    assert.ok(payload.errorMessage?.includes('AgentGuard'));
+  });
+
+  it('should map AgentGuard ask to Cline review (write to .env)', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      taskId: 't1',
+      tool_call: { id: 'c1', name: 'write_to_file', input: { path: '/project/.env' } },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { review?: boolean; cancel?: boolean; context?: string; errorMessage?: string };
+    // A .env write should not silently allow; it must be either review or cancel.
+    assert.ok(payload.review === true || payload.cancel === true,
+      `expected review or cancel, got ${JSON.stringify(payload)}`);
+    const message = payload.context || payload.errorMessage || '';
+    assert.ok(message.includes('AgentGuard'), 'should mention AgentGuard');
+  });
+
+  it('should accept the runtime-plugin toolCall.toolName payload shape', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'beforeTool',
+      toolCall: { id: 'c1', toolName: 'run_commands', input: { command: 'rm -rf /' } },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { cancel?: boolean };
+    assert.equal(payload.cancel, true);
+  });
+
+  it('should join run_commands.commands array before evaluating', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      tool_call: {
+        id: 'c1',
+        name: 'run_commands',
+        input: { commands: ['echo ok', 'rm -rf /'] },
+      },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { cancel?: boolean };
+    assert.equal(payload.cancel, true);
+  });
+
+  it('should allow post-tool events for audit-only handling', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_result',
+      tool_call: { id: 'c1', name: 'run_commands', input: { command: 'rm -rf /' } },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should pass through out-of-scope tools without engine evaluation', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      tool_call: { id: 'c1', name: 'use_mcp_tool', input: { server: 'x', tool: 'y' } },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block in-scope payloads missing required fields', async () => {
+    const { exitCode, stdout } = await runClineHook({
+      hookName: 'tool_call',
+      tool_call: { id: 'c1', name: 'run_commands', input: {} },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { cancel?: boolean; errorMessage?: string };
+    assert.equal(payload.cancel, true);
+    assert.ok(payload.errorMessage?.includes('missing command'));
+  });
+
+  it('should fail closed when the Cline engine cannot load for pre hooks', async () => {
+    const { exitCode, stdout } = await runClineHook(
+      {
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo hello' } },
+      },
+      { AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE: '1' }
+    );
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { cancel?: boolean; errorMessage?: string };
+    assert.equal(payload.cancel, true);
+    assert.ok(payload.errorMessage?.includes('unable to load Cline hook engine'));
+  });
+
+  it('should fail open with AGENTGUARD_CLINE_FAIL_OPEN=1 when the engine cannot load', async () => {
+    const { exitCode, stdout } = await runClineHook(
+      {
+        hookName: 'tool_call',
+        tool_call: { id: 'c1', name: 'run_commands', input: { command: 'echo hello' } },
+      },
+      {
+        AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE: '1',
+        AGENTGUARD_CLINE_FAIL_OPEN: '1',
+      }
+    );
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block invalid stdin without waiting for the stdin timeout', async () => {
+    const start = performance.now();
+    const { exitCode, stdout } = await runClineHookRaw('{not-json');
+    const elapsedMs = performance.now() - start;
+    assert.equal(exitCode, 0);
+    assert.ok(elapsedMs < 2000, `hook should exit promptly, took ${elapsedMs}ms`);
+    const payload = JSON.parse(stdout) as { cancel?: boolean; errorMessage?: string };
+    assert.equal(payload.cancel, true);
+    assert.ok(payload.errorMessage?.includes('invalid or missing Cline hook payload'));
   });
 });
 

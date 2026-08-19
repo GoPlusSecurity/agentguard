@@ -1,8 +1,8 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'cline';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,6 +21,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'cline') return installCline(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -240,10 +241,81 @@ function installQClaw(root: string, force: boolean): InstallResult {
   return { agent: 'qclaw', files: pluginResult.files };
 }
 
+function installCline(cwd: string | undefined, force: boolean): InstallResult {
+  // Cline reads file hooks from .cline/hooks/ and runtime plugins from
+  // .cline/plugins/ (project-local) or ~/.cline/* (user-global).
+  const clineRoot = cwd
+    ? join(cwd, '.cline')
+    : process.env.CLINE_HOME?.trim() || join(homedir(), '.cline');
+
+  const skillDir = join(clineRoot, 'skills', 'agentguard');
+  const preHookPath = join(clineRoot, 'hooks', 'PreToolUse.js');
+  const postHookPath = join(clineRoot, 'hooks', 'PostToolUse.js');
+  const pluginDir = join(clineRoot, 'plugins', 'agentguard');
+
+  // 1. Drop the shared skill (carries cline-hook.js and supporting scripts).
+  copyBundledSkill(skillDir, force);
+
+  // 2. Install Cline file hooks by copying cline-hook.js directly. The hook
+  //    branches on the incoming `hookName` (`tool_call` -> pre, `tool_result`
+  //    -> post), so the same script handles both events. Copying avoids an
+  //    extra process boundary and the stdin-inheritance footgun that comes
+  //    with shim scripts.
+  const hookSource = resolve(__dirname, '..', 'skills', 'agentguard', 'scripts', 'cline-hook.js');
+  if (!existsSync(hookSource)) {
+    throw new Error(`Bundled cline-hook.js not found at ${hookSource}. Reinstall @goplus/agentguard.`);
+  }
+  installClineHook(hookSource, preHookPath, force);
+  installClineHook(hookSource, postHookPath, force);
+
+  // 3. Copy the native runtime plugin (cline plugin install ~/.cline/plugins/agentguard).
+  copyBundledClinePlugin(pluginDir, force);
+
+  return {
+    agent: 'cline',
+    files: [skillDir, preHookPath, postHookPath, pluginDir],
+  };
+}
+
+function installClineHook(source: string, target: string, force: boolean): void {
+  if (existsSync(target) && !force) return;
+  mkdirSync(dirname(target), { recursive: true });
+  cpSync(source, target, { force });
+  // Cline hook files must be executable for the shebang to fire.
+  try {
+    chmodSync(target, 0o755);
+  } catch {
+    // Best-effort; Windows ignores the mode bits.
+  }
+}
+
+const CLINE_PLUGIN_REQUIRED_FILES = ['index.ts', 'package.json'];
+
+function copyBundledClinePlugin(targetDir: string, force: boolean): void {
+  // The published package ships `plugins/` (see package.json "files"), so this
+  // path is the same in-repo and in installed @goplus/agentguard.
+  const sourceDir = resolve(__dirname, '..', 'plugins', 'cline');
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Bundled Cline plugin not found at ${sourceDir}. Reinstall @goplus/agentguard.`);
+  }
+  if (!(existsSync(targetDir) && !force)) {
+    mkdirSync(dirname(targetDir), { recursive: true });
+    cpSync(sourceDir, targetDir, { recursive: true, force });
+  }
+  for (const required of CLINE_PLUGIN_REQUIRED_FILES) {
+    if (!existsSync(join(targetDir, required))) {
+      throw new Error(`Cline plugin install is incomplete: missing ${required} in ${targetDir}.`);
+    }
+  }
+}
+
 function writeIfAllowed(path: string, content: string, force: boolean): void {
   if (existsSync(path) && !force) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, { mode: path.endsWith('.sh') ? 0o755 : undefined });
+  const isExecutable =
+    path.endsWith('.sh') ||
+    /\/(\.cline|\.hermes)\/hooks\//.test(path); // Cline / Hermes file hooks must be +x.
+  writeFileSync(path, content, { mode: isExecutable ? 0o755 : undefined });
 }
 
 function copyBundledSkill(targetDir: string, force: boolean): void {
