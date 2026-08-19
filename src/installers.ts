@@ -1,8 +1,8 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'continue';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,6 +21,7 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'continue') return installContinue(options.cwd, Boolean(options.force));
   throw new Error(`Unsupported agent installer: ${agent}`);
 }
 
@@ -240,10 +241,158 @@ function installQClaw(root: string, force: boolean): InstallResult {
   return { agent: 'qclaw', files: pluginResult.files };
 }
 
+function installContinue(cwd: string | undefined, force: boolean): InstallResult {
+  // Continue's CLI (`cn`) reads hooks from `~/.continue/settings.json` and
+  // `~/.claude/settings.json` (plus cwd variants). We install into
+  // .continue/settings.local.json so Continue users on the same machine as a
+  // Claude Code install don't double-register.
+  //
+  // Hook contract is documented in continuedev/continue at
+  // extensions/cli/src/hooks/types.ts.
+  const continueRoot = cwd
+    ? join(cwd, '.continue')
+    : process.env.CONTINUE_GLOBAL_DIR?.trim() || join(homedir(), '.continue');
+
+  const skillDir = join(continueRoot, 'skills', 'agentguard');
+  const settingsPath = join(continueRoot, 'settings.local.json');
+
+  // 1. Drop the shared skill (carries continue-hook.js + supporting scripts).
+  copyBundledSkill(skillDir, force);
+
+  // 2. Resolve the absolute path of the bundled engine bridge. Continue
+  //    spawns the hook command directly, so a `node <absolute-path>` value
+  //    in settings.json is enough — no spawnSync shim, no stdin-passthrough
+  //    questions, and no extra process boundary.
+  const hookScriptPath = join(skillDir, 'scripts', 'continue-hook.js');
+
+  // 3. Merge AgentGuard into the user's existing Continue settings (preserve
+  //    any prior hooks under PreToolUse / PostToolUse).
+  mergeContinueSettings(settingsPath, hookScriptPath, force);
+
+  return {
+    agent: 'continue',
+    files: [skillDir, settingsPath],
+  };
+}
+
+function mergeContinueSettings(
+  settingsPath: string,
+  hookScriptPath: string,
+  force: boolean
+): void {
+  const existing: Record<string, unknown> = existsSync(settingsPath)
+    ? safeJsonParseObject(readFileSync(settingsPath, 'utf8'))
+    : {};
+  const hooks = (existing.hooks && typeof existing.hooks === 'object' && !Array.isArray(existing.hooks)
+    ? (existing.hooks as Record<string, unknown>)
+    : {});
+
+  const command = continueHookCommand(hookScriptPath);
+  const pre = ensureContinueHookEvent(hooks.PreToolUse, command, force);
+  const post = ensureContinueHookEvent(hooks.PostToolUse, command, force);
+
+  const merged = {
+    ...existing,
+    hooks: {
+      ...hooks,
+      PreToolUse: pre,
+      PostToolUse: post,
+    },
+  };
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', { mode: 0o600 });
+}
+
+/**
+ * Build a Continue hook command string that survives shell parsing of paths
+ * with spaces, single quotes, or backslashes.
+ *
+ * Continue's hook runner (`extensions/cli/src/hooks/hookRunner.ts`) executes
+ * `command` as a shell command, so JSON-quoting is wrong — JSON escapes are
+ * not shell escapes. POSIX-style single-quoting works on macOS/Linux; for
+ * Windows we wrap in `"..."` because cmd.exe does not honor single quotes.
+ *
+ * Embedded single quotes are handled by the POSIX trick `'\''` (close the
+ * single-quoted string, emit an escaped quote, re-open). Embedded double
+ * quotes on Windows are not allowed in paths by NTFS so we don't escape
+ * them — but we do guard with a clear error.
+ */
+function continueHookCommand(hookScriptPath: string): string {
+  if (process.platform === 'win32') {
+    if (hookScriptPath.includes('"')) {
+      throw new Error(
+        `Continue hook script path may not contain a double quote on Windows: ${hookScriptPath}`
+      );
+    }
+    return `node "${hookScriptPath}"`;
+  }
+  // POSIX-safe single-quote escaping: any ' in the path becomes '\''
+  const escaped = hookScriptPath.replace(/'/g, "'\\''");
+  return `node '${escaped}'`;
+}
+
+function ensureContinueHookEvent(existing: unknown, command: string, force: boolean): unknown[] {
+  const list = Array.isArray(existing) ? [...existing] : [];
+
+  // Dedup by substring ("continue-hook.js"), not exact equality, so a prior
+  // entry written by an older AgentGuard version (e.g. with JSON quoting
+  // instead of shell quoting) is recognized as ours and replaced, not
+  // appended-alongside.
+  const isAgentGuardEntry = (entry: unknown): boolean => {
+    if (!entry || typeof entry !== 'object') return false;
+    const hooks = (entry as Record<string, unknown>).hooks;
+    if (!Array.isArray(hooks)) return false;
+    return hooks.some((h) => {
+      if (!h || typeof h !== 'object') return false;
+      const cmd = (h as Record<string, unknown>).command;
+      return typeof cmd === 'string' && cmd.includes('continue-hook.js');
+    });
+  };
+
+  const hasExactMatch = list.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const hooks = (entry as Record<string, unknown>).hooks;
+    if (!Array.isArray(hooks)) return false;
+    return hooks.some((h) => {
+      if (!h || typeof h !== 'object') return false;
+      return (h as Record<string, unknown>).command === command;
+    });
+  });
+
+  // Idempotent fast path: exact-match entry already present and we're not
+  // being asked to rewrite — leave the list untouched.
+  if (hasExactMatch && !force) return list;
+
+  // Otherwise (forced, or stale-format AgentGuard entry present, or no entry
+  // at all): strip any prior AgentGuard entries and re-add canonically.
+  const filtered = list.filter((entry) => !isAgentGuardEntry(entry));
+  filtered.push({
+    matcher: '.*',
+    hooks: [{ type: 'command', command }],
+  });
+  return filtered;
+}
+
+function safeJsonParseObject(text: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through
+  }
+  return {};
+}
+
 function writeIfAllowed(path: string, content: string, force: boolean): void {
   if (existsSync(path) && !force) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, { mode: path.endsWith('.sh') ? 0o755 : undefined });
+  const isExecutable =
+    path.endsWith('.sh') ||
+    /\/(\.continue|\.hermes)\/hooks\//.test(path);
+  writeFileSync(path, content, { mode: isExecutable ? 0o755 : undefined });
 }
 
 function copyBundledSkill(targetDir: string, force: boolean): void {

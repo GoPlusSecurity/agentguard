@@ -297,4 +297,134 @@ describe('Agent template installers', () => {
     assert.deepEqual(config.plugins.allow, ['existing', 'agentguard']);
     assert.equal(config.plugins.entries.agentguard.enabled, true);
   });
+
+  it('installs Continue skill and merges PreToolUse / PostToolUse hooks into settings.local.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-continue-'));
+    const result = installAgentTemplates('continue', { cwd: dir });
+
+    const skillDir = join(dir, '.continue', 'skills', 'agentguard');
+    const settingsPath = join(dir, '.continue', 'settings.local.json');
+
+    assert.equal(result.agent, 'continue');
+    assert.ok(existsSync(skillDir));
+    assert.ok(existsSync(join(skillDir, 'scripts', 'continue-hook.js')));
+    assert.ok(existsSync(settingsPath));
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const pre = settings.hooks.PreToolUse;
+    const post = settings.hooks.PostToolUse;
+    assert.ok(Array.isArray(pre) && pre.length >= 1);
+    assert.ok(Array.isArray(post) && post.length >= 1);
+    assert.equal(pre[0].matcher, '.*');
+    const preCmd = pre[0].hooks[0].command;
+    assert.equal(pre[0].hooks[0].type, 'command');
+    assert.ok(preCmd.includes('continue-hook.js'));
+    assert.ok(/^node /.test(preCmd));
+  });
+
+  it("preserves a user's existing Continue hooks when merging AgentGuard", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-continue-existing-'));
+    const settingsPath = join(dir, '.continue', 'settings.local.json');
+    mkdirSync(join(dir, '.continue'), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          theme: 'dark',
+          hooks: {
+            PreToolUse: [
+              { matcher: 'run_terminal_command', hooks: [{ type: 'command', command: 'echo keep' }] },
+            ],
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    installAgentTemplates('continue', { cwd: dir });
+
+    const merged = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    assert.equal(merged.theme, 'dark');
+    const pre = merged.hooks.PreToolUse as Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>;
+    assert.ok(Array.isArray(pre) && pre.length >= 2);
+    const userEntry = pre.find((e) => e.matcher === 'run_terminal_command');
+    assert.ok(userEntry);
+    const guardEntry = pre.find((e) =>
+      e.hooks?.some((h) => typeof h.command === 'string' && h.command.includes('continue-hook.js'))
+    );
+    assert.ok(guardEntry);
+  });
+
+  it('is idempotent: re-running continue install does not duplicate AgentGuard entries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-continue-idempotent-'));
+    installAgentTemplates('continue', { cwd: dir });
+    installAgentTemplates('continue', { cwd: dir });
+
+    const settings = JSON.parse(
+      readFileSync(join(dir, '.continue', 'settings.local.json'), 'utf8')
+    );
+    const pre = settings.hooks.PreToolUse as Array<{ hooks: Array<{ command: string }> }>;
+    const guardEntries = pre.filter((e) =>
+      e.hooks.some((h) => h.command.includes('continue-hook.js'))
+    );
+    assert.equal(guardEntries.length, 1);
+  });
+
+  it('shell-quotes the Continue hook command so paths with spaces survive', () => {
+    // Lock in the medium-severity review fix: replacing JSON.stringify with
+    // POSIX single-quote escaping. Paths containing spaces and apostrophes
+    // must produce a command Continue's shell-based hook runner can parse.
+    const dir = mkdtempSync(join(tmpdir(), "agentguard-continue space's-"));
+    installAgentTemplates('continue', { cwd: dir });
+    const settings = JSON.parse(
+      readFileSync(join(dir, '.continue', 'settings.local.json'), 'utf8')
+    );
+    const cmd = settings.hooks.PreToolUse[0].hooks[0].command as string;
+    // On POSIX the command must wrap the path in single quotes (no JSON
+    // double-quoting). The Windows branch is exercised in CI on win32.
+    if (process.platform !== 'win32') {
+      assert.match(cmd, /^node '.*continue-hook\.js'$/, `got ${cmd}`);
+      // Apostrophes in the path must use the POSIX '\''
+      // close-escape-reopen trick. The tmp dir name contains one.
+      if (dir.includes("'")) {
+        assert.ok(cmd.includes("'\\''"), `expected '\\'' escape, got ${cmd}`);
+      }
+    }
+  });
+
+  it("recognizes a prior AgentGuard entry written with old JSON-quoted command (idempotent)", () => {
+    // Lock in the dedup-by-substring behavior: a Continue install written by
+    // an older AgentGuard version (which used JSON.stringify(...)) must be
+    // recognized as ours and replaced, not duplicated.
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-continue-stale-'));
+    const settingsPath = join(dir, '.continue', 'settings.local.json');
+    mkdirSync(join(dir, '.continue'), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: '.*',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'node "/old/path/continue-hook.js"', // JSON-quoted, stale
+                },
+              ],
+            },
+          ],
+        },
+      })
+    );
+
+    installAgentTemplates('continue', { cwd: dir });
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const guardEntries = (settings.hooks.PreToolUse as Array<{
+      hooks: Array<{ command: string }>;
+    }>).filter((e) => e.hooks.some((h) => h.command.includes('continue-hook.js')));
+    assert.equal(guardEntries.length, 1, 'stale entry must be replaced, not appended-alongside');
+  });
 });

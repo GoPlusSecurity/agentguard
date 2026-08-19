@@ -15,6 +15,7 @@ import { SkillScanner } from '../scanner/index.js';
 const projectRoot = resolve(__dirname, '..', '..');
 const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'guard-hook.js');
 const HERMES_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'hermes-hook.js');
+const CONTINUE_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'continue-hook.js');
 const TRUST_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'trust-cli.js');
 const ACTION_CLI_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'action-cli.js');
 
@@ -51,6 +52,17 @@ function runHermesHookRaw(input: string): Promise<{
   stderr: string;
 }> {
   return runNodeHookRaw(HERMES_HOOK_PATH, input);
+}
+
+function runContinueHook(
+  input: Record<string, unknown>,
+  env: Record<string, string> = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return runNodeHook(CONTINUE_HOOK_PATH, input, env);
+}
+
+function runContinueHookRaw(input: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return runNodeHookRaw(CONTINUE_HOOK_PATH, input);
 }
 
 function runNodeHook(
@@ -351,6 +363,219 @@ describe('Smoke: hermes-hook.js E2E', () => {
     const payload = JSON.parse(stdout) as { action?: string; message?: string };
     assert.equal(payload.action, 'block');
     assert.ok(payload.message?.includes('invalid or missing Hermes hook payload'));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E2: continue-hook.js subprocess E2E
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Smoke: continue-hook.js E2E', () => {
+  it('should allow echo hello with empty JSON output', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'run_terminal_command',
+      tool_input: { command: 'echo hello' },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block rm -rf / with Continue deny protocol', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'run_terminal_command',
+      tool_input: { command: 'rm -rf /' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: {
+        hookEventName?: string;
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+      };
+    };
+    assert.equal(payload.hookSpecificOutput?.hookEventName, 'PreToolUse');
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('AgentGuard'));
+  });
+
+  it('should map AgentGuard require_approval to Continue "ask" for .env writes', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'create_new_file',
+      tool_input: { filepath: '/project/.env', contents: 'SECRET=1' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    const decision = payload.hookSpecificOutput?.permissionDecision;
+    assert.ok(decision === 'ask' || decision === 'deny', `expected ask or deny, got ${decision}`);
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('AgentGuard'));
+  });
+
+  it('should pick a sensitive path from multi_edit even if listed later', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'multi_edit',
+      tool_input: {
+        edits: [
+          { filepath: '/repo/src/foo.ts' },
+          { filepath: '/repo/.env.production' },
+        ],
+      },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string };
+    };
+    assert.ok(
+      payload.hookSpecificOutput?.permissionDecision === 'ask' ||
+        payload.hookSpecificOutput?.permissionDecision === 'deny',
+      `multi_edit batch including .env.production must not be silently allowed`
+    );
+  });
+
+  it('should pass through out-of-scope tools (grep_search) without engine evaluation', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'grep_search',
+      tool_input: { query: 'foo' },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should allow PostToolUse events for audit-only handling', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'run_terminal_command',
+      tool_input: { command: 'rm -rf /' },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block in-scope payloads missing required fields', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'run_terminal_command',
+      tool_input: {},
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('missing command'));
+  });
+
+  it('should fail closed when the Continue engine cannot load for pre hooks', async () => {
+    const { exitCode, stdout } = await runContinueHook(
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'echo hello' },
+      },
+      { AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE: '1' }
+    );
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('unable to load Continue hook engine'));
+  });
+
+  it('should fail open with AGENTGUARD_CONTINUE_FAIL_OPEN=1 when the engine cannot load', async () => {
+    const { exitCode, stdout } = await runContinueHook(
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'echo hello' },
+      },
+      {
+        AGENTGUARD_TEST_FORCE_ENGINE_LOAD_FAILURE: '1',
+        AGENTGUARD_CONTINUE_FAIL_OPEN: '1',
+      }
+    );
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout), {});
+  });
+
+  it('should block invalid stdin without waiting for the stdin timeout', async () => {
+    const start = performance.now();
+    const { exitCode, stdout } = await runContinueHookRaw('{not-json');
+    const elapsedMs = performance.now() - start;
+    assert.equal(exitCode, 0);
+    assert.ok(elapsedMs < 2000, `hook should exit promptly, took ${elapsedMs}ms`);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('invalid or missing Continue hook payload'));
+  });
+
+  it('should FAIL CLOSED on malformed in-scope payload even with FAIL_OPEN=1', async () => {
+    // Lock in the high-severity review fix: the fail-open override exists
+    // for engine-unavailable cases, NOT for "we got a half-formed shell
+    // command and aren't sure what it is".
+    const { exitCode, stdout } = await runContinueHook(
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: {}, // missing command
+      },
+      { AGENTGUARD_CONTINUE_FAIL_OPEN: '1' }
+    );
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny',
+      `FAIL_OPEN must not bypass validation for in-scope tools, got ${JSON.stringify(payload)}`);
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('missing command'));
+  });
+
+  it('should FAIL CLOSED on invalid stdin even with FAIL_OPEN=1', async () => {
+    const { exitCode, stdout } = await runContinueHookRaw('{not-json');
+    // Even with FAIL_OPEN=1 we don't know what tool this would have been,
+    // so blocking is the only safe choice. Set the env via spawn.
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+  });
+
+  it('should reject multi_edit with a non-object edits[] entry', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'multi_edit',
+      tool_input: {
+        filepath: '/repo/src/foo.ts',
+        edits: ['oops, not an object'],
+      },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('edits[0] is not an object'));
+  });
+
+  it('should reject fetch_url_content with an unparseable URL', async () => {
+    const { exitCode, stdout } = await runContinueHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'fetch_url_content',
+      tool_input: { url: 'not a url at all' },
+    });
+    assert.equal(exitCode, 0);
+    const payload = JSON.parse(stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    assert.equal(payload.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(payload.hookSpecificOutput?.permissionDecisionReason?.includes('not parseable'));
   });
 });
 

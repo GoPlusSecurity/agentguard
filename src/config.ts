@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
-export type AgentGuardAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentGuardAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'continue';
 
 export interface AgentGuardConfig {
   version: 1;
@@ -226,7 +226,7 @@ function normalizeLevel(value: unknown): AgentGuardConfig['level'] | null {
 }
 
 function normalizeAgentHost(value: unknown): AgentGuardAgentHost | undefined {
-  return value === 'claude-code' || value === 'codex' || value === 'openclaw' || value === 'hermes' || value === 'qclaw'
+  return value === 'claude-code' || value === 'codex' || value === 'openclaw' || value === 'hermes' || value === 'qclaw' || value === 'continue'
     ? value
     : undefined;
 }

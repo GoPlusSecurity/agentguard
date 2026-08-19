@@ -46,15 +46,17 @@ import {
   type CronBackend,
   type ThreatFeedCronRemovalResult,
   type OpenClawGatewayOptions,
+  type CronAgentHost,
 } from './feed/cron.js';
 
-const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'];
+const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw', 'continue'];
 const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
   { agent: 'claude-code', dir: '.claude' },
   { agent: 'openclaw', dir: '.openclaw' },
   { agent: 'hermes', dir: '.hermes' },
   { agent: 'qclaw', dir: '.qclaw' },
   { agent: 'codex', dir: '.codex' },
+  { agent: 'continue', dir: '.continue' },
 ];
 const REQUIRED_INIT_COMMAND = 'agentguard init --agent auto';
 
@@ -70,7 +72,7 @@ async function main() {
     .command('init')
     .description('Create ~/.agentguard/config.json and local runtime paths')
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
-    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
+    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, qclaw, or continue')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--shell-hooks', 'For Hermes: install legacy shell hooks instead of the native plugin')
     .option('--force', 'Overwrite existing hook/template files')
@@ -97,7 +99,7 @@ async function main() {
         if (normalizedAgent === 'auto') {
           const results = initAutoAgents(config, forceTemplates);
           if (results.detected.length === 0) {
-            console.log('No supported agent directories found. Looked for .claude, .openclaw, .hermes, .qclaw, and .codex.');
+            console.log('No supported agent directories found. Looked for .claude, .openclaw, .hermes, .qclaw, .codex, and .continue.');
           } else if (results.installed.length === 0) {
             console.log('No agent templates were installed; all detected agent initializers failed.');
           }
@@ -112,7 +114,7 @@ async function main() {
           return;
         }
         if (!SUPPORTED_AGENT_INSTALLERS.includes(normalizedAgent as AgentInstaller)) {
-          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, or qclaw.');
+          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, qclaw, or continue.');
         }
         const agent = normalizedAgent as AgentInstaller;
         config.agentHost = agent;
@@ -208,10 +210,11 @@ async function main() {
     .description('Disconnect local AgentGuard from AgentGuard Cloud')
     .action(async () => {
       const currentConfig = ensureConfig();
+      noteCronBackendFallbackIfNeeded(currentConfig);
       const cronRemoval = await removeThreatFeedCron({
         name: currentConfig.threatFeedCronName || 'agentguard-threat-feed',
         backend: 'auto',
-        agentHost: resolveCronAgentHost(currentConfig),
+        agentHost: resolveCronBackendHost(currentConfig),
         agentGuardHome: getAgentGuardPaths().home,
       });
       const config = disconnectCloud();
@@ -796,13 +799,14 @@ async function main() {
       if (options.cron && !options.cronRun) {
         summary.cron.requested = true;
         try {
+          noteCronBackendFallbackIfNeeded(config);
           summary.cron.result = await installThreatFeedCron({
             name: options.cronName as string,
             cronExpression: cronExpression!,
             quiet,
             force: Boolean(options.force),
             backend: cronTarget,
-            agentHost: resolveCronAgentHost(config),
+            agentHost: resolveCronBackendHost(config),
             agentGuardHome: getAgentGuardPaths().home,
           }, {
             gateway: resolveOpenClawGatewayOptionsFromEnv(),
@@ -1155,8 +1159,60 @@ function printCronRemovalSummary(results: ThreatFeedCronRemovalResult[]): void {
   console.log('No AgentGuard subscribe cron job was found.');
 }
 
-function resolveCronAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
+/**
+ * Hosts that have a cron-targeted backend (OpenClaw / Hermes use agent-managed
+ * cron; the rest fall through to system cron). Hosts not in this set still
+ * accept cron commands — they just default to the system backend.
+ */
+const CRON_CAPABLE_HOSTS = new Set<AgentGuardAgentHost>([
+  'claude-code',
+  'codex',
+  'openclaw',
+  'hermes',
+  'qclaw',
+]);
+
+/**
+ * Return the host configured for this AgentGuard install. Always returns the
+ * raw host (never silently strips) so messaging code can name it correctly.
+ */
+function resolveConfiguredAgentHost(config: AgentGuardConfig): AgentGuardAgentHost | undefined {
   return config.agentHost ?? config.agentHosts?.[0];
+}
+
+/**
+ * Narrow the configured host to one of the cron-capable backends used by
+ * `installThreatFeedCron` / `removeThreatFeedCron`. Returns undefined when
+ * the host has no specific cron backend — callers should treat that as
+ * "fall back to system cron" rather than as "no host configured".
+ */
+function resolveCronBackendHost(config: AgentGuardConfig): CronAgentHost | undefined {
+  const host = resolveConfiguredAgentHost(config);
+  return host && CRON_CAPABLE_HOSTS.has(host) ? (host as CronAgentHost) : undefined;
+}
+
+/**
+ * If the user has a host configured that has no agent-specific cron backend
+ * (e.g. `continue`, `goose`), print a one-line stderr note so they know cron
+ * is falling back to the system scheduler rather than silently doing nothing
+ * surprising. Idempotent per-process — fires once.
+ */
+let cronFallbackNoteShown = false;
+function noteCronBackendFallbackIfNeeded(config: AgentGuardConfig): void {
+  if (cronFallbackNoteShown) return;
+  const host = resolveConfiguredAgentHost(config);
+  if (!host || CRON_CAPABLE_HOSTS.has(host)) return;
+  cronFallbackNoteShown = true;
+  console.error(
+    `Note: agent host "${host}" has no agent-managed cron backend. Cron commands will use the system scheduler. ` +
+      `Run \`agentguard init --agent openclaw\` or \`agentguard init --agent hermes\` if you'd like an agent-managed schedule instead.`
+  );
+}
+
+// Back-compat name retained so existing call sites compile without churn.
+// New code should use `resolveCronBackendHost` for clarity.
+function resolveCronAgentHost(config: AgentGuardConfig): CronAgentHost | undefined {
+  return resolveCronBackendHost(config);
 }
 
 function readStdinIfAvailable(): string {

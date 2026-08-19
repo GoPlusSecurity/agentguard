@@ -24,6 +24,7 @@ export type RuntimeAgentHost =
   | 'cursor'
   | 'gemini'
   | 'copilot'
+  | 'continue'
   | 'other';
 
 export interface PolicyReason {

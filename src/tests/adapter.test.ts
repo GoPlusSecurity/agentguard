@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
+import { ContinueAdapter } from '../adapters/continue.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -498,6 +499,261 @@ describe('HermesAdapter', () => {
       });
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ContinueAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ContinueAdapter', () => {
+  const adapter = new ContinueAdapter();
+
+  it('should have name "continue"', () => {
+    assert.equal(adapter.name, 'continue');
+  });
+
+  describe('parseInput', () => {
+    it('should parse a Continue PreToolUse payload', () => {
+      const raw = {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'echo hello' },
+        tool_use_id: 'tu-1',
+        session_id: 'sess-1',
+        cwd: '/repo',
+      };
+      const input = adapter.parseInput(raw);
+      assert.equal(input.toolName, 'run_terminal_command');
+      assert.equal(input.eventType, 'pre');
+      assert.deepEqual(input.toolInput, { command: 'echo hello' });
+      assert.equal(input.sessionId, 'sess-1');
+      assert.equal(input.cwd, '/repo');
+    });
+
+    it('should parse PostToolUse / PostToolUseFailure as post events', () => {
+      assert.equal(adapter.parseInput({ hook_event_name: 'PostToolUse' }).eventType, 'post');
+      assert.equal(adapter.parseInput({ hook_event_name: 'PostToolUseFailure' }).eventType, 'post');
+    });
+
+    it('should fall back to tool_use_id when session_id is absent', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'echo hi' },
+        tool_use_id: 'tu-only',
+      });
+      assert.equal(input.sessionId, 'tu-only');
+    });
+
+    it('should handle missing fields gracefully', () => {
+      const input = adapter.parseInput({});
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+      assert.equal(input.eventType, 'pre');
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('should map run_terminal_command to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('run_terminal_command'), 'exec_command');
+    });
+
+    it('should map write tools to write_file', () => {
+      assert.equal(adapter.mapToolToActionType('create_new_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('edit_existing_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('single_find_and_replace'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('multi_edit'), 'write_file');
+    });
+
+    it('should map read tools to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('read_file_range'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('read_currently_open_file'), 'read_file');
+    });
+
+    it('should split search_web from fetch_url_content', () => {
+      assert.equal(adapter.mapToolToActionType('search_web'), 'web_search');
+      assert.equal(adapter.mapToolToActionType('fetch_url_content'), 'network_request');
+    });
+
+    it('should return null for MCP / unknown / out-of-scope tools', () => {
+      assert.equal(adapter.mapToolToActionType('grep_search'), null);
+      assert.equal(adapter.mapToolToActionType('file_glob_search'), null);
+      assert.equal(adapter.mapToolToActionType('ls'), null);
+      assert.equal(adapter.mapToolToActionType('codebase'), null);
+      assert.equal(adapter.mapToolToActionType('UnknownTool'), null);
+      assert.equal(adapter.mapToolToActionType(''), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('should build exec_command envelope from run_terminal_command', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'ls -la' },
+        cwd: '/repo',
+        session_id: 'sess-1',
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'exec_command');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).command, 'ls -la');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).cwd, '/repo');
+    });
+
+    it('should build write_file envelope from create_new_file (filepath spelling)', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'create_new_file',
+        tool_input: { filepath: '/project/.env', contents: 'SECRET=1' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'write_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/project/.env');
+    });
+
+    it('should prefer a sensitive path when multi_edit batches multiple files', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'multi_edit',
+        tool_input: {
+          edits: [
+            { filepath: '/repo/src/foo.ts' },
+            { filepath: '/repo/.env.production' },
+            { filepath: '/repo/src/bar.ts' },
+          ],
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.path, '/repo/.env.production');
+      assert.equal(data.sensitive_path, '/repo/.env.production');
+      assert.deepEqual(data.paths, [
+        '/repo/src/foo.ts',
+        '/repo/.env.production',
+        '/repo/src/bar.ts',
+      ]);
+    });
+
+    it('should surface multi_edit operations (path/kind/previews/is_delete) for policy', () => {
+      // Locks in the medium-severity review fix: the envelope must include
+      // the actual edits so policy can distinguish a benign path list from
+      // a destructive batch (e.g. empty new_string deletes).
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'multi_edit',
+        tool_input: {
+          edits: [
+            { filepath: '/repo/src/foo.ts', old_string: 'a', new_string: 'b' },
+            { filepath: '/repo/src/secret.ts', old_string: 'EVERYTHING', new_string: '' },
+          ],
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      const ops = data.operations as Array<Record<string, unknown>>;
+      assert.equal(ops.length, 2);
+      assert.equal(ops[0].path, '/repo/src/foo.ts');
+      assert.equal(ops[0].kind, 'edit');
+      assert.equal(ops[0].is_delete, false);
+      assert.equal(ops[1].path, '/repo/src/secret.ts');
+      assert.equal(ops[1].is_delete, true, 'old_string non-empty + new_string empty == delete');
+    });
+
+    it('should preview large multi_edit strings without ballooning the envelope', () => {
+      const huge = 'X'.repeat(10_000);
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'multi_edit',
+        tool_input: {
+          edits: [{ filepath: '/repo/a.txt', old_string: huge, new_string: huge }],
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const ops = (envelope!.action.data as unknown as Record<string, unknown>).operations as Array<
+        Record<string, unknown>
+      >;
+      const old = ops[0].old_preview as string;
+      assert.ok(old.length <= 257, `preview must be ≤256 chars + ellipsis, got ${old.length}`);
+      assert.ok(old.endsWith('…'));
+    });
+
+    it('should surface create_new_file content as a create operation', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'create_new_file',
+        tool_input: { filepath: '/repo/.env', contents: 'SECRET=1' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      const ops = (envelope!.action.data as unknown as Record<string, unknown>).operations as Array<
+        Record<string, unknown>
+      >;
+      assert.equal(ops[0].kind, 'create');
+      assert.equal(ops[0].new_preview, 'SECRET=1');
+    });
+
+    it('should build read_file envelope', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'read_file',
+        tool_input: { filepath: '/tmp/readme.md' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'read_file');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).path, '/tmp/readme.md');
+    });
+
+    it('should build network_request envelope from fetch_url_content', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'fetch_url_content',
+        tool_input: { url: 'https://example.com/page' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'network_request');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).url, 'https://example.com/page');
+    });
+
+    it('should build web_search envelope from search_web query', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'search_web',
+        tool_input: { query: 'continue plugins' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'web_search');
+      assert.equal((envelope!.action.data as unknown as Record<string, unknown>).query, 'continue plugins');
+    });
+
+    it('should return null for unmapped tools (e.g. grep_search)', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'grep_search',
+        tool_input: { query: 'foo' },
+      });
+      assert.equal(adapter.buildEnvelope(input), null);
+    });
+  });
+
+  describe('inferInitiatingSkill', () => {
+    it('should return null when Continue provides no skill metadata', async () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'run_terminal_command',
+        tool_input: { command: 'echo' },
+      });
+      assert.equal(await adapter.inferInitiatingSkill(input), null);
     });
   });
 });
