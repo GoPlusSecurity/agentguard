@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-data-local-loader",
+  "description": "Load one bundled renderer by local path",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

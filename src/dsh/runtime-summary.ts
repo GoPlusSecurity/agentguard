@@ -1,0 +1,227 @@
+import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs';
+import type {
+  CloudPolicyDecision,
+  RuntimeActionType,
+  RuntimeAuditEvent,
+  RuntimeRiskLevel,
+} from '../runtime/types.js';
+import type { DshShadowDisposition } from './enforcement-plan.js';
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 1000;
+const MAX_READ_BYTES = 1024 * 1024;
+
+export interface DshRuntimeSummaryOptions {
+  limit?: number;
+  sessionId?: string;
+}
+
+export interface DshRuntimeReasonCount {
+  code: string;
+  count: number;
+}
+
+export interface DshRuntimeSourceOwnerCount {
+  owner: string;
+  count: number;
+}
+
+export interface DshRuntimeSummary {
+  total: number;
+  inspected: number;
+  malformedLines: number;
+  truncated: boolean;
+  sessionId?: string;
+  decisions: Partial<Record<CloudPolicyDecision, number>>;
+  actionTypes: Partial<Record<RuntimeActionType, number>>;
+  riskLevels: Partial<Record<RuntimeRiskLevel, number>>;
+  phases: Partial<Record<'pre' | 'post' | 'unknown', number>>;
+  runtimeModes: Partial<Record<'observe' | 'protect', number>>;
+  enforcementApplied: number;
+  shadowDispositions: Partial<Record<DshShadowDisposition | 'unknown', number>>;
+  enforcementGated: number;
+  topReasons: DshRuntimeReasonCount[];
+  nestedCalls: number;
+  sourceAttributions: Partial<Record<'configured-tool-owner' | 'unknown', number>>;
+  invocationSources: Partial<Record<'model-direct' | 'nested-tool' | 'unknown', number>>;
+  sessionOrigins: Partial<Record<'top-level' | 'subagent' | 'unknown', number>>;
+  topSourceOwners: DshRuntimeSourceOwnerCount[];
+  latestActionId?: string;
+  latestPolicyVersion?: string;
+}
+
+/**
+ * Read a bounded tail of the local audit log and aggregate DSH observation events.
+ * Raw inputs and reason evidence are intentionally never returned to the caller.
+ */
+export function summarizeDshRuntimeAudit(
+  auditPath: string,
+  options: DshRuntimeSummaryOptions = {}
+): DshRuntimeSummary {
+  const limit = normalizeLimit(options.limit);
+  const sessionId = normalizeSessionId(options.sessionId);
+  const tail = readBoundedTail(auditPath);
+  const parsed: RuntimeAuditEvent[] = [];
+  let malformedLines = 0;
+
+  for (const line of tail.lines) {
+    try {
+      const event = JSON.parse(line) as RuntimeAuditEvent;
+      if (event.agentHost !== 'dsh') continue;
+      if (event.metadata?.runtimeMode !== 'observe' && event.metadata?.runtimeMode !== 'protect') continue;
+      if (sessionId && event.sessionId !== sessionId) continue;
+      parsed.push(event);
+    } catch {
+      malformedLines++;
+    }
+  }
+
+  const events = parsed.slice(-limit);
+  const decisions: DshRuntimeSummary['decisions'] = {};
+  const actionTypes: DshRuntimeSummary['actionTypes'] = {};
+  const riskLevels: DshRuntimeSummary['riskLevels'] = {};
+  const phases: DshRuntimeSummary['phases'] = {};
+  const runtimeModes: DshRuntimeSummary['runtimeModes'] = {};
+  const shadowDispositions: DshRuntimeSummary['shadowDispositions'] = {};
+  const sourceAttributions: DshRuntimeSummary['sourceAttributions'] = {};
+  const invocationSources: DshRuntimeSummary['invocationSources'] = {};
+  const sessionOrigins: DshRuntimeSummary['sessionOrigins'] = {};
+  const sourceOwners = new Map<string, number>();
+  const reasons = new Map<string, number>();
+  let nestedCalls = 0;
+  let enforcementGated = 0;
+  let enforcementApplied = 0;
+
+  for (const event of events) {
+    increment(decisions, event.decision);
+    increment(actionTypes, event.actionType);
+    increment(riskLevels, event.riskLevel);
+    const phase = event.metadata?.runtimePhase === 'pre' || event.metadata?.runtimePhase === 'post'
+      ? event.metadata.runtimePhase
+      : 'unknown';
+    increment(phases, phase);
+    const runtimeMode = event.metadata?.runtimeMode === 'protect' ? 'protect' : 'observe';
+    increment(runtimeModes, runtimeMode);
+    if (event.metadata?.enforcementApplied === true) enforcementApplied++;
+    const shadowDisposition = normalizeShadowDisposition(event.metadata?.shadowDisposition);
+    increment(shadowDispositions, shadowDisposition);
+    if (Array.isArray(event.metadata?.enforcementGates) && event.metadata.enforcementGates.length > 0) {
+      enforcementGated++;
+    }
+    if (event.metadata?.nested === true) nestedCalls++;
+    const sourceAttribution = event.metadata?.sourceAttribution === 'configured-tool-owner'
+      ? 'configured-tool-owner'
+      : 'unknown';
+    increment(sourceAttributions, sourceAttribution);
+    const invocationSource = event.metadata?.invocationSource === 'model-direct'
+      || event.metadata?.invocationSource === 'nested-tool'
+      ? event.metadata.invocationSource
+      : 'unknown';
+    increment(invocationSources, invocationSource);
+    const sessionOrigin = event.metadata?.sessionOrigin === 'top-level'
+      || event.metadata?.sessionOrigin === 'subagent'
+      ? event.metadata.sessionOrigin
+      : 'unknown';
+    increment(sessionOrigins, sessionOrigin);
+    const sourceOwner = normalizedSourceOwner(event.metadata?.sourceOwner);
+    if (sourceAttribution === 'configured-tool-owner' && sourceOwner) {
+      sourceOwners.set(sourceOwner, (sourceOwners.get(sourceOwner) ?? 0) + 1);
+    }
+    for (const reason of event.reasons ?? []) {
+      if (typeof reason.code === 'string' && reason.code) {
+        reasons.set(reason.code, (reasons.get(reason.code) ?? 0) + 1);
+      }
+    }
+  }
+
+  const latest = events.at(-1);
+  return {
+    total: events.length,
+    inspected: parsed.length,
+    malformedLines,
+    truncated: tail.truncated || parsed.length > limit,
+    ...(sessionId ? { sessionId } : {}),
+    decisions,
+    actionTypes,
+    riskLevels,
+    phases,
+    runtimeModes,
+    enforcementApplied,
+    shadowDispositions,
+    enforcementGated,
+    topReasons: [...reasons.entries()]
+      .sort(([leftCode, leftCount], [rightCode, rightCount]) => rightCount - leftCount || leftCode.localeCompare(rightCode))
+      .slice(0, 10)
+      .map(([code, count]) => ({ code, count })),
+    nestedCalls,
+    sourceAttributions,
+    invocationSources,
+    sessionOrigins,
+    topSourceOwners: [...sourceOwners.entries()]
+      .sort(([leftOwner, leftCount], [rightOwner, rightCount]) => rightCount - leftCount || leftOwner.localeCompare(rightOwner))
+      .slice(0, 10)
+      .map(([owner, count]) => ({ owner, count })),
+    ...(latest?.actionId ? { latestActionId: latest.actionId } : {}),
+    ...(latest?.policyVersion ? { latestPolicyVersion: latest.policyVersion } : {}),
+  };
+}
+
+function normalizedSourceOwner(value: unknown): string {
+  return typeof value === 'string'
+    && value.length <= 160
+    && /^[A-Za-z0-9@][A-Za-z0-9@._/:-]*$/.test(value)
+    ? value
+    : '';
+}
+
+const SHADOW_DISPOSITIONS = new Set<DshShadowDisposition>([
+  'proceed', 'proceed-with-warning', 'request-approval', 'deny-execution',
+  'accept-result', 'accept-result-with-warning', 'hold-result-for-approval', 'block-result',
+]);
+
+function normalizeShadowDisposition(value: unknown): DshShadowDisposition | 'unknown' {
+  return typeof value === 'string' && SHADOW_DISPOSITIONS.has(value as DshShadowDisposition)
+    ? value as DshShadowDisposition
+    : 'unknown';
+}
+
+function readBoundedTail(path: string): { lines: string[]; truncated: boolean } {
+  if (!existsSync(path)) return { lines: [], truncated: false };
+  const fd = openSync(path, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, MAX_READ_BYTES);
+    const start = size - length;
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, start);
+    const text = buffer.toString('utf8');
+    const lines = text.split('\n');
+    if (start > 0) lines.shift();
+    return {
+      lines: lines.map(line => line.trim()).filter(Boolean),
+      truncated: start > 0,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function normalizeLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_LIMIT;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_LIMIT) {
+    throw new Error(`limit must be an integer between 1 and ${MAX_LIMIT}`);
+  }
+  return value;
+}
+
+function normalizeSessionId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!normalized) throw new Error('sessionId must be a non-empty string');
+  if (normalized.length > 160) throw new Error('sessionId must be at most 160 characters');
+  return normalized;
+}
+
+function increment<T extends string>(target: Partial<Record<T, number>>, key: T): void {
+  target[key] = (target[key] ?? 0) + 1;
+}

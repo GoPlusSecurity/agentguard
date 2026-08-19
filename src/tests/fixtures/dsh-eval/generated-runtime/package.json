@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-generated-runtime",
+  "description": "A source-mapped runtime bundle",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

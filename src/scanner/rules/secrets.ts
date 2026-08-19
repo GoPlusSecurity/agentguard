@@ -46,13 +46,13 @@ export const SECRETS_RULES: ScanRule[] = [
     file_patterns: ['*'],
     patterns: [
       // macOS Keychain
-      /keychain/i,
       /security\s+find-/,
+      /\b(?:keytar|KeychainAccess|SecKeychain)\b/,
+      /\b(?:keychain|keyring)\s*\.\s*(?:getPassword|get_password|findCredentials|find_credentials)\s*\(/i,
       // Chrome/Chromium
       /Chrome.*Local\s+State/i,
       /Chrome.*Login\s+Data/i,
       /Chrome.*Cookies/i,
-      /Chromium/i,
       // Firefox
       /Firefox.*logins\.json/i,
       /Firefox.*cookies\.sqlite/i,
@@ -60,7 +60,7 @@ export const SECRETS_RULES: ScanRule[] = [
       /CredRead/,
       /Windows.*Credentials/i,
       // Generic credential patterns
-      /credential.*manager/i,
+      /\b(?:CredRead|PasswordVault|CredentialManager)\s*(?:\.|\()/i,
     ],
   },
 ];

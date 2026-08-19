@@ -19,6 +19,7 @@ export type RuntimeAgentHost =
   | 'codex'
   | 'openclaw'
   | 'hermes'
+  | 'dsh'
   | 'qclaw'
   | 'cursor'
   | 'gemini'

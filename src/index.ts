@@ -12,6 +12,37 @@ export * from './types/index.js';
 
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
+export { scanDshPlugin, DSH_RULES, DSH_SCAN_RULES } from './dsh/scan.js';
+export type { ScanDshPluginOptions } from './dsh/scan.js';
+export { MAX_DSH_BATCH_TARGETS, parseDshBatchManifest, scanDshPlugins } from './dsh/batch.js';
+export type { DshBatchResult, DshBatchScanReport, DshBatchTarget } from './dsh/batch.js';
+export { compareDshReports, parseDshPluginScanReport } from './dsh/compare.js';
+export type { DshCapabilityChange, DshFindingCountChange, DshReportComparison, DshRiskDirection, DshUpdateAssessment } from './dsh/compare.js';
+export { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE, getDshScannerMetadata } from './dsh/metadata.js';
+export { detectDshPlugin } from './dsh/detect.js';
+export { parseDshPackage } from './dsh/parse-package.js';
+export { parseCordisConfigs } from './dsh/parse-cordis-patch.js';
+export { buildCapabilityProfile } from './dsh/capability-profile.js';
+export { classifyDshPlugin, hasHarmlessCapabilityMismatch } from './dsh/classify-plugin.js';
+export { classifyImpactLayers } from './dsh/classify-impact.js';
+export { renderDshHtml, renderDshMarkdown } from './reports/dsh-report.js';
+export { renderDshBatchMarkdown } from './reports/dsh-batch-report.js';
+export { renderDshComparisonMarkdown } from './reports/dsh-compare-report.js';
+export type {
+  DshCapabilityProfile,
+  DshCordisAnalysis,
+  DshDetection,
+  DshFinding,
+  DshFindingSource,
+  DshImpactLayer,
+  DshInstallRecommendation,
+  DshPackageMetadata,
+  DshPluginIdentity,
+  DshPluginKind,
+  DshPluginScanReport,
+  DshReviewPriority,
+  DshRuntimeRelevance,
+} from './dsh/types.js';
 export {
   SkillRegistry,
   RegistryStorage,
@@ -72,6 +103,31 @@ export {
 } from './config.js';
 export { AgentGuardCloudClient } from './cloud/client.js';
 export { evaluateLocalAction } from './runtime/evaluator.js';
+export { planDshEnforcement } from './dsh/enforcement-plan.js';
+export {
+  applyDshOwnerPolicy,
+  normalizeDshOwnerPolicies,
+  type DshOwnerPolicies,
+  type DshOwnerPolicy,
+} from './dsh/owner-policy.js';
+export {
+  formatDshPolicyReason,
+  mergeDshPostDecisions,
+  mergeDshPreDecisions,
+  translateDshPostDecision,
+  translateDshPreDecision,
+} from './dsh/enforcement-adapter.js';
+export type {
+  DshEnforcementPlan,
+  DshRuntimePhase,
+  DshShadowDisposition,
+  DshShadowHookDecision,
+} from './dsh/enforcement-plan.js';
+export {
+  evaluateRuntimeAction,
+  type EvaluateRuntimeActionOptions,
+  type RuntimeEvaluation,
+} from './runtime/decision.js';
 export {
   protectAction,
   formatProtectResult,

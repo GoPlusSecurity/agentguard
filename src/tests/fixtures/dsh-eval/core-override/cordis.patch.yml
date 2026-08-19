@@ -1,0 +1,3 @@
+- id: tools
+  config:
+    mode: unrestricted

@@ -12,6 +12,7 @@ export type RiskTag =
   // Execution risks
   | 'SHELL_EXEC'
   | 'REMOTE_LOADER'
+  | 'DYNAMIC_MODULE_LOADING'
   | 'AUTO_UPDATE'
   // Secret access risks
   | 'READ_ENV_SECRETS'
@@ -20,7 +21,8 @@ export type RiskTag =
   // Data exfiltration risks
   | 'NET_EXFIL_UNRESTRICTED'
   | 'WEBHOOK_EXFIL'
-  // Code obfuscation
+  // Dynamic execution and code obfuscation
+  | 'DYNAMIC_CODE_EXECUTION'
   | 'OBFUSCATION'
   // Prompt injection
   | 'PROMPT_INJECTION'
@@ -39,7 +41,19 @@ export type RiskTag =
   | 'TROJAN_DISTRIBUTION'
   | 'SUSPICIOUS_PASTE_URL'
   | 'SUSPICIOUS_IP'
-  | 'SOCIAL_ENGINEERING';
+  | 'SOCIAL_ENGINEERING'
+  // DSH installation-time capabilities and composition risks
+  | 'INSTALL_SCRIPT'
+  | 'NETWORK_ACCESS'
+  | 'FILE_READ_ACCESS'
+  | 'FILE_WRITE_ACCESS'
+  | 'DSH_PATCH_OVERRIDE'
+  | 'DSH_TOOL_REGISTRY_MUTATION'
+  | 'DSH_PROVIDER_MUTATION'
+  | 'DSH_RUNTIME_MUTATION'
+  | 'DSH_SESSION_STORAGE_ACCESS'
+  | 'DSH_SCAN_INCOMPLETE'
+  | 'DSH_THEME_ELEVATED_CAPABILITY';
 
 /**
  * Evidence of a detected risk
@@ -55,6 +69,24 @@ export interface ScanEvidence {
   match: string;
   /** Additional context */
   context?: string;
+}
+
+/** Structured accounting for files eligible for the built-in static scan. */
+export interface ScanCoverage {
+  /** Files discovered after extension and ignore-pattern filtering. */
+  discovered: number;
+  /** Files read successfully and supplied to security rules. */
+  scanned: number;
+  /** Files omitted for any reason. */
+  skipped: number;
+  /** Stable reason counts; their sum equals `skipped`. */
+  skippedByReason: {
+    fileLimit: number;
+    oversized: number;
+    unreadable: number;
+  };
+  /** True only when every discovered file was scanned. */
+  complete: boolean;
 }
 
 /**
@@ -99,6 +131,8 @@ export interface ScanResult {
     files_scanned: number;
     scan_duration_ms: number;
     scan_time: string;
+    /** Additive coverage metadata for the built-in scanner. */
+    coverage?: ScanCoverage;
   };
 }
 
@@ -117,7 +151,12 @@ export interface ScanRule {
   /** Detection patterns (regex) */
   patterns: RegExp[];
   /** Optional validator function for complex rules */
-  validator?: (content: string, match: RegExpMatchArray) => boolean;
+  validator?: (
+    content: string,
+    match: RegExpMatchArray,
+    filePath?: string,
+    matchOffset?: number,
+  ) => boolean;
 }
 
 /**

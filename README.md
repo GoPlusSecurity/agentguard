@@ -129,6 +129,58 @@ agentguard init --agent hermes        # native Hermes plugin (add --shell-hooks 
 agentguard init --agent qclaw
 ```
 
+### Audit DeepSeek Harness plugins before installation
+
+The Phase 1 DSH scanner understands current `dsh.bundle.patch`, `dsh.profile.bundles`, `dsh.client`, and Cordis configuration structures in addition to JavaScript and TypeScript capabilities.
+
+```bash
+# Human-readable report
+agentguard dsh-scan ./path/to/dsh-plugin
+
+# Machine-readable report from a GitHub repository
+agentguard dsh-scan https://github.com/owner/dsh-plugin --format json
+
+# Reproducible report for a release tag, branch, or exact commit
+agentguard dsh-scan https://github.com/owner/dsh-plugin --ref v1.2.3 --format json
+
+# Self-contained shareable report page
+agentguard dsh-scan ./path/to/dsh-plugin --format html --output report.html
+```
+
+Reports include DSH identification confidence, plugin kind, explainable risk level, permission profile, impact layers, source evidence, structured file-coverage accounting, and an installation recommendation. File-count truncation, oversized matching files, or ordinary read failures produce `DSH_SCAN_INCOMPLETE` and can never return `safe-to-try`. See [AgentGuard for DSH](docs/dsh.md) for the risk model and current limitations.
+
+Install AgentGuard as a native DSH tool plugin, then restart the profile:
+
+```bash
+dsh plugin --profile web add @goplus/agentguard
+```
+
+DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.
+It also exposes `agentguard_dsh_scan_batch` for a sequential review queue of up to 10 targets per DSH tool call. The CLI accepts larger JSON manifests of up to 25 targets with `agentguard dsh-scan-batch`.
+Use `agentguard_dsh_compare` or the `agentguard dsh-compare` CLI command to identify new permissions and runtime risks before updating an approved plugin version.
+
+Update or remove it from the same profile with `dsh plugin --profile web update @goplus/agentguard` or `dsh plugin --profile web remove @goplus/agentguard`. The [DSH operations and report guide](docs/dsh.md#operate-the-dsh-installation) includes verification and troubleshooting steps.
+
+> **DSH runtime guard:** the packaged composition uses non-disruptive `observe` mode. Startup logs and the input-redacted `agentguard_dsh_runtime_summary` tool explicitly show the current configured mode and whether pre-execute enforcement is active. An explicit `runtime.mode: protect` applies AgentGuard's shared allow/warn/require-approval/block policy before DSH dispatches a tool, using DSH's native one-shot approval service and monotonic composition with other policies. Optional `runtime.postResponseMode: block-malicious` suppresses only block-class malicious network results; approval-class post results remain audit-only because DSH has no resumable post-result approval protocol. Exact operator-configured `runtime.attribution.toolOwners` bindings add source ownership without guessing, and `runtime.ownerPolicies` can impose per-owner minimum decisions without weakening shared security policy. Unmapped tools remain `unknown` until DSH exposes a reliable native owner field. See the [DSH runtime guide](docs/dsh-runtime.md).
+
+The complete candidate scope, activation override, acceptance gates, and intentional boundaries are collected in [AgentGuard for DSH complete candidate](docs/dsh-complete-candidate.md).
+
+The enforcing adapter maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, preserves stronger downstream policies, fails closed on unexpected evaluator errors by default, and is registered only when `protect` is explicitly selected.
+
+Native contract gates cover the full pre-execute approval outcome matrix, concurrent and nested calls, failures, unload, and post-execute result containment. Block-class malicious responses can be suppressed explicitly; approval-class post results remain audit-only because DSH currently exposes no native post-approval resume primitive. The complete candidate passed all 11 guided DSH UAT cases, including native approval/rejection, pre-execute blocking, response containment, redaction, and service stability.
+
+The shared runtime detector treats unpinned Git sources executed through `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, or `bunx` as high-risk remote code execution. Full commit pins reduce this to a warning rather than making remote code implicitly trusted.
+
+Phase 1.1 keeps the conservative full-repository risk while adding a separate runtime-surface risk, evidence source categories, likely-generated markers, and a human-review priority. Tests, examples, docs, and data findings remain visible instead of being silently discarded.
+
+Phase 1.2 treats active `SKILL.md` and agent-instruction files as runtime-relevant, keeps executable source runtime-relevant even under `data/` or `assets/`, distinguishes computed local module loading from remote code execution, and requires concrete credential APIs before reporting keychain access.
+
+Phase 1.3 localizes compound `AUTO_UPDATE` evidence around the matched update behavior. Large bundled or third-party JavaScript files no longer become critical merely because unrelated network and execution tokens appear elsewhere in the same file; executable files under `assets/` remain visible to prevent path-based evasion.
+
+Phase 1.4 separates eval-like `DYNAMIC_CODE_EXECUTION` from encoded or packed-code `OBFUSCATION`. DSH reports aggregate repeated matches by rule and file, retain the total occurrence count, and keep generated runtime bundles security-relevant instead of treating source maps as proof of safety.
+
+The Phase 1 release candidate freezes those rule semantics and adds an exact-commit real-world regression gate. See [the RC acceptance plan](docs/dsh-phase1-rc.md) and [benchmark policy](benchmarks/dsh/README.md).
+
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
@@ -316,10 +368,10 @@ The report is a self-contained HTML file that opens automatically in your browse
 
 | Category | Rules | Severity |
 |----------|-------|----------|
-| **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
+| **Execution** | SHELL_EXEC, DYNAMIC_MODULE_LOADING, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
 | **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, MNEMONIC_PATTERN | MEDIUM-CRITICAL |
 | **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
-| **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
+| **Dynamic execution and obfuscation** | DYNAMIC_CODE_EXECUTION, OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
 | **Web3** | WALLET_DRAINING, UNLIMITED_APPROVAL, DANGEROUS_SELFDESTRUCT, HIDDEN_TRANSFER, PROXY_UPGRADE, FLASH_LOAN_RISK, REENTRANCY_PATTERN, SIGNATURE_REPLAY | MEDIUM-CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM-CRITICAL |
 

@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-keychain-label",
+  "description": "Display platform compatibility labels",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "dsh-eval-safe-theme",
+  "description": "A local color theme for DSH",
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web" }
+  }
+}

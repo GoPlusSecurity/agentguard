@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "baseline": "phase1-rc3",
+  "rulesFrozenAt": "2337e266cf78f82e8d07f5555f7cc760b6ddc830",
+  "snapshot": "real-world.snapshot.json",
+  "cases": [
+    {
+      "id": "dsh-deep-whale",
+      "repository": "https://github.com/Small-tailqwq/dsh-deep-whale",
+      "revision": "cdb4da4f9c708571c6303cc1053185c62c8b617b",
+      "subpath": "maid-atelier"
+    },
+    {
+      "id": "superdesign-skill",
+      "repository": "https://github.com/superdesigndev/superdesign-skill",
+      "revision": "dc60b43625426bdd1e88fe494739fd5ea27daedd"
+    },
+    {
+      "id": "dsh-open-in-vscode",
+      "repository": "https://github.com/omdsh-dev/dsh-open-in-vscode",
+      "revision": "149f21aed3d05d2b392206394c4a023e35d694c7"
+    },
+    {
+      "id": "dsh-vision-router",
+      "repository": "https://github.com/ysr666/dsh-vision-router",
+      "revision": "86268695b1fb537794b33d0fb5267ce64ddbb8ce"
+    },
+    {
+      "id": "misakanet",
+      "repository": "https://github.com/Ikalus1988/MisakaNet",
+      "revision": "90665bad188073cf995fd3ca4428273653f83b81"
+    }
+  ]
+}

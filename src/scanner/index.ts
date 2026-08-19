@@ -9,7 +9,13 @@ import type {
   ScanRule,
 } from '../types/scanner.js';
 import type { SkillIdentity } from '../types/skill.js';
-import { walkDirectory, isDirectory, pathExists } from './file-walker.js';
+import {
+  walkDirectory,
+  walkDirectoryWithCoverage,
+  isDirectory,
+  pathExists,
+  type DirectoryScanSnapshot,
+} from './file-walker.js';
 import { ALL_RULES, getRulesForExtension } from './rules/index.js';
 
 /**
@@ -173,13 +179,14 @@ export class SkillScanner {
       'command-injection': 'SHELL_EXEC',
       'code-execution': 'SHELL_EXEC',
       'remote-code-loading': 'REMOTE_LOADER',
-      'dynamic-import': 'REMOTE_LOADER',
+      'dynamic-import': 'DYNAMIC_MODULE_LOADING',
       'env-access': 'READ_ENV_SECRETS',
       'secret-access': 'READ_ENV_SECRETS',
       'ssh-key-access': 'READ_SSH_KEYS',
       'credential-access': 'READ_KEYCHAIN',
       'data-exfiltration': 'NET_EXFIL_UNRESTRICTED',
       'webhook-exfil': 'WEBHOOK_EXFIL',
+      'dynamic-code-execution': 'DYNAMIC_CODE_EXECUTION',
       'obfuscation': 'OBFUSCATION',
       'prompt-injection': 'PROMPT_INJECTION',
       'private-key': 'PRIVATE_KEY_PATTERN',
@@ -245,14 +252,18 @@ export class SkillScanner {
     evidence: ScanEvidence[],
     context?: string,
   ): void {
+    let lineOffset = 0;
+    const lines = content.split('\n');
     for (const rule of rules) {
       for (const pattern of rule.patterns) {
-        const lines = content.split('\n');
+        lineOffset = 0;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           const match = line.match(pattern);
           if (match) {
-            if (rule.validator && !rule.validator(content, match)) {
+            const matchOffset = lineOffset + (match.index ?? 0);
+            if (rule.validator && !rule.validator(content, match, filePath, matchOffset)) {
+              lineOffset += line.length + 1;
               continue;
             }
             riskTags.add(rule.id);
@@ -267,6 +278,7 @@ export class SkillScanner {
             }
             evidence.push(ev);
           }
+          lineOffset += line.length + 1;
         }
       }
     }
@@ -275,21 +287,30 @@ export class SkillScanner {
   /**
    * Run built-in scanner
    */
-  private async runBuiltinScanner(dirPath: string): Promise<ScanResult> {
+  private async runBuiltinScanner(
+    dirPath: string,
+    snapshot?: DirectoryScanSnapshot,
+  ): Promise<ScanResult> {
     const startTime = Date.now();
-    const files = await walkDirectory(dirPath);
+    const directory = snapshot ?? await walkDirectoryWithCoverage(dirPath);
+    const files = directory.files;
     const evidence: ScanEvidence[] = [];
     const riskTags: Set<RiskTag> = new Set();
 
     for (const file of files) {
-      const rules = getRulesForExtension(file.extension);
+      const additionalRules = (this.options.additionalRules || []).filter(rule =>
+        rule.file_patterns.some(pattern => pattern === '*' || (pattern.startsWith('*.') && file.extension === pattern.slice(1))),
+      );
+      const rules = [...getRulesForExtension(file.extension), ...additionalRules];
 
-      // For Markdown files: only scan inside fenced code blocks
-      const contentToScan = file.extension === '.md'
-        ? this.extractMarkdownCodeBlocks(file.content)
-        : file.content;
-
-      this.scanContent(contentToScan, rules, file.relativePath, riskTags, evidence);
+      if (file.extension === '.md') {
+        const promptRules = rules.filter(rule => rule.id === 'PROMPT_INJECTION');
+        const codeBlockRules = rules.filter(rule => rule.id !== 'PROMPT_INJECTION');
+        this.scanContent(this.extractMarkdownCodeBlocks(file.content), codeBlockRules, file.relativePath, riskTags, evidence);
+        this.scanContent(file.content, promptRules, file.relativePath, riskTags, evidence);
+      } else {
+        this.scanContent(file.content, rules, file.relativePath, riskTags, evidence);
+      }
 
       // Base64 decode pass: extract encoded payloads and re-scan
       const decodedPayloads = this.extractAndDecodeBase64(file.content);
@@ -312,6 +333,7 @@ export class SkillScanner {
         files_scanned: files.length,
         scan_duration_ms: Date.now() - startTime,
         scan_time: new Date().toISOString(),
+        coverage: directory.coverage,
       },
     };
   }
@@ -350,7 +372,8 @@ export class SkillScanner {
 
     const parts: string[] = [];
 
-    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')) {
+    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')
+      || tags.has('DYNAMIC_MODULE_LOADING') || tags.has('DYNAMIC_CODE_EXECUTION')) {
       parts.push('code execution capabilities');
     }
     if (tags.has('PRIVATE_KEY_PATTERN') || tags.has('MNEMONIC_PATTERN')) {
@@ -372,8 +395,11 @@ export class SkillScanner {
   /**
    * Calculate artifact hash for a directory
    */
-  async calculateArtifactHash(dirPath: string): Promise<string> {
-    const files = await walkDirectory(dirPath);
+  async calculateArtifactHash(
+    dirPath: string,
+    snapshot?: DirectoryScanSnapshot,
+  ): Promise<string> {
+    const files = snapshot?.files ?? await walkDirectory(dirPath);
     const hash = crypto.createHash('sha256');
 
     // Sort files for consistent hashing
@@ -390,7 +416,7 @@ export class SkillScanner {
   /**
    * Main scan method
    */
-  async scan(payload: ScanPayload): Promise<ScanResult> {
+  async scan(payload: ScanPayload, snapshot?: DirectoryScanSnapshot): Promise<ScanResult> {
     const { skill, payload: scanPayload, options } = payload;
 
     // Validate payload
@@ -412,7 +438,7 @@ export class SkillScanner {
     }
 
     // Try external scanner first if enabled
-    if (this.options.useExternalScanner) {
+    if (this.options.useExternalScanner && !snapshot) {
       const externalAvailable = await this.checkExternalScanner();
 
       if (externalAvailable) {
@@ -424,7 +450,7 @@ export class SkillScanner {
     }
 
     // Fall back to built-in scanner
-    return this.runBuiltinScanner(dirPath);
+    return this.runBuiltinScanner(dirPath, snapshot);
   }
 
   /**

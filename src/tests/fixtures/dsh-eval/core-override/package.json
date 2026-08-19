@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-core-override",
+  "description": "Replace the DSH tool policy",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

@@ -6,14 +6,17 @@ import type { ScanRule } from '../../types/scanner.js';
 export const PROMPT_INJECTION_RULES: ScanRule[] = [
   {
     id: 'PROMPT_INJECTION',
-    description: 'Detects prompt injection attempts',
+    description: 'Detects instruction override attempts in active agent instructions or prompt-delivery code',
     severity: 'critical',
     file_patterns: ['*'],
     patterns: [
       // Ignore instructions
-      /ignore\s+(previous|all|above|prior)\s+(instructions?|rules?|guidelines?)/i,
-      /disregard\s+(previous|all|above|prior)\s+(instructions?|rules?|guidelines?)/i,
-      /forget\s+(previous|all|above|prior)\s+(instructions?|rules?|guidelines?)/i,
+      /ignore\s+(?:(?:all|the)\s+)?(?:previous|above|prior)\s+(instructions?|rules?|guidelines?)/i,
+      /ignore\s+all\s+(instructions?|rules?|guidelines?)/i,
+      /disregard\s+(?:(?:all|the)\s+)?(?:previous|above|prior)\s+(instructions?|rules?|guidelines?)/i,
+      /disregard\s+all\s+(instructions?|rules?|guidelines?)/i,
+      /forget\s+(?:(?:all|the)\s+)?(?:previous|above|prior)\s+(instructions?|rules?|guidelines?)/i,
+      /forget\s+all\s+(instructions?|rules?|guidelines?)/i,
       // Jailbreak attempts
       /you\s+are\s+(now|a)\s+(?:DAN|jailbroken|unrestricted)/i,
       /pretend\s+(?:you\s+are|to\s+be)\s+(?:a\s+)?(?:different|new|unrestricted)/i,
@@ -32,5 +35,17 @@ export const PROMPT_INJECTION_RULES: ScanRule[] = [
       /自动执行/,
       /跳过验证/,
     ],
+    validator: (content, _match, filePath) => {
+      if (!filePath) return true;
+      const normalized = filePath.replace(/\\/g, '/');
+      if (/\.md$/i.test(normalized)) {
+        return /(?:^|\/)(?:SKILL|AGENTS|CLAUDE|GEMINI)\.md$/i.test(normalized)
+          || /(?:^|\/)(?:prompts?|agent-instructions?|commands?)\/[^/]+\.md$/i.test(normalized);
+      }
+      if (/(?:^|\/)(?:tests?|__tests__|fixtures?|examples?|docs?)(?:\/|$)|\.(?:test|spec)\./i.test(normalized)) {
+        return true;
+      }
+      return /(?:systemPrompt|system-prompt|prompt\s*[:=]|messages\s*[:=]|ctx\.llm|ctx\.agent|chat\.completions|generateText|assistant\/message)/i.test(content);
+    },
   },
 ];

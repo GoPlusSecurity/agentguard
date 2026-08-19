@@ -1,0 +1,7 @@
+# DSH bundle patch: exposes AgentGuard's read-only DSH plugin scanner as a tool.
+- insert:
+    - id: agentguard-dsh-plugin
+      name: '@goplus/agentguard/dist/dsh/plugin.js'
+      config:
+        runtime:
+          mode: observe

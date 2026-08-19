@@ -290,7 +290,8 @@ When GoPlus is unavailable:
 | Dangerous Selfdestruct | `DANGEROUS_SELFDESTRUCT` | `.sol` |
 | Reentrancy Pattern | `REENTRANCY_PATTERN` | `.sol` |
 | Signature Replay | `SIGNATURE_REPLAY` | `.sol` |
-| Obfuscation | `OBFUSCATION` | `.js`, `.ts`, `.mjs`, `.py`, `.md` |
+| Dynamic code execution | `DYNAMIC_CODE_EXECUTION` | `.js`, `.ts`, `.mjs`, `.py` |
+| Encoded or packed code | `OBFUSCATION` | `.js`, `.ts`, `.mjs`, `.py` |
 | Unrestricted Network Exfil | `NET_EXFIL_UNRESTRICTED` | `.js`, `.ts`, `.mjs`, `.py`, `.md` |
 | Suspicious Paste URL | `SUSPICIOUS_PASTE_URL` | All |
 

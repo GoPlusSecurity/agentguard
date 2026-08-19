@@ -1,0 +1,5 @@
+{
+  "name": "dsh-eval-status-polling",
+  "description": "Poll a remote status endpoint",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

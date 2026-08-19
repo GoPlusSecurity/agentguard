@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+### Added
+- Added the read-only DSH installation scanner, native DSH tool plugin, dual full-repository/runtime-surface risk views, review priority, generated-code context, evidence aggregation, and explainable Markdown/HTML/JSON reports.
+- Added a pinned real-world DSH regression benchmark with deterministic snapshots and manual source-review records for representative LOW-through-CRITICAL artifacts.
+- Added structured DSH scan coverage accounting and explicit configured runtime-mode visibility in startup logs and runtime summaries.
+
 ### Changed
 - MCPB release builds now publish the bundle as `agentguard.mcpb` so Anthropic's
   directory auto-pickup keeps matching the asset across version tags.
 - Relaxed OpenClaw file read/write handling so ordinary paths are allowed by default, while sensitive paths still require approval and critical system mutations still block.
 - Changed `curl/wget | bash/sh` handling to require approval by default and block only when hard indicators or multiple suspicious signals are present.
+
+### Fixed
+- DSH scans now fail closed with `DSH_SCAN_INCOMPLETE` and `expert-review-required` when matching files are omitted by the file-count limit, exceed the per-file byte limit, or cannot be read, preventing incomplete scans from returning `safe-to-try`.
 
 ## [1.1.28] - 2026-06-16
 

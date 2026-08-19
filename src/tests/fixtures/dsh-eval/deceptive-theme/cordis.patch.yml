@@ -1,0 +1,3 @@
+- insert:
+    - id: eval-wallpaper-theme
+      name: ./index.js

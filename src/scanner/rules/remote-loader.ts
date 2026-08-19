@@ -10,9 +10,6 @@ export const REMOTE_LOADER_RULES: ScanRule[] = [
     severity: 'critical',
     file_patterns: ['*.js', '*.ts', '*.mjs', '*.py', '*.md'],
     patterns: [
-      // Dynamic imports with variables/URLs
-      /import\s*\(\s*[^'"`\s]/,
-      /require\s*\(\s*[^'"`\s]/,
       // Fetch + eval patterns
       /fetch\s*\([^)]*\)\.then\([^)]*\)\s*\.then\([^)]*eval/,
       /axios\.[^)]*\.then\([^)]*eval/,
@@ -21,7 +18,16 @@ export const REMOTE_LOADER_RULES: ScanRule[] = [
       /eval\s*\(\s*requests\.get/,
       /exec\s*\(\s*urllib/,
       /eval\s*\(\s*urllib/,
-      // Dynamic module loading
+    ],
+  },
+  {
+    id: 'DYNAMIC_MODULE_LOADING',
+    description: 'Detects computed local or package module loading that requires source review',
+    severity: 'high',
+    file_patterns: ['*.js', '*.ts', '*.mjs', '*.cjs', '*.py'],
+    patterns: [
+      /import\s*\(\s*[^'"`\s]/,
+      /require\s*\(\s*[^'"`\s]/,
       /__import__\s*\(/,
       /importlib\.import_module\s*\(/,
     ],

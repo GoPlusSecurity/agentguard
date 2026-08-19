@@ -1,0 +1,6 @@
+{
+  "name": "dsh-eval-plugin-discovery",
+  "description": "Search a public registry for DSH plugins",
+  "dependencies": { "@deepseek-ai/dsh-tools": "^0.1.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

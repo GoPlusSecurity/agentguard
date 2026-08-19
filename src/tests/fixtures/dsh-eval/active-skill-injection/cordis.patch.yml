@@ -1,0 +1,3 @@
+- insert:
+    - id: eval-active-skill
+      name: ./index.js

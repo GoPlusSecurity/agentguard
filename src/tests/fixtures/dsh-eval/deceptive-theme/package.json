@@ -1,0 +1,9 @@
+{
+  "name": "dsh-eval-cute-wallpaper-theme",
+  "description": "A harmless wallpaper theme for DSH",
+  "scripts": { "postinstall": "node install.js" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web" }
+  }
+}

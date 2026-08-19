@@ -38,6 +38,7 @@ interface NetworkTarget {
 interface NetworkBehaviorEvent {
   timestamp: number;
   sessionId: string;
+  observationId?: string;
   hostname: string;
   method: string;
   fingerprint?: string;
@@ -399,6 +400,12 @@ function normalizeOssReason(tag: string, evidence: ActionEvidence | undefined, a
   if (tag === 'MALICIOUS_REMOTE_SCRIPT_EXECUTION') {
     return reason('REMOTE_CODE_EXECUTION', 'critical', 'Malicious remote script execution', 'The local OSS runtime detected a remote script execution pattern with high-risk indicators.', evidenceText);
   }
+  if (tag === 'REMOTE_PACKAGE_EXECUTION') {
+    return reason('REMOTE_CODE_EXECUTION', 'high', 'Unpinned remote package execution', 'A package runner downloads and executes code directly from an unpinned Git repository.', evidenceText);
+  }
+  if (tag === 'PINNED_REMOTE_PACKAGE_EXECUTION') {
+    return reason('PINNED_REMOTE_PACKAGE_EXECUTION', 'medium', 'Pinned remote package execution', 'A package runner downloads and executes code directly from a Git repository pinned to a full commit.', evidenceText);
+  }
   if (tag === 'SENSITIVE_DATA_ACCESS' || tag === 'SENSITIVE_ENV_VAR') {
     return reason('SECRET_ACCESS', 'high', 'Sensitive data access', 'The local OSS runtime detected access to sensitive data.', evidenceText);
   }
@@ -467,18 +474,29 @@ function networkBehaviorReasons(action: RuntimeAction, targets: NetworkTarget[])
   );
   const tokenHashes = extractCredentialValues(action.input, headers, bodyPreview).map(hashValue);
   const fingerprint = requestFingerprint(action.input, targets[0], method, headers, bodyPreview);
+  const observationId = stringFromMetadata(action.metadata?.callId);
+  const postPhase = action.metadata?.hookPhase === 'post';
 
   for (const target of targets) {
-    networkBehaviorEvents.push({
-      timestamp,
-      sessionId: action.sessionId,
-      hostname: target.hostname,
-      method,
-      fingerprint,
-      tokenHashes,
-      responseBytes,
-      responseStatus,
-    });
+    const existing = postPhase && observationId
+      ? findNetworkObservation(action.sessionId, observationId, target.hostname)
+      : undefined;
+    if (existing) {
+      existing.responseBytes = responseBytes ?? existing.responseBytes;
+      existing.responseStatus = responseStatus ?? existing.responseStatus;
+    } else {
+      networkBehaviorEvents.push({
+        timestamp,
+        sessionId: action.sessionId,
+        ...(observationId ? { observationId } : {}),
+        hostname: target.hostname,
+        method,
+        fingerprint,
+        tokenHashes,
+        responseBytes,
+        responseStatus,
+      });
+    }
   }
 
   const reasons: PolicyReason[] = [];
@@ -907,6 +925,7 @@ function parseNetworkBehaviorEvent(value: unknown): NetworkBehaviorEvent | null 
   return {
     timestamp: record.timestamp,
     sessionId: record.sessionId,
+    observationId: typeof record.observationId === 'string' ? record.observationId : undefined,
     hostname: record.hostname,
     method: record.method,
     fingerprint: typeof record.fingerprint === 'string' ? record.fingerprint : undefined,
@@ -916,6 +935,24 @@ function parseNetworkBehaviorEvent(value: unknown): NetworkBehaviorEvent | null 
     responseBytes: typeof record.responseBytes === 'number' ? record.responseBytes : undefined,
     responseStatus: typeof record.responseStatus === 'number' ? record.responseStatus : undefined,
   };
+}
+
+function findNetworkObservation(
+  sessionId: string,
+  observationId: string,
+  hostname: string
+): NetworkBehaviorEvent | undefined {
+  for (let index = networkBehaviorEvents.length - 1; index >= 0; index -= 1) {
+    const event = networkBehaviorEvents[index];
+    if (
+      event.sessionId === sessionId &&
+      event.observationId === observationId &&
+      event.hostname === hostname
+    ) {
+      return event;
+    }
+  }
+  return undefined;
 }
 
 function pruneNetworkBehaviorEvents(now: number): void {
