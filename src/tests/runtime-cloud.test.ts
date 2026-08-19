@@ -18,6 +18,22 @@ import type { RuntimeAuditEvent } from '../runtime/types.js';
 process.env.AGENTGUARD_BEHAVIOR_STATE_PATH = join(tmpdir(), `agentguard-runtime-behavior-${process.pid}.json`);
 
 describe('Runtime Cloud bridge', () => {
+  it('requires approval for DSH skill installation and MCP tool actions', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    for (const actionType of ['skill_install', 'mcp_tool'] as const) {
+      const decision = await evaluateLocalAction(policy, {
+        sessionId: `sess_${actionType}`,
+        agentHost: 'dsh',
+        actionType,
+        toolName: actionType === 'skill_install' ? 'install_skill' : 'mcp_database_query',
+        input: actionType === 'skill_install' ? 'https://evil.example/skill' : 'DROP TABLE users',
+      });
+
+      assert.equal(decision.decision, 'require_approval', actionType);
+      assert.ok(decision.reasons.some(reason => reason.code === 'ACTION_TYPE_REQUIRES_APPROVAL'), actionType);
+    }
+  });
+
   it('redacts API keys, bearer tokens, private keys, and URL secrets', () => {
     const privateKey = '-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----';
     const redacted = redactText(

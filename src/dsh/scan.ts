@@ -158,7 +158,7 @@ export async function scanDshPlugin(
 ): Promise<DshPluginScanReport> {
   const source = await resolveDshSource(input, options);
   try {
-    const directory = await walkDirectoryWithCoverage(source.rootDir);
+    const directory = await walkDirectoryWithCoverage(source.rootDir, { includeGeneratedRuntime: true });
     const detection = await detectDshPlugin(source.rootDir, directory.files);
     const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection, directory.files);
     const pluginKind = await classifyDshPlugin(source.rootDir, detection, capabilityProfile, directory.files);

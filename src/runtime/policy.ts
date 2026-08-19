@@ -27,7 +27,7 @@ export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
       'git push --force',
     ],
     allowedCommandPatterns: [],
-    approvalActionTypes: ['file_read', 'file_write', 'deploy'],
+    approvalActionTypes: ['file_read', 'file_write', 'mcp_tool', 'skill_install', 'deploy'],
     network: {
       defaultOutbound: 'warn',
       blockedDomains: [

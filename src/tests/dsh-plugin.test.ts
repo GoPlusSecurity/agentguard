@@ -125,6 +125,10 @@ describe('AgentGuard DSH runtime plugin', () => {
       () => apply(context, { runtime: { postResponseMode: 'invalid' as 'audit' } }),
       /unsupported AgentGuard DSH post-response mode/
     );
+    assert.throws(
+      () => apply(context, { runtime: { unknownToolDecision: 'invalid' as 'ask' } }),
+      /unsupported AgentGuard DSH unknown tool decision/
+    );
   });
 
   it('scans a local DSH plugin and renders markdown', async () => {

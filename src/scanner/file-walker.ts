@@ -64,6 +64,8 @@ export interface DirectoryScanSnapshot {
 export interface FileWalkerOptions {
   maxFiles?: number;
   maxFileBytes?: number;
+  /** Include generated runtime directories when the caller is scanning an install surface. */
+  includeGeneratedRuntime?: boolean;
   inspectFile?: typeof inspectRegularFileWithinRoot;
   readFile?: (filePath: string) => Promise<string>;
 }
@@ -91,11 +93,14 @@ export async function walkDirectoryWithCoverage(
   // Build glob pattern for all scannable extensions
   const extensions = SCANNABLE_EXTENSIONS.map(e => e.slice(1)).join(',');
   const pattern = `**/*.{${extensions}}`;
+  const ignore = options.includeGeneratedRuntime
+    ? SKIP_PATTERNS.filter(pattern => pattern !== '**/dist/**' && pattern !== '**/build/**')
+    : SKIP_PATTERNS;
 
   // Find all matching files
   const allMatches = await glob(pattern, {
     cwd: rootDir,
-    ignore: SKIP_PATTERNS,
+    ignore,
     nodir: true,
     absolute: true,
   });

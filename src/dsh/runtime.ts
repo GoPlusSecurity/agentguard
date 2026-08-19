@@ -6,7 +6,7 @@ import {
   evaluateRuntimeAction,
   type RuntimeEvaluation,
 } from '../runtime/decision.js';
-import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent } from '../runtime/types.js';
+import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent, RuntimeDecision } from '../runtime/types.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
   mergeDshPostDecisions,
@@ -24,6 +24,7 @@ export const DSH_PROTECT_MODE = 'protect' as const;
 export type DshRuntimeMode = 'off' | typeof DSH_RUNTIME_MODE | typeof DSH_PROTECT_MODE;
 export type DshRuntimeFailureMode = 'allow' | 'deny';
 export type DshPostResponseMode = 'audit' | 'block-malicious';
+export type DshUnknownToolDecision = 'ask' | 'deny' | 'allow';
 
 export interface DshRuntimeConfig {
   /** `protect` enforces pre-execute policy and enables explicit post containment. */
@@ -36,6 +37,8 @@ export interface DshRuntimeConfig {
   ownerPolicies?: DshOwnerPolicies;
   /** `block-malicious` suppresses post-execute results only when policy returns block. */
   postResponseMode?: DshPostResponseMode;
+  /** Decision for tools that cannot be classified into a known runtime action in protect mode. */
+  unknownToolDecision?: DshUnknownToolDecision;
 }
 
 export interface DshRuntimeAttributionConfig {
@@ -105,6 +108,7 @@ export interface DshRuntimeDependencies {
   runtimeMode?: Exclude<DshRuntimeMode, 'off'>;
   attribution?: DshRuntimeAttributionConfig;
   ownerPolicies?: DshOwnerPolicies;
+  unknownToolDecision?: DshUnknownToolDecision;
 }
 
 export interface DshRuntimeObservation {
@@ -303,7 +307,13 @@ async function evaluateAndAuditDshAction(
       ? dependencies.fetchPolicyFor(config)
       : defaultFetchPolicy(config),
   });
-  const evaluation = applyDshOwnerPolicy(sharedEvaluation, action, dependencies.ownerPolicies);
+  const guardedEvaluation = applyUnknownToolDecision(
+    sharedEvaluation,
+    action,
+    runtimeMode,
+    dependencies.unknownToolDecision ?? 'ask',
+  );
+  const evaluation = applyDshOwnerPolicy(guardedEvaluation, action, dependencies.ownerPolicies);
   const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
   const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
   const decisionApplied = enforcementApplied === 'block-only'
@@ -374,9 +384,46 @@ export function createDshPreExecuteProtector(
       };
     }
 
+    if (agentguardDecision.kind === 'deny') return agentguardDecision;
     const downstream = await next();
     return mergeDshPreDecisions(agentguardDecision, downstream);
   };
+}
+
+function applyUnknownToolDecision(
+  evaluation: RuntimeEvaluation,
+  action: RuntimeAction,
+  runtimeMode: Exclude<DshRuntimeMode, 'off'>,
+  configuredDecision: DshUnknownToolDecision,
+): RuntimeEvaluation {
+  if (runtimeMode !== DSH_PROTECT_MODE || action.actionType !== 'other' || configuredDecision === 'allow') {
+    return evaluation;
+  }
+
+  const deny = configuredDecision === 'deny';
+  const currentDecision = evaluation.decision.decision;
+  const enforcedDecision = deny ? 'block' : 'require_approval';
+  const finalDecision = currentDecision === 'block'
+    || (!deny && currentDecision === 'require_approval')
+    ? currentDecision
+    : enforcedDecision;
+  const unknownReason = {
+    code: 'UNKNOWN_TOOL',
+    severity: deny ? 'critical' : 'high',
+    title: 'Unknown tool requires an explicit decision',
+    description: deny
+      ? 'The DSH tool could not be classified and protect policy denies unknown tools.'
+      : 'The DSH tool could not be classified and protect policy requires approval for unknown tools.',
+    evidence: action.toolName,
+  } as const;
+  const decision: RuntimeDecision = {
+    ...evaluation.decision,
+    decision: finalDecision,
+    riskScore: deny ? Math.max(95, evaluation.decision.riskScore) : Math.max(20, evaluation.decision.riskScore),
+    riskLevel: deny ? 'critical' : evaluation.decision.riskLevel === 'safe' ? 'medium' : evaluation.decision.riskLevel,
+    reasons: [...evaluation.decision.reasons, unknownReason],
+  };
+  return { ...evaluation, decision };
 }
 
 export function createDshPostExecuteObserver(
