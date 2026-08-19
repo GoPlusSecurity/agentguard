@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "agentguard",
   "display_name": "GoPlus AgentGuard",
-  "version": "1.1.29-beta.0",
+  "version": "1.1.29-beta.1",
   "icon": "icon.png",
   "description": "Security guard for AI agents — blocks malicious skills, prevents data leaks, protects secrets.",
   "long_description": "GoPlus AgentGuard is an AI-agent security framework. It exposes MCP tools for scanning skills, looking up and managing a trust registry, evaluating runtime actions against policy, and simulating Web3 transactions. 20+ detection rules cover dangerous commands, secret exfiltration, and risky on-chain actions.",
