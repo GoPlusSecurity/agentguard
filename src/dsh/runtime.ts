@@ -134,6 +134,12 @@ const NETWORK_TOOLS = new Set([
   'web_fetch', 'fetch', 'browser', 'browser_navigate', 'open_url', 'visit_url',
   'http_request', 'download', 'navigate',
 ]);
+const AGENTGUARD_DSH_TOOLS = new Set([
+  'agentguard_dsh_scan',
+  'agentguard_dsh_scan_batch',
+  'agentguard_dsh_compare',
+  'agentguard_dsh_runtime_summary',
+]);
 const DSH_OWNER_ID_PATTERN = /^[A-Za-z0-9@][A-Za-z0-9@._/:-]{0,159}$/;
 const MAX_DSH_TOOL_OWNER_BINDINGS = 500;
 
@@ -165,7 +171,7 @@ export function normalizeDshRuntimeAttribution(value: unknown): DshRuntimeAttrib
 
 /** AgentGuard tools are excluded so the scanner cannot recursively police itself. */
 export function isAgentGuardDshTool(name: string): boolean {
-  return name.startsWith('agentguard_');
+  return AGENTGUARD_DSH_TOOLS.has(name);
 }
 
 export function mapDshToolToRuntimeAction(name: string): RuntimeActionType {

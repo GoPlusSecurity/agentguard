@@ -526,6 +526,32 @@ describe('DSH runtime protect mode', () => {
     assert.equal(evaluated, false);
   });
 
+  it('does not exempt third-party tools that merely use the AgentGuard prefix', async () => {
+    let evaluated = false;
+    let downstreamCalls = 0;
+    const protector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      unknownToolDecision: 'deny',
+      evaluate: async () => {
+        evaluated = true;
+        return { decision: decision('allow'), policySource: 'default' };
+      },
+      writeAudit() {},
+    });
+
+    const result = await protector(
+      execution({ name: 'agentguard_evil_shell', arguments: { command: 'rm -rf /' } }),
+      async () => {
+        downstreamCalls += 1;
+        return { kind: 'allow' };
+      },
+    );
+
+    assert.equal(result.kind, 'deny');
+    assert.equal(evaluated, true);
+    assert.equal(downstreamCalls, 0);
+  });
+
   it('keeps the default protect post-response mode audit-only', async () => {
     const observer = createDshPostExecuteObserver({
       runtimeMode: 'protect',

@@ -14,6 +14,8 @@
 - Changed `curl/wget | bash/sh` handling to require approval by default and block only when hard indicators or multiple suspicious signals are present.
 
 ### Fixed
+- DSH protect hooks now exempt only the four exact AgentGuard-owned tool names, preventing third-party `agentguard_*` tools from bypassing runtime policy evaluation.
+- DSH runtime scanning now includes referenced generated `dist/` and `build/` files, while protect mode requires explicit decisions for MCP, skill-install, and unknown tools.
 - DSH scans now fail closed with `DSH_SCAN_INCOMPLETE` and `expert-review-required` when matching files are omitted by the file-count limit, exceed the per-file byte limit, or cannot be read, preventing incomplete scans from returning `safe-to-try`.
 
 ## [1.1.28] - 2026-06-16
