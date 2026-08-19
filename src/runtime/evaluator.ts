@@ -224,6 +224,22 @@ function customPolicyReasons(policy: EffectiveRuntimePolicy, action: RuntimeActi
     ));
   }
 
+  // MCP and skill installation actions do not have a safe generic mapping into
+  // the OSS action scanner. Require the explicit policy approval for those
+  // action types instead of treating an unmapped action as harmless.
+  if (
+    (action.actionType === 'mcp_tool' || action.actionType === 'skill_install') &&
+    policy.approvalActionTypes.includes(action.actionType)
+  ) {
+    reasons.push(reason(
+      'ACTION_TYPE_REQUIRES_APPROVAL',
+      'medium',
+      'Tool type requires approval',
+      `The runtime policy requires approval for ${action.actionType} actions.`,
+      action.toolName,
+    ));
+  }
+
   return reasons;
 }
 
@@ -718,6 +734,7 @@ function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePol
   }
   if (code === 'SECRET_ACCESS') return policy.decisions.secretAccess;
   if (code === 'DEPLOYMENT_ACTION') return policy.decisions.deployAction;
+  if (code === 'ACTION_TYPE_REQUIRES_APPROVAL') return 'require_approval';
   return null;
 }
 

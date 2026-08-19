@@ -379,6 +379,58 @@ describe('DSH runtime Phase 2A observer', () => {
 });
 
 describe('DSH runtime protect mode', () => {
+  it('asks for unknown tools by default and denies them without downstream execution when configured', async () => {
+    const protector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+      writeAudit() {},
+    });
+
+    const result = await protector(
+      execution({ name: 'run_anything', arguments: { command: 'rm -rf /' } }),
+      async () => ({ kind: 'allow' }),
+    );
+
+    assert.equal(result.kind, 'ask');
+
+    let downstreamCalls = 0;
+    const denyProtector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      unknownToolDecision: 'deny',
+      evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    const denied = await denyProtector(
+      execution({ name: 'run_anything', arguments: { command: 'rm -rf /' } }),
+      async () => {
+        downstreamCalls += 1;
+        return { kind: 'allow' };
+      },
+    );
+
+    assert.equal(denied.kind, 'deny');
+    assert.equal(downstreamCalls, 0);
+  });
+
+  it('does not weaken an existing block for unknown tools and leaves observe mode unchanged', async () => {
+    const blocked = await protectDshToolCall(execution({ name: 'run_anything', arguments: {} }), {
+      loadAgentGuardConfig: () => config,
+      unknownToolDecision: 'ask',
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    assert.equal(blocked?.evaluation.decision.decision, 'block');
+
+    const observed = await observeDshToolCall(execution({ name: 'run_anything', arguments: {} }), {
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+      writeAudit() {},
+    });
+    assert.equal(observed?.evaluation.decision.decision, 'allow');
+  });
+
   it('applies all shared pre-execute decisions through the native DSH contract', async () => {
     for (const [policy, expectedKind] of [
       ['allow', 'allow'],
@@ -402,6 +454,7 @@ describe('DSH runtime protect mode', () => {
     const dependencies = {
       loadAgentGuardConfig: () => config,
       fetchPolicyFor: () => undefined,
+      unknownToolDecision: 'allow' as const,
       attribution: { toolOwners: { custom_tool: 'example-plugin' } },
       ownerPolicies: { 'example-plugin': { minimumDecision: 'require_approval' as const } },
       evaluate: async () => ({ decision: decision('allow'), policySource: 'default' as const }),
@@ -471,6 +524,32 @@ describe('DSH runtime protect mode', () => {
       downstream
     );
     assert.equal(evaluated, false);
+  });
+
+  it('does not exempt third-party tools that merely use the AgentGuard prefix', async () => {
+    let evaluated = false;
+    let downstreamCalls = 0;
+    const protector = createDshPreExecuteProtector({
+      loadAgentGuardConfig: () => config,
+      unknownToolDecision: 'deny',
+      evaluate: async () => {
+        evaluated = true;
+        return { decision: decision('allow'), policySource: 'default' };
+      },
+      writeAudit() {},
+    });
+
+    const result = await protector(
+      execution({ name: 'agentguard_evil_shell', arguments: { command: 'rm -rf /' } }),
+      async () => {
+        downstreamCalls += 1;
+        return { kind: 'allow' };
+      },
+    );
+
+    assert.equal(result.kind, 'deny');
+    assert.equal(evaluated, true);
+    assert.equal(downstreamCalls, 0);
   });
 
   it('keeps the default protect post-response mode audit-only', async () => {

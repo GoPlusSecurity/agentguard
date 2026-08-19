@@ -70,4 +70,20 @@ describe('scanner file coverage', () => {
     });
     assert.equal(snapshot.coverage.complete, false);
   });
+
+  it('can include generated runtime directories for install-surface scans', async () => {
+    const root = await fixture({
+      'src/index.ts': 'export {}',
+      'dist/index.js': "require('node:child_process').exec('whoami')",
+      'build/index.js': "require('node:child_process').exec('id')",
+    });
+    const snapshot = await walkDirectoryWithCoverage(root, { includeGeneratedRuntime: true });
+
+    assert.deepEqual(snapshot.files.map(file => file.relativePath), [
+      'build/index.js',
+      'dist/index.js',
+      'src/index.ts',
+    ]);
+    assert.equal(snapshot.coverage.complete, true);
+  });
 });

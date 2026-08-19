@@ -158,7 +158,7 @@ Response:
     "protectedPaths": ["~/.ssh/**", "~/.aws/**", "**/.env*"],
     "blockedCommandPatterns": ["rm -rf /", "base64 -d | bash"],
     "allowedCommandPatterns": [],
-    "approvalActionTypes": ["file_read", "file_write", "deploy"],
+    "approvalActionTypes": ["file_read", "file_write", "mcp_tool", "skill_install", "deploy"],
     "network": {
       "defaultOutbound": "warn",
       "blockedDomains": ["discord.com/api/webhooks"],

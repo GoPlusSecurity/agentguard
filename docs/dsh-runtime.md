@@ -22,6 +22,7 @@ The npm bundle continues to compose `observe` by default so installing an update
         runtime:
           mode: protect
           failureMode: deny
+          unknownToolDecision: ask
           postResponseMode: block-malicious
           attribution:
             toolOwners:
@@ -39,10 +40,10 @@ At plugin startup AgentGuard logs the configured mode and whether pre-execute en
 
 1. DSH supplies the immutable tool name, parsed arguments, call identity, root-call identity, optional parent token, and calling agent.
 2. AgentGuard uses the official session header for the workspace cwd and resolves a relative shell workdir against it.
-3. Common command, patch, image, file-search, HTTP, browser, deployment, skill-install, and MCP tools map to the shared action types. Unknown tools remain `other` and are still audited.
+3. Common command, patch, image, file-search, HTTP, browser, deployment, skill-install, and MCP tools map to the shared action types. Skill-install and MCP actions require approval by the default runtime policy. Unknown tools remain `other`; in `protect` they default to native `ask` and can be configured with `unknownToolDecision: ask|deny|allow`.
 4. Network method, headers, and bounded body context are preserved for the shared evaluator.
 5. AgentGuard resolves Cloud, cached, or bundled-default policy and evaluates locally. Cloud failure falls back to cached/default policy.
-6. In `observe`, the downstream DSH policy is returned unchanged. In `protect`, the AgentGuard result is translated and monotonically merged with the downstream policy so a stronger third-party `ask` or `deny` is never weakened.
+6. In `observe`, the downstream DSH policy is returned unchanged. In `protect`, the AgentGuard result is translated and monotonically merged with the downstream policy so a stronger third-party `ask` or `deny` is never weakened. A final AgentGuard `deny` short-circuits the pre-execute waterfall and does not dispatch the downstream tool body.
 7. AgentGuard's own `agentguard_*` tools are excluded to prevent recursive protection.
 
 ## Decision mapping
