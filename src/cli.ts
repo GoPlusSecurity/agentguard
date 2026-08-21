@@ -1008,8 +1008,9 @@ function initAutoAgents(config: AgentGuardConfig, force: boolean): {
   const directoryAgents = AUTO_AGENT_DETECTION
     .filter(({ dir }) => existsSync(join(process.cwd(), dir)))
     .map(({ agent }) => agent);
-  const dshAgents: AgentInstaller[] = detectDshRuntime() ? ['dsh'] : [];
-  const detectedAgents: AgentInstaller[] = process.env.DSH_SHELL === '1'
+  const isDshManagedShell = detectDshManagedShell();
+  const dshAgents: AgentInstaller[] = isDshManagedShell || detectInstalledDshWebProfile() ? ['dsh'] : [];
+  const detectedAgents: AgentInstaller[] = isDshManagedShell
     ? [...dshAgents, ...directoryAgents]
     : [...directoryAgents, ...dshAgents];
 
@@ -1598,7 +1599,7 @@ function isHermesAgentConfigured(config: AgentGuardConfig): boolean {
 }
 
 function isDshAgentConfigured(config: AgentGuardConfig): boolean {
-  return config.agentHost === 'dsh' || config.agentHosts?.includes('dsh') === true || detectDshRuntime();
+  return config.agentHost === 'dsh' || config.agentHosts?.includes('dsh') === true || detectDshManagedShell();
 }
 
 function isAgentJwtHostConfigured(config: AgentGuardConfig): boolean {
@@ -1609,7 +1610,7 @@ function withDetectedAgentJwtHost(config: AgentGuardConfig): AgentGuardConfig {
   if (isAgentJwtAgentHost(config.agentHost)) return config;
   const savedAgentJwtHost = config.agentHosts?.find(isAgentJwtAgentHost);
   if (savedAgentJwtHost) return withDetectedAgentHost(config, savedAgentJwtHost);
-  if (detectDshRuntime()) return withDetectedAgentHost(config, 'dsh');
+  if (detectDshManagedShell()) return withDetectedAgentHost(config, 'dsh');
   if (detectOpenClawRuntime()) return withDetectedAgentHost(config, 'openclaw');
   if (detectHermesRuntime()) return withDetectedAgentHost(config, 'hermes');
   return config;
@@ -1619,8 +1620,11 @@ function isAgentJwtAgentHost(value: AgentGuardAgentHost | undefined): value is '
   return value === 'openclaw' || value === 'hermes' || value === 'dsh';
 }
 
-function detectDshRuntime(): boolean {
-  if (process.env.DSH_SHELL === '1') return true;
+function detectDshManagedShell(): boolean {
+  return process.env.DSH_SHELL === '1';
+}
+
+function detectInstalledDshWebProfile(): boolean {
   const configuredHome = process.env.DSH_HOME?.trim();
   const dshHome = configuredHome
     ? configuredHome === '~'
