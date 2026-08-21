@@ -78,7 +78,7 @@ safe | low | medium | high | critical
 ### Commercial install script
 
 ```http
-GET /install.sh?agent=claude-code
+GET /install.sh?agent=dsh
 ```
 
 Allowed `agent` values:
@@ -87,15 +87,14 @@ Allowed `agent` values:
 auto | openclaw | hermes | dsh
 ```
 
-The repository (not the published npm artifact) includes [`scripts/cloud-install.sh`](../scripts/cloud-install.sh) as an executable template for Agent JWT activation-link flows. The script installs `@goplus/agentguard`, initializes integrations, and connects Cloud. With no explicit host it calls:
+The hosted script installs `@goplus/agentguard`, initializes integrations, and connects Cloud. With no explicit host it calls:
 
 ```bash
 agentguard init --cloud "$AGENTGUARD_CLOUD_URL"
 ```
 
-When the hosting service already knows the requested host, render a validated
-`AGENTGUARD_AGENT` default into the response; the template then adds
-`--agent "$AGENTGUARD_AGENT"`. Explicit activation-link hosts are restricted to
+When the hosting service already knows the requested host, it may add a validated
+`--agent` value. Explicit activation-link hosts are restricted to
 OpenClaw, Hermes, and DSH. DSH uses its default `web` profile and must be
 restarted after installation. In `auto` mode, at least one detected host must
 support Agent JWT registration or `connect` exits with guidance instead of
@@ -108,10 +107,8 @@ without an API key:
 agentguard connect --cloud "$AGENTGUARD_CLOUD_URL"
 ```
 
-The CLI registers a local Agent JWT and prints an activation link. The template
-reprints it as `AGENTGUARD_ACTIVATION_URL=<url>` so a hosting backend can return it
-to the user. For other agent hosts, use the CLI's separate API-key flow rather
-than this activation-link template:
+The CLI registers a local Agent JWT and prints an activation link. For other
+agent hosts, use the CLI's separate API-key flow:
 
 ```bash
 agentguard connect --cloud "$AGENTGUARD_CLOUD_URL" --api-key "$AGENTGUARD_API_KEY"

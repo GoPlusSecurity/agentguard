@@ -55,14 +55,6 @@ agentguard status
 The npm install runs a best-effort local bootstrap; bare `agentguard init` is the required next step. It auto-detects supported agents and configures their hooks/plugins. Inside DSH it installs the native AgentGuard bundle into the default `web` profile; restart DSH after initialization.
 No Cloud account or network connection is required for the local runtime guard.
 
-For a hosted Cloud bootstrap, publish the repository-source template [`scripts/cloud-install.sh`](scripts/cloud-install.sh) over HTTPS and set its Cloud URL default. The script installs the npm package, runs auto-discovery, connects Cloud, and prints `AGENTGUARD_ACTIVATION_URL=...` for account binding. A backend may render `AGENTGUARD_AGENT=dsh` into the response to force DSH when environment auto-detection is unavailable. Although a backend can offer `curl -fsSL https://your-cloud.example/install.sh | bash`, a security-conscious installation should download, inspect, and then execute the script:
-
-```bash
-curl -fsSLo agentguard-install.sh https://your-cloud.example/install.sh
-less agentguard-install.sh
-bash agentguard-install.sh
-```
-
 ## 3 minutes: protect your agent
 
 ```bash
