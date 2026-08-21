@@ -6,7 +6,7 @@ import { ensureConfig, getAgentGuardPaths } from './config.js';
 
 const NEXT_STEPS = [
   'Next step:',
-  '  agentguard init --agent auto',
+  '  agentguard init',
   '',
 ].join('\n');
 

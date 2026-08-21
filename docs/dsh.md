@@ -9,6 +9,15 @@ The Phase 1 scanner is intentionally read-only: it scans source, classifies capa
 AgentGuard can be loaded into a DSH profile as a native tool plugin. From an npm release:
 
 ```bash
+npm install -g @goplus/agentguard
+agentguard init --agent dsh
+```
+
+When invoked inside DSH, bare `agentguard init` auto-detects DSH and performs the same installation. Both commands install the packaged native bundle into DSH's default `web` profile. Restart DSH after initialization.
+
+The equivalent low-level DSH command is:
+
+```bash
 dsh plugin --profile web add @goplus/agentguard
 ```
 
@@ -18,7 +27,7 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-Restart DSH after installation. The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, and `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
+The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, and `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
 The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `observe` by default; [DSH runtime guard](dsh-runtime.md) documents explicit `protect` configuration.
 

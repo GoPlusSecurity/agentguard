@@ -45,7 +45,7 @@ Native UI may present `require_approval` as `confirm`, but API payloads should k
 ### Agent hosts
 
 ```text
-claude-code | codex | openclaw | cursor | gemini | copilot | other
+claude-code | codex | openclaw | hermes | qclaw | dsh | cursor | gemini | copilot | other
 ```
 
 ### Action types
@@ -84,31 +84,40 @@ GET /install.sh?agent=claude-code
 Allowed `agent` values:
 
 ```text
-auto | claude-code | openclaw | codex
+auto | openclaw | hermes | dsh
 ```
 
-The script installs `@goplus/agentguard`, writes a safe fallback local config, then calls:
+The repository (not the published npm artifact) includes [`scripts/cloud-install.sh`](../scripts/cloud-install.sh) as an executable template for Agent JWT activation-link flows. The script installs `@goplus/agentguard`, initializes integrations, and connects Cloud. With no explicit host it calls:
 
 ```bash
-agentguard init --agent "$AGENTGUARD_AGENT" --cloud "$AGENTGUARD_CLOUD_URL"
+agentguard init --cloud "$AGENTGUARD_CLOUD_URL"
 ```
 
-When the effective agent host is OpenClaw, the script should connect without an
-API key:
+When the hosting service already knows the requested host, render a validated
+`AGENTGUARD_AGENT` default into the response; the template then adds
+`--agent "$AGENTGUARD_AGENT"`. Explicit activation-link hosts are restricted to
+OpenClaw, Hermes, and DSH. DSH uses its default `web` profile and must be
+restarted after installation. In `auto` mode, at least one detected host must
+support Agent JWT registration or `connect` exits with guidance instead of
+claiming a binding link was created.
+
+When the effective agent host is OpenClaw, Hermes, or DSH, the script connects
+without an API key:
 
 ```bash
 agentguard connect --cloud "$AGENTGUARD_CLOUD_URL"
 ```
 
-The CLI registers a local Agent JWT and prints an activation link. For other
-agent hosts, or when the user explicitly chooses API-key auth, the script should
-call:
+The CLI registers a local Agent JWT and prints an activation link. The template
+reprints it as `AGENTGUARD_ACTIVATION_URL=<url>` so a hosting backend can return it
+to the user. For other agent hosts, use the CLI's separate API-key flow rather
+than this activation-link template:
 
 ```bash
 agentguard connect --cloud "$AGENTGUARD_CLOUD_URL" --api-key "$AGENTGUARD_API_KEY"
 ```
 
-Native CLI implementations should support `--cloud` as an alias for the Cloud URL and `--api-key` as an alias for the API key. Installers that accept `agent=auto` should use the agent host persisted by `agentguard init --agent auto` when choosing between Agent JWT and API-key auth.
+Native CLI implementations should support `--cloud` as an alias for the Cloud URL and `--api-key` as an alias for the API key. Bare `agentguard init` is equivalent to `--agent auto`; it persists detected hosts so `connect` can choose Agent JWT or API-key auth.
 
 ### Health check
 

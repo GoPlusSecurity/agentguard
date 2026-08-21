@@ -13,16 +13,17 @@ This creates `~/.agentguard/config.json`, `~/.agentguard/audit.jsonl`, and local
 
 ## Connect Cloud
 
-OpenClaw users can connect without an API key after initialization:
+OpenClaw, Hermes, and DSH users can connect without an API key after initialization:
 
 ```bash
-agentguard init --agent openclaw
+agentguard init
 agentguard connect
 ```
 
-In this mode, `connect` registers a local Agent JWT, prints an activation link,
-and may send that link to the latest OpenClaw channel. Open the link to bind the
-local agent to your AgentGuard account.
+In this mode, `connect` registers a local Agent JWT and prints an activation link.
+OpenClaw may also send that link to its latest channel. Open the link to bind the
+local agent to your AgentGuard account. If auto-detection is unavailable, pass an
+explicit host such as `agentguard init --agent dsh`.
 
 API-key auth is also supported:
 
