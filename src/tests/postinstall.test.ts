@@ -18,12 +18,14 @@ describe('postinstall', () => {
     });
 
     assert.match(stdout, /AgentGuard local config ready:/);
-    assert.match(stdout, /agentguard init --agent auto/);
+    assert.match(stdout, /  agentguard init\n/);
+    assert.doesNotMatch(stdout, /agentguard init --agent auto/);
     assert.doesNotMatch(stdout, /agentguard connect/);
     assert.doesNotMatch(stdout, /agentguard checkup/);
 
     const nextSteps = readFileSync(join(home, 'next-steps.txt'), 'utf8');
-    assert.match(nextSteps, /agentguard init --agent auto/);
+    assert.match(nextSteps, /  agentguard init\n/);
+    assert.doesNotMatch(nextSteps, /agentguard init --agent auto/);
     assert.doesNotMatch(nextSteps, /agentguard connect/);
     assert.doesNotMatch(nextSteps, /agentguard checkup/);
   });

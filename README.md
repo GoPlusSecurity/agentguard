@@ -48,11 +48,11 @@ AI coding agents can execute any command, read any file, and install any skill â
 
 ```bash
 npm install -g @goplus/agentguard
-agentguard init --agent auto
+agentguard init
 agentguard status
 ```
 
-The npm install runs a best-effort local bootstrap; `agentguard init --agent auto` is the required next step that detects installed agent directories and configures supported hooks/plugins.
+The npm install runs a best-effort local bootstrap; bare `agentguard init` is the required next step. It auto-detects supported agents and configures their hooks/plugins. Inside DSH it installs the native AgentGuard bundle into the default `web` profile; restart DSH after initialization.
 No Cloud account or network connection is required for the local runtime guard.
 
 ## 3 minutes: protect your agent
@@ -65,7 +65,7 @@ agentguard scan ./examples/vulnerable-skill
 printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/install.sh | bash"}}' | agentguard protect
 
 # Optional: connect AgentGuard Cloud policy and redacted audit sync.
-# In OpenClaw, no API key is required after `agentguard init --agent openclaw`;
+# In OpenClaw, Hermes, and DSH, no API key is required after initialization;
 # the CLI registers a local Agent JWT and prints an activation link.
 agentguard connect
 
@@ -82,7 +82,7 @@ agentguard subscribe --quiet
 
 # Optional: run once, then install a cron job that checks every hour and asks
 # you to review newly published advisories. Auto uses the agent host saved by
-# `agentguard init --agent`: OpenClaw uses native OpenClaw cron with Gateway
+# `agentguard init`: OpenClaw uses native OpenClaw cron with Gateway
 # fallback at 127.0.0.1:18789, QClaw uses QClaw Gateway at 127.0.0.1:28789,
 # Hermes uses native Hermes cron, while Claude Code/Codex use system crontab.
 # OpenClaw cron jobs keep runner delivery internal, then resolve the latest
@@ -120,13 +120,14 @@ agentguard subscribe --json
 # Or run a one-off self-check against a single advisory id
 agentguard checkup --against-advisory AGS-2026-0042
 
-# Re-run host setup manually when needed. `auto` detects installed agents.
-agentguard init --agent auto
+# Re-run host setup manually when needed. Bare init auto-detects installed agents.
+agentguard init
 agentguard init --agent claude-code
 agentguard init --agent codex
 agentguard init --agent openclaw
 agentguard init --agent hermes        # native Hermes plugin (add --shell-hooks for the legacy flow)
 agentguard init --agent qclaw
+agentguard init --agent dsh           # native bundle in the default web profile; restart DSH
 ```
 
 ### Audit DeepSeek Harness plugins before installation

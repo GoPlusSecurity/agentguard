@@ -9,6 +9,20 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 describe('init CLI', () => {
+  function installFakeDsh(bin: string, callLog: string, exitCode = 0): void {
+    mkdirSync(bin, { recursive: true });
+    const dsh = join(bin, 'dsh');
+    writeFileSync(dsh, [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'fs.writeFileSync(process.env.DSH_CALL_LOG, JSON.stringify(process.argv.slice(2)));',
+      'process.stdout.write("profile bundle installed\\n");',
+      `process.exit(${exitCode});`,
+      '',
+    ].join('\n'));
+    chmodSync(dsh, 0o755);
+  }
+
   it('prints required init guidance when run without a command', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-init-guidance-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-guidance-cwd-'));
@@ -20,7 +34,8 @@ describe('init CLI', () => {
     });
 
     assert.match(stdout, /Required next step:/);
-    assert.match(stdout, /agentguard init --agent auto/);
+    assert.match(stdout, /  agentguard init\n/);
+    assert.doesNotMatch(stdout, /agentguard init --agent auto/);
     assert.doesNotMatch(stdout, /agentguard connect/);
     assert.doesNotMatch(stdout, /agentguard checkup/);
   });
@@ -36,7 +51,8 @@ describe('init CLI', () => {
     });
 
     assert.match(stdout, /Agent host: not configured/);
-    assert.match(stdout, /agentguard init --agent auto/);
+    assert.match(stdout, /  agentguard init\n/);
+    assert.doesNotMatch(stdout, /agentguard init --agent auto/);
     assert.doesNotMatch(stdout, /agentguard connect/);
     assert.doesNotMatch(stdout, /agentguard checkup/);
   });
@@ -181,6 +197,66 @@ describe('init CLI', () => {
     assert.equal(config.agentHost, 'codex');
   });
 
+  it('installs the native AgentGuard bundle when DSH is selected explicitly', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-cwd-'));
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    installFakeDsh(bin, callLog);
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'dsh'], {
+      cwd,
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_CALL_LOG: callLog,
+        PATH: `${bin}:${process.env.PATH || ''}`,
+      },
+    });
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+    assert.equal(config.agentHost, 'dsh');
+    assert.deepEqual(config.agentHosts, ['dsh']);
+    assert.deepEqual(JSON.parse(readFileSync(callLog, 'utf8')), [
+      'plugin', '--profile', 'web', 'add', '@goplus/agentguard',
+    ]);
+    assert.match(stdout, /Installed dsh integration in profile web/);
+    assert.match(stdout, /Restart DSH/);
+  });
+
+  it('does not persist DSH as initialized when native bundle installation fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-failure-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-failure-cwd-'));
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    installFakeDsh(bin, callLog, 17);
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'dsh'], {
+        cwd,
+        env: {
+          ...process.env,
+          AGENTGUARD_HOME: home,
+          DSH_CALL_LOG: callLog,
+          PATH: `${bin}:${process.env.PATH || ''}`,
+        },
+      }),
+      /DSH plugin installation failed with exit code 17/
+    );
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+    assert.equal(config.agentHost, undefined);
+    assert.equal(config.agentHosts, undefined);
+  });
+
   it('overwrites existing agent templates by default', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-init-force-default-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-force-default-cwd-'));
@@ -300,6 +376,128 @@ describe('init CLI', () => {
     assert.match(stdout, /Installed codex template:/);
   });
 
+  it('auto-detects DSH from its managed shell environment', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-auto-dsh-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-auto-dsh-cwd-'));
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    installFakeDsh(bin, callLog);
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'auto'], {
+      cwd,
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_CALL_LOG: callLog,
+        DSH_SHELL: '1',
+        PATH: `${bin}:${process.env.PATH || ''}`,
+      },
+    });
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+    assert.equal(config.agentHost, 'dsh');
+    assert.deepEqual(config.agentHosts, ['dsh']);
+    assert.deepEqual(JSON.parse(readFileSync(callLog, 'utf8')), [
+      'plugin', '--profile', 'web', 'add', '@goplus/agentguard',
+    ]);
+    assert.match(stdout, /Installed dsh integration in profile web/);
+  });
+
+  it('auto-detects and installs DSH when init omits --agent', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-default-dsh-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-default-dsh-cwd-'));
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    installFakeDsh(bin, callLog);
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init'], {
+      cwd,
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_CALL_LOG: callLog,
+        DSH_SHELL: '1',
+        PATH: `${bin}:${process.env.PATH || ''}`,
+      },
+    });
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+    assert.equal(config.agentHost, 'dsh');
+    assert.deepEqual(config.agentHosts, ['dsh']);
+    assert.deepEqual(JSON.parse(readFileSync(callLog, 'utf8')), [
+      'plugin', '--profile', 'web', 'add', '@goplus/agentguard',
+    ]);
+    assert.match(stdout, /Installed dsh integration in profile web/);
+  });
+
+  it('auto-discovers an installed DSH web profile outside the managed shell', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-installed-dsh-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-installed-dsh-cwd-'));
+    const dshHome = join(home, 'dsh');
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true });
+    writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), '{}');
+    installFakeDsh(bin, callLog);
+
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init'], {
+      cwd,
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        HOME: home,
+        DSH_HOME: '~/dsh',
+        DSH_CALL_LOG: callLog,
+        PATH: `${bin}:${process.env.PATH || ''}`,
+      },
+    });
+
+    assert.deepEqual(JSON.parse(readFileSync(callLog, 'utf8')), [
+      'plugin', '--profile', 'web', 'add', '@goplus/agentguard',
+    ]);
+    assert.match(stdout, /Installed dsh integration in profile web/);
+  });
+
+  it('does not let an installed DSH profile override the current directory agent', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-secondary-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-dsh-secondary-cwd-'));
+    const dshHome = join(home, 'dsh');
+    const bin = join(cwd, 'bin');
+    const callLog = join(cwd, 'dsh-call.json');
+    const cliPath = resolve('dist', 'cli.js');
+    mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true });
+    mkdirSync(join(cwd, '.openclaw'), { recursive: true });
+    writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), '{}');
+    installFakeDsh(bin, callLog);
+
+    await execFileAsync(process.execPath, [cliPath, 'init'], {
+      cwd,
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_HOME: dshHome,
+        DSH_CALL_LOG: callLog,
+        PATH: `${bin}:${process.env.PATH || ''}`,
+      },
+    });
+
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+    assert.equal(config.agentHost, 'openclaw');
+    assert.deepEqual(config.agentHosts, ['openclaw', 'dsh']);
+  });
+
   it('does not fail auto init when no supported agent directory exists', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentguard-init-auto-empty-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-auto-empty-cwd-'));
@@ -307,7 +505,7 @@ describe('init CLI', () => {
 
     const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'auto'], {
       cwd,
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: { ...process.env, AGENTGUARD_HOME: home, DSH_HOME: join(home, 'missing-dsh-home') },
     });
 
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
@@ -316,7 +514,7 @@ describe('init CLI', () => {
     };
     assert.equal(config.agentHost, undefined);
     assert.equal(config.agentHosts, undefined);
-    assert.match(stdout, /No supported agent directories found/);
+    assert.match(stdout, /No supported agent installation found/);
   });
 
   it('continues auto init after one detected agent fails', async () => {

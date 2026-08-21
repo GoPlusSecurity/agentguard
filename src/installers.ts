@@ -1,8 +1,9 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'dsh';
 
 export interface InstallResult {
   agent: AgentInstaller;
@@ -21,7 +22,28 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
   if (agent === 'qclaw') return installQClaw(root, Boolean(options.force));
+  if (agent === 'dsh') return installDsh(root);
   throw new Error(`Unsupported agent installer: ${agent}`);
+}
+
+function installDsh(root: string): InstallResult {
+  const args = ['plugin', '--profile', 'web', 'add', '@goplus/agentguard'];
+  const result = spawnSync('dsh', args, {
+    cwd: root,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new Error('DSH CLI was not found on PATH. Install or run DSH before initializing AgentGuard for DSH.');
+    }
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`DSH plugin installation failed with exit code ${result.status ?? 1}.`);
+  }
+  return { agent: 'dsh', files: [] };
 }
 
 function installClaudeCode(root: string, force: boolean): InstallResult {

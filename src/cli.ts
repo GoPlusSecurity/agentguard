@@ -48,7 +48,7 @@ import {
   type OpenClawGatewayOptions,
 } from './feed/cron.js';
 
-const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw'];
+const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw', 'dsh'];
 const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
   { agent: 'claude-code', dir: '.claude' },
   { agent: 'openclaw', dir: '.openclaw' },
@@ -56,7 +56,7 @@ const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
   { agent: 'qclaw', dir: '.qclaw' },
   { agent: 'codex', dir: '.codex' },
 ];
-const REQUIRED_INIT_COMMAND = 'agentguard init --agent auto';
+const REQUIRED_INIT_COMMAND = 'agentguard init';
 
 async function main() {
   const program = new Command();
@@ -70,7 +70,7 @@ async function main() {
     .command('init')
     .description('Create ~/.agentguard/config.json and local runtime paths')
     .option('--level <level>', 'Protection level: strict | balanced | permissive')
-    .option('--agent <agent>', 'Install hook/template for claude-code, codex, openclaw, hermes, or qclaw')
+    .option('--agent <agent>', 'Install integration for auto, claude-code, codex, openclaw, hermes, qclaw, or dsh (default: auto)')
     .option('--cloud <url>', 'AgentGuard Cloud URL to store in local config')
     .option('--shell-hooks', 'For Hermes: install legacy shell hooks instead of the native plugin')
     .option('--force', 'Overwrite existing hook/template files')
@@ -92,18 +92,19 @@ async function main() {
       const paths = getAgentGuardPaths();
       console.log(`AgentGuard initialized at ${paths.home}`);
       console.log(`Config: ${paths.configPath}`);
-      if (options.agent) {
-        const normalizedAgent = String(options.agent).trim().toLowerCase();
+      {
+        const normalizedAgent = options.agent === undefined
+          ? 'auto'
+          : String(options.agent).trim().toLowerCase();
         if (normalizedAgent === 'auto') {
           const results = initAutoAgents(config, forceTemplates);
           if (results.detected.length === 0) {
-            console.log('No supported agent directories found. Looked for .claude, .openclaw, .hermes, .qclaw, and .codex.');
+            console.log('No supported agent installation found. Looked for DSH and .claude, .openclaw, .hermes, .qclaw, and .codex.');
           } else if (results.installed.length === 0) {
-            console.log('No agent templates were installed; all detected agent initializers failed.');
+            console.log('No agent integrations were installed; all detected agent initializers failed.');
           }
           for (const result of results.installed) {
-            console.log(`Installed ${result.agent} template:`);
-            for (const file of result.files) console.log(`- ${file}`);
+            printInstallResult(result);
             if (result.agent === 'hermes') printHermesNativePluginEnabled();
           }
           for (const failure of results.failed) {
@@ -112,16 +113,15 @@ async function main() {
           return;
         }
         if (!SUPPORTED_AGENT_INSTALLERS.includes(normalizedAgent as AgentInstaller)) {
-          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, or qclaw.');
+          throw new Error('Invalid agent. Use auto, claude-code, codex, openclaw, hermes, qclaw, or dsh.');
         }
         const agent = normalizedAgent as AgentInstaller;
+        const shellHooks = Boolean(options.shellHooks);
+        const result = installAgentTemplates(agent, { force: forceTemplates, shellHooks });
         config.agentHost = agent;
         config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
-        const shellHooks = Boolean(options.shellHooks);
-        const result = installAgentTemplates(agent, { force: forceTemplates, shellHooks });
-        console.log(`Installed ${result.agent} template:`);
-        for (const file of result.files) console.log(`- ${file}`);
+        printInstallResult(result);
         if (agent === 'hermes' && !shellHooks) {
           printHermesNativePluginEnabled();
         }
@@ -140,7 +140,7 @@ async function main() {
       if (!apiKey) {
         let config = ensureConfig();
         if (!isAgentJwtHostConfigured(config)) {
-          throw new Error('AgentGuard Cloud connect supports API-key auth or Agent JWT registration for OpenClaw and Hermes. No API key was provided, and no supported Agent JWT host has been initialized. Run `agentguard init --agent openclaw` or `agentguard init --agent hermes`, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
+          throw new Error('AgentGuard Cloud connect supports API-key auth or Agent JWT registration for OpenClaw, Hermes, and DSH. No API key was provided, and no supported Agent JWT host has been initialized. Run `agentguard init` to auto-detect the host, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
         }
         config = withDetectedAgentJwtHost(config);
         const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
@@ -568,7 +568,7 @@ async function main() {
       let registration: AgentCredentialRegistration | null = null;
       if (!client.connected) {
         if (!isAgentJwtHostConfigured(config)) {
-          const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first, or run `agentguard init --agent openclaw` or `agentguard init --agent hermes` to use Agent JWT registration.';
+          const message = 'AgentGuard Cloud is not connected. Run `agentguard connect --key <key>` first, or run `agentguard init` to auto-detect an OpenClaw, Hermes, or DSH host for Agent JWT registration.';
           if (cronNotifyRun) {
             console.log('NO_REPLY');
           } else if (options.json) {
@@ -1005,9 +1005,14 @@ function initAutoAgents(config: AgentGuardConfig, force: boolean): {
 } {
   const installed: InstallResult[] = [];
   const failed: Array<{ agent: AgentInstaller; error: string }> = [];
-  const detectedAgents = AUTO_AGENT_DETECTION
+  const directoryAgents = AUTO_AGENT_DETECTION
     .filter(({ dir }) => existsSync(join(process.cwd(), dir)))
     .map(({ agent }) => agent);
+  const isDshManagedShell = detectDshManagedShell();
+  const dshAgents: AgentInstaller[] = isDshManagedShell || detectInstalledDshWebProfile() ? ['dsh'] : [];
+  const detectedAgents: AgentInstaller[] = isDshManagedShell
+    ? [...dshAgents, ...directoryAgents]
+    : [...directoryAgents, ...dshAgents];
 
   for (const agent of detectedAgents) {
     try {
@@ -1027,6 +1032,16 @@ function initAutoAgents(config: AgentGuardConfig, force: boolean): {
   }
 
   return { installed, failed, detected: detectedAgents };
+}
+
+function printInstallResult(result: InstallResult): void {
+  if (result.agent === 'dsh') {
+    console.log('Installed dsh integration in profile web.');
+    console.log('Restart DSH to activate AgentGuard in that profile.');
+    return;
+  }
+  console.log(`Installed ${result.agent} template:`);
+  for (const file of result.files) console.log(`- ${file}`);
 }
 
 function appendAgentHost(
@@ -1583,15 +1598,42 @@ function isHermesAgentConfigured(config: AgentGuardConfig): boolean {
   return config.agentHost === 'hermes' || config.agentHosts?.includes('hermes') === true || detectHermesRuntime();
 }
 
+function isDshAgentConfigured(config: AgentGuardConfig): boolean {
+  return config.agentHost === 'dsh' || config.agentHosts?.includes('dsh') === true || detectDshManagedShell();
+}
+
 function isAgentJwtHostConfigured(config: AgentGuardConfig): boolean {
-  return isOpenClawAgentConfigured(config) || isHermesAgentConfigured(config);
+  return isOpenClawAgentConfigured(config) || isHermesAgentConfigured(config) || isDshAgentConfigured(config);
 }
 
 function withDetectedAgentJwtHost(config: AgentGuardConfig): AgentGuardConfig {
-  if (hasSavedAgentHost(config)) return config;
+  if (isAgentJwtAgentHost(config.agentHost)) return config;
+  const savedAgentJwtHost = config.agentHosts?.find(isAgentJwtAgentHost);
+  if (savedAgentJwtHost) return withDetectedAgentHost(config, savedAgentJwtHost);
+  if (detectDshManagedShell()) return withDetectedAgentHost(config, 'dsh');
   if (detectOpenClawRuntime()) return withDetectedAgentHost(config, 'openclaw');
   if (detectHermesRuntime()) return withDetectedAgentHost(config, 'hermes');
   return config;
+}
+
+function isAgentJwtAgentHost(value: AgentGuardAgentHost | undefined): value is 'openclaw' | 'hermes' | 'dsh' {
+  return value === 'openclaw' || value === 'hermes' || value === 'dsh';
+}
+
+function detectDshManagedShell(): boolean {
+  return process.env.DSH_SHELL === '1';
+}
+
+function detectInstalledDshWebProfile(): boolean {
+  const configuredHome = process.env.DSH_HOME?.trim();
+  const dshHome = configuredHome
+    ? configuredHome === '~'
+      ? homedir()
+      : /^~[\\/]/.test(configuredHome)
+        ? join(homedir(), configuredHome.slice(2))
+        : resolve(configuredHome)
+    : join(homedir(), '.dsh');
+  return existsSync(join(dshHome, 'profiles', 'web', 'package.json'));
 }
 
 function withDetectedAgentHost(config: AgentGuardConfig, agentHost: AgentGuardAgentHost): AgentGuardConfig {

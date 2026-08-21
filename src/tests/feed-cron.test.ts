@@ -162,43 +162,45 @@ describe('feed/cron', () => {
     assert.match(job.payload.message, /NO_REPLY/);
   });
 
-  it('auto-installs system crontab jobs for Codex and Claude Code agents', async () => {
-    const calls: Array<{ command: string; args: string[]; input?: string }> = [];
-    const home = mkdtempSync(join(tmpdir(), 'agentguard-system-'));
-    const runner: CommandRunner = async (command, args, input) => {
-      calls.push({ command, args, input });
-      if (command === 'crontab' && args[0] === '-l') {
-        return { stdout: '# existing\n', stderr: '' };
-      }
-      return { stdout: '', stderr: '' };
-    };
+  it('auto-installs system crontab jobs for non-native cron agent hosts', async () => {
+    for (const agentHost of ['codex', 'dsh'] as const) {
+      const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+      const home = mkdtempSync(join(tmpdir(), `agentguard-system-${agentHost}-`));
+      const runner: CommandRunner = async (command, args, input) => {
+        calls.push({ command, args, input });
+        if (command === 'crontab' && args[0] === '-l') {
+          return { stdout: '# existing\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      };
 
-    const result = await installThreatFeedCron(
-      {
-        name: 'agentguard-threat-feed',
-        cronExpression: '0 * * * *',
-        quiet: true,
-        force: false,
-        backend: 'auto',
-        agentHost: 'codex',
-        agentGuardHome: home,
-        timezone: 'UTC',
-      },
-      { runCommand: runner }
-    );
+      const result = await installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'auto',
+          agentHost,
+          agentGuardHome: home,
+          timezone: 'UTC',
+        },
+        { runCommand: runner }
+      );
 
-    assert.equal(result.backend, 'system');
-    assert.equal(result.created, true);
-    assert.equal(calls[0].command, 'crontab');
-    assert.deepEqual(calls[0].args, ['-l']);
-    assert.equal(calls[1].command, 'crontab');
-    assert.deepEqual(calls[1].args, ['-']);
-    assert.match(calls[1].input ?? '', /# AgentGuard begin agentguard-threat-feed/);
-    assert.match(calls[1].input ?? '', /agentguard-system-.*\/scripts\/agentguard-threat-feed\.sh/);
-    assert.doesNotMatch(calls[1].input ?? '', /AGENTGUARD_HOME=/);
-    const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
-    assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
-    assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+      assert.equal(result.backend, 'system');
+      assert.equal(result.created, true);
+      assert.equal(calls[0].command, 'crontab');
+      assert.deepEqual(calls[0].args, ['-l']);
+      assert.equal(calls[1].command, 'crontab');
+      assert.deepEqual(calls[1].args, ['-']);
+      assert.match(calls[1].input ?? '', /# AgentGuard begin agentguard-threat-feed/);
+      assert.match(calls[1].input ?? '', /agentguard-system-.*\/scripts\/agentguard-threat-feed\.sh/);
+      assert.doesNotMatch(calls[1].input ?? '', /AGENTGUARD_HOME=/);
+      const script = readFileSync(join(home, 'scripts', 'agentguard-threat-feed.sh'), 'utf8');
+      assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
+      assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
+    }
   });
 
   it('removes the managed system crontab block without touching other entries', async () => {

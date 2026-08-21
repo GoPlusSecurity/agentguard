@@ -9,7 +9,7 @@ import { isAbsolute, join } from 'node:path';
 
 export type CronBackend = 'auto' | 'openclaw' | 'qclaw' | 'hermes' | 'system';
 export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'qclaw-gateway' | 'hermes' | 'system';
-export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw';
+export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'dsh';
 
 export interface OpenClawCronInstallResult {
   name: string;
@@ -103,7 +103,7 @@ export async function installThreatFeedCron(
   const backend = options.backend ?? 'auto';
   if (backend === 'auto' && !options.agentHost) {
     throw new Error(
-      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system`.'
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw|dsh>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system`.'
     );
   }
   if (backend === 'openclaw' && options.agentHost && options.agentHost !== 'openclaw') {

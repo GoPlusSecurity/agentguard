@@ -19,6 +19,8 @@ const ISOLATED_OPENCLAW_ENV = {
   OPENCLAW_CONFIG_PATH: '',
   OPENCLAW_STATE_DIR: '',
   HERMES_HOME: '',
+  DSH_HOME: '',
+  DSH_SHELL: '',
 };
 
 function runCli(
@@ -336,7 +338,8 @@ describe('CLI connect Agent JWT mode', () => {
 
     assert.equal(result.exitCode, 1);
     assert.equal(result.stdout, '');
-    assert.match(result.stderr, /init --agent openclaw/);
+    assert.match(result.stderr, /Run `agentguard init` to auto-detect the host/);
+    assert.doesNotMatch(result.stderr, /init --agent openclaw/);
   });
 
   it('uses Hermes Agent JWT registration when Hermes has been initialized', async () => {
@@ -402,6 +405,111 @@ describe('CLI connect Agent JWT mode', () => {
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }
+  });
+
+  it('selects DSH for Agent JWT registration when the primary host is unsupported', async () => {
+    const requests: Array<{ url?: string; method?: string; body?: any }> = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        requests.push({ url: req.url, method: req.method, body: body ? JSON.parse(body) : undefined });
+        if (req.method === 'POST' && req.url === '/api/agent/register') {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              agentId: 'agt_dsh_cli_test',
+              jwt: 'agent.jwt.dsh-cli-test',
+              registerUrl: 'https://agentguard.example/activate?token=dsh-cli-test',
+            },
+          }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-dsh-'));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({
+        version: 1,
+        level: 'balanced',
+        cloudUrl,
+        agentHost: 'codex',
+        agentHosts: ['codex', 'dsh'],
+        policyCachePath: join(home, 'policy-cache.json'),
+        auditPath: join(home, 'audit.jsonl'),
+        eventSpoolPath: join(home, 'events-spool.jsonl'),
+      }));
+
+      const result = await runCli(['connect', '--url', cloudUrl], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      assert.match(result.stdout, /Registered local AgentGuard agent \(agt_dsh_cli_test\)/);
+      assert.match(result.stdout, /https:\/\/agentguard\.example\/activate\?token=dsh-cli-test/);
+      assert.equal(requests[0].body.metadata.agentHost, 'dsh');
+      assert.deepEqual(requests[0].body.metadata.agentHosts, ['codex', 'dsh']);
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+        agentId?: string;
+        agentJwt?: string;
+        agentRegisterUrl?: string;
+        agentHost?: string;
+      };
+      assert.equal(config.agentHost, 'dsh');
+      assert.equal(config.agentId, 'agt_dsh_cli_test');
+      assert.equal(config.agentJwt, 'agent.jwt.dsh-cli-test');
+      assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=dsh-cli-test');
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it('does not treat an installed DSH web profile as the active connect host', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-dsh-profile-only-'));
+    const dshHome = join(home, '.dsh');
+    mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true });
+    writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), '{}');
+
+    const result = await runCli(['connect', '--url', 'https://agentguard.example'], home, {
+      DSH_HOME: dshHome,
+    });
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /Run `agentguard init` to auto-detect the host/);
+    assert.equal(config.agentHost, undefined);
+    assert.equal(config.agentHosts, undefined);
+  });
+
+  it('uses the DSH managed shell contract for no-key connect', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-connect-dsh-shell-'));
+
+    const result = await runCli(['connect', '--url', 'http://127.0.0.1:9'], home, {
+      DSH_HOME: join(home, '.dsh'),
+      DSH_SHELL: '1',
+    });
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      agentHost?: string;
+      agentHosts?: string[];
+    };
+
+    assert.equal(result.exitCode, 1);
+    assert.doesNotMatch(result.stderr, /No API key was provided/);
+    assert.match(result.stderr, /Could not register AgentGuard agent/);
+    assert.equal(config.agentHost, 'dsh');
+    assert.deepEqual(config.agentHosts, ['dsh']);
   });
 
   it('uses detected OpenClaw runtime for no-key connect before requiring an API key', async () => {
