@@ -75,10 +75,10 @@ If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web proces
 | Preserve workspace and request context | Runtime | Uses the DSH session cwd plus shell workdir and network method/header/body fields supported by the shared evaluator. |
 | Observe network responses | Runtime | Uses native `tools/post-execute`; status, content type, headers, bounded text preview, and explicit byte counts feed shared anomaly detection. |
 | Summarize recent runtime decisions | Runtime | Bounded local aggregation; raw tool input and reason evidence are omitted. |
-| Apply allow, warn, approve, or block decisions inside DSH | Opt-in `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; optional `postResponseMode: block-malicious` suppresses block-class malicious network results while approval-class post results remain audit-only. |
+| Apply allow, warn, approve, or block decisions inside DSH | Default `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; optional `postResponseMode: block-malicious` suppresses block-class malicious network results while approval-class post results remain audit-only. |
 | Attribute a call to its source plugin | Partial | Exact operator-configured tool-owner bindings are recorded; unmapped tools remain `unknown` and AgentGuard does not guess. |
 
-Installing the bundle is non-disruptive because its packaged composition uses `observe`. Changing the runtime row to `protect` is the explicit opt-in for real-time pre-execute enforcement.
+Installing the bundle enables real-time pre-execute enforcement because its packaged composition uses `protect`. Change the runtime row to `observe` only for audit-only shadow evaluation.
 
 ## Why this exists
 

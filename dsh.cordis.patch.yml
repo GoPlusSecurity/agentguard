@@ -4,4 +4,4 @@
       name: '@goplus/agentguard/dist/dsh/plugin.js'
       config:
         runtime:
-          mode: observe
+          mode: protect

@@ -11,7 +11,7 @@ This candidate completes the agreed installation-time scanner and DSH-native pre
 - Bounded batch scanning and version/report comparison.
 - DSH-native tools: `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary`.
 - Native pre/post lifecycle observation with shared AgentGuard policy semantics.
-- Opt-in `protect` mode for pre-execute allow, warn, DSH-native approval, and block.
+- Default `protect` mode for pre-execute allow, warn, DSH-native approval, and block.
 - Optional block-class malicious network-response containment without returning untrusted response content.
 - Exact operator-configured tool ownership attribution and monotonic per-owner policy floors.
 - Fail-closed unexpected evaluator errors by default, with an explicit compatibility override.
@@ -21,7 +21,7 @@ This candidate completes the agreed installation-time scanner and DSH-native pre
 
 ## Installation posture
 
-The packaged `dsh.cordis.patch.yml` remains on `observe`. This avoids turning an ordinary plugin update into an unexpected behavior-changing policy rollout.
+The packaged `dsh.cordis.patch.yml` enables `protect` by default, so a standard DSH installation enforces the configured runtime policy immediately. Operators can explicitly switch to `observe` for audit-only shadow evaluation.
 
 To confirm protection in a profile, add this complete config override to that profile's `cordis.patch.yml`:
 
@@ -34,7 +34,7 @@ To confirm protection in a profile, add this complete config override to that pr
       postResponseMode: block-malicious
 ```
 
-DSH profile patches replace the row's entire `config`, so the complete runtime configuration is restated. Optional `attribution.toolOwners` entries must contain only exact owner bindings trusted by the operator; a corresponding `ownerPolicies.<owner>.minimumDecision` can raise that owner's calls to `warn`, `require_approval`, or `block`, but cannot weaken the shared policy. Removing the override returns the bundle to its packaged `observe` configuration after recomposition/restart.
+DSH profile patches replace the row's entire `config`, so the complete runtime configuration is restated. Optional `attribution.toolOwners` entries must contain only exact owner bindings trusted by the operator; a corresponding `ownerPolicies.<owner>.minimumDecision` can raise that owner's calls to `warn`, `require_approval`, or `block`, but cannot weaken the shared policy. Removing the override returns the bundle to its packaged `protect` configuration after recomposition/restart.
 
 ## Acceptance status
 

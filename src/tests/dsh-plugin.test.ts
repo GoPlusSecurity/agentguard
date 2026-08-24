@@ -1,8 +1,10 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { parse } from 'yaml';
 import {
   apply,
   createAgentGuardDshBatchTool,
@@ -20,6 +22,29 @@ afterEach(async () => {
 });
 
 describe('AgentGuard DSH runtime plugin', () => {
+  it('enables pre-execute protection in the packaged DSH integration', () => {
+    const manifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
+      dsh: { bundle: { patch: string } };
+    };
+    const bundlePatch = parse(readFileSync(resolve(manifest.dsh.bundle.patch), 'utf8')) as Array<{
+      insert?: Array<{ id?: string; config?: Parameters<typeof apply>[1] }>;
+    }>;
+    const config = bundlePatch
+      .flatMap(operation => operation.insert ?? [])
+      .find(entry => entry.id === 'agentguard-dsh-plugin')
+      ?.config;
+    assert.ok(config, 'packaged DSH plugin config is missing');
+
+    const logs: string[] = [];
+    apply({
+      tools: { register() {} },
+      on() {},
+      logger: { info(message: string) { logs.push(message); }, warn() {} },
+    }, config);
+
+    assert.match(logs.at(-1) ?? '', /mode: protect.*enforcement active/i);
+  });
+
   it('registers the read-only scanner tool', () => {
     const registered: Array<{ name: string }> = [];
     apply({ tools: { register(tool) { registered.push(tool); } } });

@@ -78,7 +78,7 @@ try {
 
   const { stdout: composed } = await dsh(['web', '--dump-config']);
   assert.match(composed, /id:\s*agentguard-dsh-plugin/);
-  assert.match(composed, /runtime:\s*\n\s+mode:\s*observe/);
+  assert.match(composed, /runtime:\s*\n\s+mode:\s*protect/);
   const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
   const plugin = await import(`${pathToFileURL(installedPlugin).href}?package=${Date.now()}`);
   const registeredTools = [];
