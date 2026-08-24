@@ -27,7 +27,10 @@ export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: st
 }
 
 function installDsh(root: string): InstallResult {
-  const args = ['plugin', '--profile', 'web', 'add', '@goplus/agentguard'];
+  const args = [
+    'plugin', '--profile', 'web', 'add',
+    '--allow-build=@goplus/agentguard', '@goplus/agentguard',
+  ];
   const result = spawnSync('dsh', args, {
     cwd: root,
     stdio: 'inherit',

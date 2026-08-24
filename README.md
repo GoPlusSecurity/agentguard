@@ -153,7 +153,7 @@ Reports include DSH identification confidence, plugin kind, explainable risk lev
 Install AgentGuard as a native DSH tool plugin, then restart the profile:
 
 ```bash
-dsh plugin --profile web add @goplus/agentguard
+dsh plugin --profile web add --allow-build=@goplus/agentguard @goplus/agentguard
 ```
 
 DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.

@@ -18,8 +18,12 @@ When invoked inside DSH, bare `agentguard init` auto-detects DSH and performs th
 The equivalent low-level DSH command is:
 
 ```bash
-dsh plugin --profile web add @goplus/agentguard
+dsh plugin --profile web add --allow-build=@goplus/agentguard @goplus/agentguard
 ```
+
+The scoped `--allow-build` approval lets pnpm run AgentGuard's reviewed npm
+postinstall lifecycle and records that approval in this DSH profile. The
+high-level `agentguard init` commands add it automatically.
 
 For local development, link the checkout instead:
 
