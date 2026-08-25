@@ -14,6 +14,7 @@
 - Changed `curl/wget | bash/sh` handling to require approval by default and block only when hard indicators or multiple suspicious signals are present.
 
 ### Fixed
+- Updated compatibility with DSH `0.1.1-rc.2`: profile installs now authorize AgentGuard package builds, tarball acceptance uses pnpm's exact local-file build key, and the persistent PowerShell `pwsh` tool is classified as shell execution for runtime policy evaluation.
 - DSH protect hooks now exempt only the four exact AgentGuard-owned tool names, preventing third-party `agentguard_*` tools from bypassing runtime policy evaluation.
 - DSH runtime scanning now includes referenced generated `dist/` and `build/` files, while protect mode requires explicit decisions for MCP, skill-install, and unknown tools.
 - DSH scans now fail closed with `DSH_SCAN_INCOMPLETE` and `expert-review-required` when matching files are omitted by the file-count limit, exceed the per-file byte limit, or cannot be read, preventing incomplete scans from returning `safe-to-try`.

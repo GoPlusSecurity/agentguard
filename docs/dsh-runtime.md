@@ -9,10 +9,10 @@ The runtime integration accepts three explicit modes:
 | Mode | Pre-execute | Post-execute | Intended use |
 |---|---|---|---|
 | `off` | no listener | no listener | scanner tools only |
-| `observe` | evaluate and audit; preserve downstream decision | evaluate network responses and audit | packaged default and rollout baseline |
-| `protect` | apply `allow`, `warn`, native `ask`, or `deny` | audit by default; optionally suppress block-class malicious results | explicit real-time protection |
+| `observe` | evaluate and audit; preserve downstream decision | evaluate network responses and audit | explicit audit-only evaluation |
+| `protect` | apply `allow`, `warn`, native `ask`, or `deny` | audit by default; optionally suppress block-class malicious results | packaged default and real-time protection |
 
-The npm bundle continues to compose `observe` by default so installing an update does not silently change tool execution. Enable protection in a custom DSH composition:
+The npm bundle composes `protect` by default. A custom DSH composition can restate the protected runtime settings and add optional attribution or policy controls:
 
 ```yaml
 - insert:

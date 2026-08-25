@@ -118,7 +118,7 @@ export interface DshRuntimeObservation {
 }
 
 const SHELL_TOOLS = new Set([
-  'bash', 'terminal', 'shell', 'exec', 'exec_command', 'execute_command', 'execute_code',
+  'bash', 'pwsh', 'terminal', 'shell', 'exec', 'exec_command', 'execute_command', 'execute_code',
   'run_command', 'run_shell_command', 'spawn_process',
 ]);
 const READ_TOOLS = new Set([

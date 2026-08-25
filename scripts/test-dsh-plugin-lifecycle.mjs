@@ -34,7 +34,7 @@ try {
   const { stdout: composed } = await dsh(['web', '--dump-config']);
   assert.match(composed, /id:\s*agentguard-dsh-plugin/);
   assert.match(composed, /@goplus\/agentguard\/dist\/dsh\/plugin\.js/);
-  assert.match(composed, /runtime:\s*\n\s+mode:\s*observe/);
+  assert.match(composed, /runtime:\s*\n\s+mode:\s*protect/);
 
   const installedPlugin = join(profileDir, 'node_modules/@goplus/agentguard/dist/dsh/plugin.js');
   await access(installedPlugin);

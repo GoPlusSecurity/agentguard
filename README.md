@@ -153,7 +153,7 @@ Reports include DSH identification confidence, plugin kind, explainable risk lev
 Install AgentGuard as a native DSH tool plugin, then restart the profile:
 
 ```bash
-dsh plugin --profile web add @goplus/agentguard
+dsh plugin --profile web add --allow-build=@goplus/agentguard @goplus/agentguard
 ```
 
 DSH will expose the read-only `agentguard_dsh_scan` tool for scanning local plugin directories and HTTPS GitHub repositories before installation.
@@ -162,11 +162,11 @@ Use `agentguard_dsh_compare` or the `agentguard dsh-compare` CLI command to iden
 
 Update or remove it from the same profile with `dsh plugin --profile web update @goplus/agentguard` or `dsh plugin --profile web remove @goplus/agentguard`. The [DSH operations and report guide](docs/dsh.md#operate-the-dsh-installation) includes verification and troubleshooting steps.
 
-> **DSH runtime guard:** the packaged composition uses non-disruptive `observe` mode. Startup logs and the input-redacted `agentguard_dsh_runtime_summary` tool explicitly show the current configured mode and whether pre-execute enforcement is active. An explicit `runtime.mode: protect` applies AgentGuard's shared allow/warn/require-approval/block policy before DSH dispatches a tool, using DSH's native one-shot approval service and monotonic composition with other policies. Optional `runtime.postResponseMode: block-malicious` suppresses only block-class malicious network results; approval-class post results remain audit-only because DSH has no resumable post-result approval protocol. Exact operator-configured `runtime.attribution.toolOwners` bindings add source ownership without guessing, and `runtime.ownerPolicies` can impose per-owner minimum decisions without weakening shared security policy. Unmapped tools remain `unknown` until DSH exposes a reliable native owner field. See the [DSH runtime guide](docs/dsh-runtime.md).
+> **DSH runtime guard:** the packaged composition enables `protect` mode by default, applying AgentGuard's shared allow/warn/require-approval/block policy before DSH dispatches a tool. Startup logs and the input-redacted `agentguard_dsh_runtime_summary` tool explicitly show the current configured mode and whether pre-execute enforcement is active. Set `runtime.mode: observe` only when audit-only shadow evaluation is required. DSH protection uses DSH's native one-shot approval service and monotonic composition with other policies. Optional `runtime.postResponseMode: block-malicious` suppresses only block-class malicious network results; approval-class post results remain audit-only because DSH has no resumable post-result approval protocol. Exact operator-configured `runtime.attribution.toolOwners` bindings add source ownership without guessing, and `runtime.ownerPolicies` can impose per-owner minimum decisions without weakening shared security policy. Unmapped tools remain `unknown` until DSH exposes a reliable native owner field. See the [DSH runtime guide](docs/dsh-runtime.md).
 
 The complete candidate scope, activation override, acceptance gates, and intentional boundaries are collected in [AgentGuard for DSH complete candidate](docs/dsh-complete-candidate.md).
 
-The enforcing adapter maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, preserves stronger downstream policies, fails closed on unexpected evaluator errors by default, and is registered only when `protect` is explicitly selected.
+The enforcing adapter maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, preserves stronger downstream policies, fails closed on unexpected evaluator errors by default, and is registered whenever `protect` is configured, including by the packaged default composition.
 
 Native contract gates cover the full pre-execute approval outcome matrix, concurrent and nested calls, failures, unload, and post-execute result containment. Block-class malicious responses can be suppressed explicitly; approval-class post results remain audit-only because DSH currently exposes no native post-approval resume primitive. The complete candidate passed all 11 guided DSH UAT cases, including native approval/rejection, pre-execute blocking, response containment, redaction, and service stability.
 

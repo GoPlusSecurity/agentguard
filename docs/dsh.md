@@ -2,7 +2,7 @@
 
 AgentGuard for DeepSeek Harness (DSH) is an installation-time trust layer for the DSH plugin ecosystem. It identifies DSH bundles, profiles, client extensions, and Cordis configuration, then combines that context with AgentGuard's existing static rules to produce an explainable security report.
 
-The Phase 1 scanner is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH. The separate runtime integration can observe DSH tool calls or, when explicitly configured as `protect`, enforce pre-execute policy through DSH's native approval protocol.
+The Phase 1 scanner is intentionally read-only: it scans source, classifies capabilities, and recommends an installation posture. It never installs the target, executes package lifecycle scripts, evaluates Cordis `!!js` expressions, or starts DSH. The separately installed runtime integration enforces pre-execute policy through DSH's native approval protocol in its packaged default `protect` mode; operators can switch it to `observe` for audit-only evaluation.
 
 ## Install in DSH
 
@@ -18,8 +18,12 @@ When invoked inside DSH, bare `agentguard init` auto-detects DSH and performs th
 The equivalent low-level DSH command is:
 
 ```bash
-dsh plugin --profile web add @goplus/agentguard
+dsh plugin --profile web add --allow-build=@goplus/agentguard @goplus/agentguard
 ```
+
+The scoped `--allow-build` approval lets pnpm run AgentGuard's reviewed npm
+postinstall lifecycle and records that approval in this DSH profile. The
+high-level `agentguard init` commands add it automatically.
 
 For local development, link the checkout instead:
 
@@ -29,7 +33,7 @@ dsh plugin --profile web add link:/absolute/path/to/agentguard
 
 The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, and `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
-The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `observe` by default; [DSH runtime guard](dsh-runtime.md) documents explicit `protect` configuration.
+The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `protect` by default; the [DSH runtime guard](dsh-runtime.md) documents audit-only `observe` mode and the available protection settings.
 
 ### Operate the DSH installation
 
@@ -53,7 +57,7 @@ Verification checklist:
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
 2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, and `agentguard_dsh_runtime_summary` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
-4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`. The default composition records `runtimeMode: "observe"`; an explicit protected composition records pre-execute events with `runtimeMode: "protect"` and `enforcementApplied: true`.
+4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`. The default composition records pre-execute events with `runtimeMode: "protect"` and `enforcementApplied: true`; an explicit audit-only composition records `runtimeMode: "observe"` and does not apply pre-execute enforcement.
 5. After removal and restart, the AgentGuard composition row, tools, and runtime listener are absent.
 
 If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web process is not listening; it is not evidence of a scanner failure. Start or restart DSH and inspect its terminal output. If the tool is missing while DSH is running, check the explicit profile with `--dump-config`, then confirm the package appears in that profile's dependencies.
@@ -71,10 +75,10 @@ If `http://127.0.0.1:3080/` returns `ERR_CONNECTION_REFUSED`, the DSH web proces
 | Preserve workspace and request context | Runtime | Uses the DSH session cwd plus shell workdir and network method/header/body fields supported by the shared evaluator. |
 | Observe network responses | Runtime | Uses native `tools/post-execute`; status, content type, headers, bounded text preview, and explicit byte counts feed shared anomaly detection. |
 | Summarize recent runtime decisions | Runtime | Bounded local aggregation; raw tool input and reason evidence are omitted. |
-| Apply allow, warn, approve, or block decisions inside DSH | Opt-in `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; optional `postResponseMode: block-malicious` suppresses block-class malicious network results while approval-class post results remain audit-only. |
+| Apply allow, warn, approve, or block decisions inside DSH | Default `protect` | Pre-execute decisions use DSH native `allow`/`ask`/`deny`; optional `postResponseMode: block-malicious` suppresses block-class malicious network results while approval-class post results remain audit-only. |
 | Attribute a call to its source plugin | Partial | Exact operator-configured tool-owner bindings are recorded; unmapped tools remain `unknown` and AgentGuard does not guess. |
 
-Installing the bundle is non-disruptive because its packaged composition uses `observe`. Changing the runtime row to `protect` is the explicit opt-in for real-time pre-execute enforcement.
+Installing the bundle enables real-time pre-execute enforcement because its packaged composition uses `protect`. Change the runtime row to `observe` only for audit-only shadow evaluation.
 
 ## Why this exists
 
@@ -105,7 +109,7 @@ Phase 1 does not include:
 - Installing a plugin or resolving its lifecycle scripts.
 - Fetching a package by npm name or comparing an npm tarball with its source repository.
 - Resolving every layer of an already-installed DSH profile into one effective runtime tree.
-- Automatically enabling runtime enforcement when the scanner is installed. Runtime protection is an explicit composition choice documented separately.
+- Using a static scan to enable, disable, or alter runtime enforcement. The separately installed DSH bundle defaults to `protect` and can be switched explicitly to `observe`.
 - Persisting scan history or integrating with a DSH marketplace.
 
 ## Command line
