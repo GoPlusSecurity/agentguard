@@ -22,6 +22,8 @@
     "agentguard-mcp": "./dist/mcp-server.js"
   },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "npm run clean",
     "build": "tsc",
     "build:mcpb": "bash scripts/build-mcpb.sh",
     "start": "node dist/mcp-server.js",
