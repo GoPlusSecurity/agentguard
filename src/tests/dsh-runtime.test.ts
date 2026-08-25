@@ -1,5 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import { type AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentGuardConfig } from '../config.js';
 import {
   buildDshRuntimeAction,
@@ -53,6 +58,42 @@ function decision(value: RuntimeDecision['decision'] = 'block'): RuntimeDecision
       description: 'Test decision',
     }],
     policyVersion: 'runtime-test',
+  };
+}
+
+interface CloudRequest {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+async function startCloudServer(statuses: number[] = []): Promise<{
+  url: string;
+  requests: CloudRequest[];
+  close: () => Promise<void>;
+}> {
+  const requests: CloudRequest[] = [];
+  const server: Server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    requests.push({
+      method: request.method || '',
+      path: request.url || '',
+      body: rawBody ? JSON.parse(rawBody) : undefined,
+    });
+    response.statusCode = statuses.shift() ?? 200;
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ success: true, data: {} }));
+  });
+  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const address = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: () => new Promise<void>((resolvePromise, reject) => {
+      server.close(error => error ? reject(error) : resolvePromise());
+    }),
   };
 }
 
@@ -196,6 +237,193 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(observed.event.metadata?.sourceAttribution, 'unknown');
     assert.equal(written.length, 1);
     assert.equal(written[0].path, config.auditPath);
+  });
+
+  it('uploads DSH audit events through the connected Cloud client', async () => {
+    const cloud = await startCloudServer();
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-success-'));
+    try {
+      const observed = await observeDshToolCall(execution({
+        arguments: { command: 'curl https://example.com?token=secret-value' },
+      }), {
+        loadAgentGuardConfig: () => ({
+          ...config,
+          cloudUrl: cloud.url,
+          apiKey: 'ag_live_dsh_cloud_test',
+          eventSpoolPath: join(directory, 'events.jsonl'),
+        }),
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+        writeAudit() {},
+      });
+
+      assert.ok(observed);
+      assert.equal(cloud.requests.length, 1);
+      assert.equal(cloud.requests[0].method, 'POST');
+      assert.equal(cloud.requests[0].path, '/api/v1/events/ingest');
+      assert.equal((cloud.requests[0].body as any).events[0].actionId, 'act-test');
+      assert.equal((cloud.requests[0].body as any).events[0].agentHost, 'dsh');
+      assert.doesNotMatch(JSON.stringify(cloud.requests[0].body), /secret-value/);
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('spools the DSH audit event when connected Cloud ingest fails', async () => {
+    const cloud = await startCloudServer([503]);
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-failure-'));
+    const spoolPath = join(directory, 'events.jsonl');
+    try {
+      const observed = await observeDshToolCall(execution(), {
+        loadAgentGuardConfig: () => ({
+          ...config,
+          cloudUrl: cloud.url,
+          apiKey: 'ag_live_dsh_cloud_test',
+          eventSpoolPath: spoolPath,
+        }),
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => ({ decision: decision('block'), policySource: 'default' }),
+        writeAudit() {},
+      });
+
+      assert.ok(observed);
+      assert.equal(cloud.requests.length, 1);
+      const spooled = readFileSync(spoolPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      assert.equal(spooled.length, 1);
+      assert.equal(spooled[0].actionId, 'act-test');
+      assert.equal(spooled[0].agentHost, 'dsh');
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the DSH result when Cloud ingest and spool writes both fail', async () => {
+    const cloud = await startCloudServer([503]);
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-fail-open-'));
+    try {
+      const protector = createDshPreExecuteProtector({
+        loadAgentGuardConfig: () => ({
+          ...config,
+          cloudUrl: cloud.url,
+          apiKey: 'ag_live_dsh_cloud_test',
+          eventSpoolPath: directory,
+        }),
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+        writeAudit() {},
+      });
+      const downstream = { kind: 'allow' as const };
+      const protectedDecision = await protector(execution(), async () => downstream);
+
+      assert.deepEqual(protectedDecision, downstream);
+      assert.equal(cloud.requests.length, 1);
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('flushes queued DSH events before uploading the current event', async () => {
+    const cloud = await startCloudServer();
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-retry-'));
+    const spoolPath = join(directory, 'events.jsonl');
+    writeFileSync(spoolPath, `${JSON.stringify({
+      actionId: 'act-queued',
+      sessionId: 'session-queued',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: 'echo queued',
+      decision: 'warn',
+      riskScore: 40,
+      riskLevel: 'medium',
+      reasons: [],
+      policyVersion: 'runtime-test',
+    })}\n`);
+    try {
+      const observed = await observeDshToolCall(execution(), {
+        loadAgentGuardConfig: () => ({
+          ...config,
+          cloudUrl: cloud.url,
+          apiKey: 'ag_live_dsh_cloud_test',
+          eventSpoolPath: spoolPath,
+        }),
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => {
+          assert.equal(cloud.requests.length, 1);
+          assert.equal((cloud.requests[0].body as any).events[0].actionId, 'act-queued');
+          return { decision: decision('block'), policySource: 'default' };
+        },
+        writeAudit() {},
+      });
+
+      assert.ok(observed);
+      assert.equal(cloud.requests.length, 2);
+      assert.equal((cloud.requests[0].body as any).events[0].actionId, 'act-queued');
+      assert.equal((cloud.requests[1].body as any).events[0].actionId, 'act-test');
+      assert.equal(existsSync(spoolPath), false);
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('flushes each queued DSH event once across concurrent tool calls', async () => {
+    const cloud = await startCloudServer();
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-concurrent-'));
+    const spoolPath = join(directory, 'events.jsonl');
+    writeFileSync(spoolPath, `${JSON.stringify({
+      actionId: 'act-queued',
+      sessionId: 'session-queued',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: 'echo queued',
+      decision: 'warn',
+      riskScore: 40,
+      riskLevel: 'medium',
+      reasons: [],
+      policyVersion: 'runtime-test',
+    })}\n`);
+    const connectedConfig: AgentGuardConfig = {
+      ...config,
+      cloudUrl: cloud.url,
+      apiKey: 'ag_live_dsh_cloud_test',
+      eventSpoolPath: spoolPath,
+    };
+    const evaluate = async ({ action }: any) => ({
+      decision: { ...decision('block'), actionId: `act-${action.metadata.callId}` },
+      policySource: 'default' as const,
+    });
+    try {
+      await Promise.all([
+        observeDshToolCall(execution({ callId: 'current-1' }), {
+          loadAgentGuardConfig: () => connectedConfig,
+          fetchPolicyFor: () => undefined,
+          evaluate,
+          writeAudit() {},
+        }),
+        observeDshToolCall(execution({ callId: 'current-2' }), {
+          loadAgentGuardConfig: () => connectedConfig,
+          fetchPolicyFor: () => undefined,
+          evaluate,
+          writeAudit() {},
+        }),
+      ]);
+
+      const actionIds = cloud.requests.flatMap(request =>
+        (request.body as any).events.map((event: any) => event.actionId)
+      );
+      assert.equal(actionIds.filter(actionId => actionId === 'act-queued').length, 1);
+      assert.equal(actionIds.filter(actionId => actionId === 'act-current-1').length, 1);
+      assert.equal(actionIds.filter(actionId => actionId === 'act-current-2').length, 1);
+      assert.equal(existsSync(spoolPath), false);
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('keeps response anomaly semantics stable across the DSH fixture corpus', async () => {

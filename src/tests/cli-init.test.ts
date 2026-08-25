@@ -356,7 +356,12 @@ describe('init CLI', () => {
 
     const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'auto', '--force'], {
       cwd,
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_HOME: join(home, 'missing-dsh-home'),
+        DSH_SHELL: '0',
+      },
     });
 
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
@@ -530,7 +535,12 @@ describe('init CLI', () => {
 
     const { stdout, stderr } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'auto', '--force'], {
       cwd,
-      env: { ...process.env, AGENTGUARD_HOME: home },
+      env: {
+        ...process.env,
+        AGENTGUARD_HOME: home,
+        DSH_HOME: join(home, 'missing-dsh-home'),
+        DSH_SHELL: '0',
+      },
     });
 
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
