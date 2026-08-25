@@ -1,7 +1,7 @@
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import { loadConfig, type AgentGuardConfig } from '../config.js';
 import { isAbsolute, resolve } from 'node:path';
-import { writeAuditLog } from '../runtime/audit.js';
+import { flushEventSpool, spoolEvent, writeAuditLog } from '../runtime/audit.js';
 import {
   evaluateRuntimeAction,
   type RuntimeEvaluation,
@@ -142,6 +142,7 @@ const AGENTGUARD_DSH_TOOLS = new Set([
 ]);
 const DSH_OWNER_ID_PATTERN = /^[A-Za-z0-9@][A-Za-z0-9@._/:-]{0,159}$/;
 const MAX_DSH_TOOL_OWNER_BINDINGS = 500;
+const dshSpoolLocks = new Map<string, Promise<void>>();
 
 /** Validate and snapshot operator-authored DSH tool ownership bindings. */
 export function normalizeDshRuntimeAttribution(value: unknown): DshRuntimeAttributionConfig {
@@ -305,13 +306,19 @@ async function evaluateAndAuditDshAction(
   runtimeMode: Exclude<DshRuntimeMode, 'off'>,
   enforcementApplied: boolean | 'block-only'
 ): Promise<DshRuntimeObservation> {
+  const client = new AgentGuardCloudClient(config);
+  if (client.connected) {
+    await withDshSpoolLock(config.eventSpoolPath, () =>
+      flushEventSpool(config.eventSpoolPath, events => client.ingestEvents(events))
+    ).catch(() => undefined);
+  }
   const evaluate = dependencies.evaluate ?? evaluateRuntimeAction;
   const sharedEvaluation = await evaluate({
     action,
     policyCachePath: config.policyCachePath,
     fetchPolicy: dependencies.fetchPolicyFor
       ? dependencies.fetchPolicyFor(config)
-      : defaultFetchPolicy(config),
+      : defaultFetchPolicy(client),
   });
   const guardedEvaluation = applyUnknownToolDecision(
     sharedEvaluation,
@@ -352,6 +359,7 @@ async function evaluateAndAuditDshAction(
   } catch {
     // Phase 2A is fail-open: audit I/O cannot change DSH tool behavior.
   }
+  if (client.connected) await reportDshEvent(client, config, event);
   return { action, evaluation, event };
 }
 
@@ -475,9 +483,45 @@ export function createDshPostExecuteProtector(
   };
 }
 
-function defaultFetchPolicy(config: AgentGuardConfig): (() => Promise<import('../runtime/types.js').EffectiveRuntimePolicy | null>) | undefined {
-  const client = new AgentGuardCloudClient(config);
+function defaultFetchPolicy(client: AgentGuardCloudClient): (() => Promise<import('../runtime/types.js').EffectiveRuntimePolicy | null>) | undefined {
   return client.connected ? () => client.fetchEffectivePolicy() : undefined;
+}
+
+async function reportDshEvent(
+  client: AgentGuardCloudClient,
+  config: AgentGuardConfig,
+  event: RuntimeAuditEvent
+): Promise<void> {
+  try {
+    await client.ingestEvents([event]);
+  } catch {
+    await withDshSpoolLock(config.eventSpoolPath, () => {
+      try {
+        spoolEvent(config.eventSpoolPath, event);
+      } catch {
+        // Cloud reporting is best-effort and cannot change DSH tool behavior.
+      }
+    });
+  }
+}
+
+async function withDshSpoolLock<T>(
+  spoolPath: string,
+  operation: () => T | Promise<T>
+): Promise<T> {
+  const previous = dshSpoolLocks.get(spoolPath) ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const current = new Promise<void>(resolvePromise => {
+    release = resolvePromise;
+  });
+  dshSpoolLocks.set(spoolPath, current);
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (dshSpoolLocks.get(spoolPath) === current) dshSpoolLocks.delete(spoolPath);
+  }
 }
 
 function actionInput(actionType: RuntimeActionType, args: Record<string, unknown> | null, raw: unknown): string {
