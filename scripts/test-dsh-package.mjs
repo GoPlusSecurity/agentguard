@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -71,7 +71,9 @@ try {
   for (const path of required) assert.ok(archiveFiles.has(path), `tarball is missing ${path}`);
   assert.ok(![...archiveFiles].some(path => path.startsWith('package/dist/tests/')), 'tarball contains compiled tests');
 
-  await dsh(['plugin', '--profile', 'web', 'add', tarball]);
+  await dsh(['plugin', '--profile', 'web', 'install', '--lockfile-only']);
+  const tarballBuildKey = `@goplus/agentguard@file:${relative(await realpath(profileDir), tarball).replaceAll('\\', '/')}`;
+  await dsh(['plugin', '--profile', 'web', 'add', `--allow-build=${tarballBuildKey}`, tarball]);
   const installedManifest = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'));
   assert.ok(installedManifest.dependencies?.['@goplus/agentguard']);
   assert.ok(installedManifest.dsh?.profile?.bundles?.includes('@goplus/agentguard'));

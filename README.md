@@ -166,7 +166,7 @@ Update or remove it from the same profile with `dsh plugin --profile web update 
 
 The complete candidate scope, activation override, acceptance gates, and intentional boundaries are collected in [AgentGuard for DSH complete candidate](docs/dsh-complete-candidate.md).
 
-The enforcing adapter maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, preserves stronger downstream policies, fails closed on unexpected evaluator errors by default, and is registered only when `protect` is explicitly selected.
+The enforcing adapter maps approval decisions to DSH's native `ask` contract, emits bounded evidence-free reasons, preserves stronger downstream policies, fails closed on unexpected evaluator errors by default, and is registered whenever `protect` is configured, including by the packaged default composition.
 
 Native contract gates cover the full pre-execute approval outcome matrix, concurrent and nested calls, failures, unload, and post-execute result containment. Block-class malicious responses can be suppressed explicitly; approval-class post results remain audit-only because DSH currently exposes no native post-approval resume primitive. The complete candidate passed all 11 guided DSH UAT cases, including native approval/rejection, pre-execute blocking, response containment, redaction, and service stability.
 

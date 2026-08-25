@@ -59,6 +59,7 @@ function decision(value: RuntimeDecision['decision'] = 'block'): RuntimeDecision
 describe('DSH runtime Phase 2A observer', () => {
   it('normalizes common DSH tools into the shared RuntimeAction vocabulary', () => {
     assert.equal(mapDshToolToRuntimeAction('bash'), 'shell');
+    assert.equal(mapDshToolToRuntimeAction('pwsh'), 'shell');
     assert.equal(mapDshToolToRuntimeAction('read_file'), 'file_read');
     assert.equal(mapDshToolToRuntimeAction('read_image'), 'file_read');
     assert.equal(mapDshToolToRuntimeAction('view_image'), 'file_read');

@@ -1,6 +1,6 @@
 # AgentGuard for DSH complete candidate
 
-This candidate completes the agreed installation-time scanner and DSH-native pre-execute runtime guard without changing the bundle's non-disruptive installation default.
+This candidate completes the agreed installation-time scanner and DSH-native pre-execute runtime guard with `protect` as the packaged installation default.
 
 ## Included
 
@@ -78,8 +78,8 @@ npm run benchmark:dsh
 
 Confirm this candidate if the following product contract is acceptable:
 
-1. installation remains observation-first;
-2. protection is explicit and fails closed on unexpected evaluator errors;
+1. installation enables pre-execute protection by default, with `observe` available as an explicit audit-only mode;
+2. protection fails closed on unexpected evaluator errors;
 3. approval is owned by DSH rather than a duplicate AgentGuard queue;
 4. pre-execute protection is real, and optional post-response containment applies only to block-class results;
 5. unattributed calls never receive plugin-specific trust automatically.
