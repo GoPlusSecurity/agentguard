@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.1.29] - 2026-06-16
 
 ### Added
 - Added the read-only DSH installation scanner, native DSH tool plugin, dual full-repository/runtime-surface risk views, review priority, generated-code context, evidence aggregation, and explainable Markdown/HTML/JSON reports.
