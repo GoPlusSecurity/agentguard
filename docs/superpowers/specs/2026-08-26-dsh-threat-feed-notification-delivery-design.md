@@ -64,9 +64,9 @@ Create `src/feed/dsh-notifications.ts`. Notifications live in:
 ```
 
 The directory is mode `0700`; files are mode `0600`. Writers create a temporary
-file in the same directory and atomically rename it into place. A deterministic
-notice id makes a repeated pull idempotent. An existing final file is success,
-not an overwrite.
+file in the same directory and atomically publish it with an exclusive hard
+link, then remove the temporary name. A deterministic notice id makes a
+repeated pull idempotent. An existing final file is success, not an overwrite.
 
 Version 1 contains:
 
