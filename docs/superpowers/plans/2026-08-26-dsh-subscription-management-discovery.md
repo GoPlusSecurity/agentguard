@@ -33,7 +33,7 @@
 - Produces: `SystemThreatFeedCronStatus` and `inspectSystemThreatFeedCron(options, adapters?)`.
 - Changes: `removeThreatFeedCron({ backend: 'system' })` reports an error when `crontab -l` is unavailable, while treating the platform's explicit “no crontab for user” result as confirmed absence.
 
-- [ ] **Step 1: Write failing cron inspection and removal tests**
+- [x] **Step 1: Write failing cron inspection and removal tests**
 
 Add tests with injected `CommandRunner` values that assert an exact managed marker is reported installed, an empty table is reported absent, a `no crontab for user` error is confirmed absent, and an unrelated `crontab -l` failure returns `error` instead of silently claiming absence.
 
@@ -46,11 +46,11 @@ assert.equal(status.installed, true)
 assert.equal(status.cronExpression, '0 * * * *')
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm run build` and confirm compilation fails because `inspectSystemThreatFeedCron` is missing. Do not change production code before observing this failure.
 
-- [ ] **Step 3: Implement inspection and distinguish absent/error reads**
+- [x] **Step 3: Implement inspection and distinguish absent/error reads**
 
 Export:
 
@@ -70,7 +70,7 @@ export async function inspectSystemThreatFeedCron(
 
 Use exact `# AgentGuard begin <sanitized-name>` / end markers. Parse only the first five whitespace-delimited fields from the managed command line. Share one helper that classifies an explicit `no crontab for ...` error as absent and every other read failure as unknown/error. Make system removal return `{ removed: false, error }` for the latter without touching crontab.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run `npm run build` and `node --test dist/tests/feed-cron.test.js`, then commit:
 
@@ -92,7 +92,7 @@ git commit -m "fix: make system cron status failures explicit"
 - Produces: `createAgentGuardDshSubscriptionStatusTool(dependencies?)` registered as `agentguard_dsh_subscription_status`.
 - Consumes: saved subscription loader, exact ToolExecution agent id, queue listing, and Task 1 cron inspection.
 
-- [ ] **Step 1: Write failing status tests**
+- [x] **Step 1: Write failing status tests**
 
 Assert no-subscription output, active subscription output, current-agent target comparison, exact pending count/latest timestamp, cron-installed status, and absence of queued `body` text or matched local paths.
 
@@ -109,15 +109,15 @@ assert.equal(result.latestQueuedAt, '2026-08-26T02:00:00.000Z')
 assert.match(result.modelSummary, /2 queued/i)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the named plugin test and confirm the missing factory/tool registration causes failure.
 
-- [ ] **Step 3: Implement the status tool**
+- [x] **Step 3: Implement the status tool**
 
 Define a bounded discriminated result with `subscribed`, `currentAgentIsTarget`, `cronInstalled`, `pendingNotifications`, optional subscription fields and `latestQueuedAt`, plus a safe `modelSummary`. When there is a subscription, list only its exact `subscriptionId`/`agentId` notifications. Never include queue notice objects in the result.
 
-- [ ] **Step 4: Register and verify GREEN**
+- [x] **Step 4: Register and verify GREEN**
 
 Register the tool in `apply()`, update the expected tool order, and extend package smoke to require the exact tool name. Run build plus `dsh-plugin.test.js`.
 
@@ -136,7 +136,7 @@ Register the tool in `apply()`, update the expected tool order, and extend packa
 - Produces: `createAgentGuardDshUnsubscribeTool(dependencies?)` registered as `agentguard_dsh_unsubscribe`.
 - Result: `unsubscribed`, `cronRemoved`, `pendingNotificationsRemoved`, and bounded `modelSummary`.
 
-- [ ] **Step 1: Write failing unsubscribe tests**
+- [x] **Step 1: Write failing unsubscribe tests**
 
 Cover idempotent no-state behavior, rejection when the current ToolExecution agent is not the saved target, successful cron→queue→state ordering, confirmed-absent cron cleanup, cron failure retaining state/queue, queue failure retaining state after cron removal, and safe output.
 
@@ -148,15 +148,15 @@ await assert.rejects(
 assert.deepEqual(order, ['cron', 'list-queue', 'remove-queue', 'remove-state'])
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the named plugin tests and confirm failure because the factory and registration do not exist.
 
-- [ ] **Step 3: Implement the minimal transaction**
+- [x] **Step 3: Implement the minimal transaction**
 
 Load state and validate the exact calling agent. Remove the system cron first. Continue only when the result is `removed: true` or `removed: false` without `error` (confirmed absent). Then list/remove exact valid notification ids, and delete subscription state last. On any failure before state deletion, throw and leave the state so a retry remains possible.
 
-- [ ] **Step 4: Add exact exemptions and package registration**
+- [x] **Step 4: Add exact exemptions and package registration**
 
 Add only these literal names to `AGENTGUARD_DSH_TOOLS`:
 
@@ -167,7 +167,7 @@ Add only these literal names to `AGENTGUARD_DSH_TOOLS`:
 
 Assert prefix-similar names remain non-exempt. Extend package smoke for unsubscribe registration.
 
-- [ ] **Step 5: Verify GREEN and commit Tasks 2-3**
+- [x] **Step 5: Verify GREEN and commit Tasks 2-3**
 
 Run build, plugin/runtime tests, and package smoke. Commit:
 
@@ -190,7 +190,7 @@ git commit -m "feat: add DSH subscription management tools"
 - Produces: `discoverDshSelfCheckRoots(options?)` returning `skillRoots`, `pluginRoots`, `supplyChainPaths`, and `urlScanPaths`.
 - Consumes: `DSH_HOME` or `~/.dsh`, current working directory, profile manifests, profile direct dependencies, and Cordis patch files.
 
-- [ ] **Step 1: Write failing discovery tests**
+- [x] **Step 1: Write failing discovery tests**
 
 Build a temporary DSH tree with user and project skills, two profiles, scoped/unscoped direct dependencies, a transitive undeclared package, and Cordis patches. Assert the result includes:
 
@@ -205,19 +205,19 @@ $DSH_HOME/profiles/*/cordis.patch.{yml,yaml}
 
 Assert it excludes undeclared transitive packages and rejects dependency names that escape `node_modules`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run build and confirm the new module import fails.
 
-- [ ] **Step 3: Implement bounded discovery**
+- [x] **Step 3: Implement bounded discovery**
 
 Resolve `DSH_HOME` at call time, enumerate only immediate profile directories, parse only object-shaped `dependencies` and `optionalDependencies`, validate npm package names, and add only existing files/directories. Sort and deduplicate every returned list. Never recursively enumerate `node_modules`.
 
-- [ ] **Step 4: Integrate dynamic DSH defaults into self-check**
+- [x] **Step 4: Integrate dynamic DSH defaults into self-check**
 
 When a caller does not override a root family, merge current generic defaults with discovered DSH roots inside `listArtifactsForAdvisory()`. Preserve explicit `inspectPaths` precedence and existing `maxArtifacts` behavior. Add end-to-end matcher tests proving a skill, profile dependency manifest, profile manifest, and Cordis patch can be matched.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run build plus `dsh-discovery.test.js` and `feed-selfcheck.test.js`. Commit:
 
@@ -234,11 +234,11 @@ git commit -m "feat: discover DSH artifacts during feed self-check"
 - Modify: `docs/dsh.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Update documentation**
+- [x] **Step 1: Update documentation**
 
 Document both new tool names, status fields, exact-target unsubscribe restriction, transactional retry behavior, and the DSH discovery roots. Remove the statement that native status/unsubscribe are unavailable.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 Run:
 
@@ -247,7 +247,7 @@ npm run build
 node --test dist/tests/feed-cron.test.js dist/tests/dsh-plugin.test.js dist/tests/dsh-runtime.test.js dist/tests/dsh-discovery.test.js dist/tests/feed-selfcheck.test.js
 ```
 
-- [ ] **Step 3: Run full verification**
+- [x] **Step 3: Run full verification**
 
 Run `npm test`, then:
 
@@ -255,7 +255,7 @@ Run `npm test`, then:
 env DSH_PACKAGE_BIN=/Users/jeff/.nvm/versions/node/v24.18.0/bin/dsh npm run test:dsh-package
 ```
 
-- [ ] **Step 4: Inspect and commit**
+- [x] **Step 4: Inspect and commit**
 
 Run `git diff --check`, confirm only `next-steps.txt` remains untracked, and commit:
 

@@ -31,7 +31,7 @@ For local development, link the checkout instead:
 dsh plugin --profile web add link:/absolute/path/to/agentguard
 ```
 
-The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates, and `agentguard_dsh_subscribe` for binding a threat-feed subscription to the current DSH agent. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
+The profile then exposes `agentguard_dsh_scan`, which accepts a local directory or HTTPS GitHub repository URL, an optional GitHub `ref`, and a Markdown or JSON format. It also exposes `agentguard_dsh_scan_batch` for sequentially scanning up to 10 targets, `agentguard_dsh_compare` for comparing an approved version with a candidate, `agentguard_dsh_runtime_summary` for input-redacted runtime audit aggregates, and `agentguard_dsh_subscribe`, `agentguard_dsh_subscription_status`, and `agentguard_dsh_unsubscribe` for managing a threat-feed subscription bound to the current DSH agent. For example, ask DSH: “Use AgentGuard to compare tags `v1.2.3` and `v1.3.0` of `https://github.com/owner/plugin` before I update.”
 
 The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `protect` by default; the [DSH runtime guard](dsh-runtime.md) documents audit-only `observe` mode and the available protection settings.
 
@@ -76,9 +76,29 @@ Delivery is at-least-once: a process crash after DSH accepts a follow-up but
 before its queue file is removed can produce one duplicate carrying the same
 notice id after restart.
 
-Native status and unsubscribe tools are not included yet. Inspect
-`~/.agentguard/feed-cron.log`, the saved subscription JSON, and the private
-queue directory when troubleshooting.
+Use `agentguard_dsh_subscription_status` with no arguments to inspect the
+subscription safely. It reports whether state is saved, the subscription and
+target agent ids, whether the caller is that target, the configured cron and
+self-check mode, whether the exact system cron block is installed, the queued
+notice count, and the latest enqueue time. It never returns notification
+bodies, matched local paths, credentials, or Cloud remediation text.
+
+Use `agentguard_dsh_unsubscribe` with no arguments from the exact subscribed
+DSH session to remove the subscription. Cleanup is ordered transactionally:
+the managed system cron is removed or confirmed absent first, then only queue
+files for that subscription and agent are deleted, and subscription state is
+deleted last. A cron read/removal error or queue cleanup error leaves the saved
+state in place so the operation can be retried. Calling it when no subscription
+is saved is safe and has no effect.
+
+Scheduled self-check discovery includes `$DSH_HOME/skills` (default
+`~/.dsh/skills`), `<current-project>/.dsh/skills`, every immediate
+`$DSH_HOME/profiles/*/package.json`, each profile's declared direct and optional
+dependencies under `node_modules`, and existing `cordis.patch.yml` or
+`cordis.patch.yaml` files in the DSH home and profile directories. Dependency
+discovery is deliberately non-recursive: undeclared transitive packages and
+dependency names that could escape `node_modules` are excluded. Advisory-level
+`inspectPaths` and explicitly supplied self-check roots remain authoritative.
 
 For local checkout testing, install the CLI from a packed tarball but keep the
 DSH plugin linked to the checkout. This distinction matters on macOS: a global
@@ -141,7 +161,7 @@ Restart the DSH process after an add, update, or remove operation. For a local `
 Verification checklist:
 
 1. `dsh web --dump-config` contains `id: agentguard-dsh-plugin` and the `@goplus/agentguard/dist/dsh/plugin.js` entry.
-2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, `agentguard_dsh_runtime_summary`, and `agentguard_dsh_subscribe` tools.
+2. DSH exposes the `agentguard_dsh_scan`, `agentguard_dsh_scan_batch`, `agentguard_dsh_compare`, `agentguard_dsh_runtime_summary`, `agentguard_dsh_subscribe`, `agentguard_dsh_subscription_status`, and `agentguard_dsh_unsubscribe` tools.
 3. A JSON scan contains `scanner.version`, `scanner.phase`, and `scanner.rulesBaseline`. Keep these fields with a saved report so later rescans can be compared to the same implementation.
 4. `~/.agentguard/audit.jsonl` receives DSH events with `agentHost: "dsh"`. The default composition records pre-execute events with `runtimeMode: "protect"` and `enforcementApplied: true`; an explicit audit-only composition records `runtimeMode: "observe"` and does not apply pre-execute enforcement.
 5. After removal and restart, the AgentGuard composition row, tools, and runtime listener are absent.
