@@ -12,6 +12,7 @@ import { glob } from 'glob';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { hashFile } from '../utils/hash.js';
+import { discoverDshSelfCheckRoots } from './dsh-discovery.js';
 import type {
   Advisory,
   AdvisoryAffected,
@@ -95,6 +96,9 @@ export interface RunSelfCheckOptions {
   supplyChainPaths?: string[];
   urlScanPaths?: string[];
   promptInjectionRoots?: string[];
+  /** Override DSH discovery locations; defaults are resolved at call time. */
+  dshHome?: string;
+  cwd?: string;
   /** Cap on local artifacts checked per advisory. */
   maxArtifacts?: number;
 }
@@ -171,23 +175,56 @@ async function listArtifactsForAdvisory(
     return listExplicitArtifacts(advisory.ecosystem, overridePaths, options);
   }
 
+  let dshRoots: Awaited<ReturnType<typeof discoverDshSelfCheckRoots>> | undefined;
+  const getDshRoots = async () => {
+    dshRoots ??= await discoverDshSelfCheckRoots({ dshHome: options.dshHome, cwd: options.cwd });
+    return dshRoots;
+  };
+
   switch (advisory.ecosystem) {
-    case 'skill':
-      return (await listSkillDirs(options.skillRoots ?? DEFAULT_SKILL_ROOTS)).map((path) => ({
+    case 'skill': {
+      const roots = options.skillRoots ?? [
+        ...DEFAULT_SKILL_ROOTS,
+        ...(await getDshRoots()).skillRoots,
+      ];
+      return (await listSkillDirs(roots)).map((path) => ({
         path,
         name: basename(path),
         bodyPath: join(path, 'SKILL.md'),
       }));
-    case 'plugin':
-      return listPluginArtifacts(options.pluginRoots ?? DEFAULT_PLUGIN_ROOTS);
+    }
+    case 'plugin': {
+      const roots = options.pluginRoots ?? [
+        ...DEFAULT_PLUGIN_ROOTS,
+        ...(await getDshRoots()).pluginRoots,
+      ];
+      return listPluginArtifacts(roots);
+    }
     case 'mcp_server':
       return listFileArtifacts(options.mcpConfigPaths ?? DEFAULT_MCP_CONFIG_PATHS, mcpConfigFilenames());
-    case 'supply_chain':
-      return listFileArtifacts(options.supplyChainPaths ?? DEFAULT_SUPPLY_CHAIN_PATHS, DEFAULT_SUPPLY_CHAIN_PATHS);
-    case 'url':
-      return listFileArtifacts(options.urlScanPaths ?? DEFAULT_URL_SCAN_PATHS, urlScanFilenames());
-    case 'prompt_injection':
-      return listPromptInjectionArtifacts(options);
+    case 'supply_chain': {
+      const paths = options.supplyChainPaths ?? [
+        ...DEFAULT_SUPPLY_CHAIN_PATHS,
+        ...(await getDshRoots()).supplyChainPaths,
+      ];
+      return listFileArtifacts(paths, DEFAULT_SUPPLY_CHAIN_PATHS);
+    }
+    case 'url': {
+      const paths = options.urlScanPaths ?? [
+        ...DEFAULT_URL_SCAN_PATHS,
+        ...(await getDshRoots()).urlScanPaths,
+      ];
+      return listFileArtifacts(paths, urlScanFilenames());
+    }
+    case 'prompt_injection': {
+      if (options.promptInjectionRoots) return listPromptInjectionArtifacts(options);
+      const discovered = await getDshRoots();
+      return listPromptInjectionArtifacts({
+        ...options,
+        skillRoots: options.skillRoots ?? [...DEFAULT_SKILL_ROOTS, ...discovered.skillRoots],
+        pluginRoots: options.pluginRoots ?? [...DEFAULT_PLUGIN_ROOTS, ...discovered.pluginRoots],
+      });
+    }
     default:
       warnings.push(`ecosystem "${(advisory as { ecosystem: AdvisoryEcosystem }).ecosystem}" not implemented`);
       return [];
