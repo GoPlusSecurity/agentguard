@@ -28,6 +28,13 @@ export interface ThreatFeedCronRemovalResult {
   error?: string;
 }
 
+export interface SystemThreatFeedCronStatus {
+  name: string;
+  installed: boolean;
+  cronExpression?: string;
+  error?: string;
+}
+
 export interface OpenClawGatewayOptions {
   host?: string;
   port?: number;
@@ -595,6 +602,42 @@ async function installSystemThreatFeedCron(
   };
 }
 
+export async function inspectSystemThreatFeedCron(
+  options: { name: string },
+  adapters: { runCommand?: CommandRunner } = {}
+): Promise<SystemThreatFeedCronStatus> {
+  const jobId = sanitizeCronJobId(options.name);
+  const read = await readSystemCrontab(adapters.runCommand ?? execCommand);
+  if (read.kind === 'error') {
+    return { name: options.name, installed: false, error: read.error };
+  }
+  if (read.kind === 'absent') {
+    return { name: options.name, installed: false };
+  }
+
+  const lines = read.stdout.split(/\r?\n/);
+  const begin = `# AgentGuard begin ${jobId}`;
+  const end = `# AgentGuard end ${jobId}`;
+  const beginIndex = lines.findIndex((line) => line.trim() === begin);
+  const endIndex = beginIndex < 0
+    ? -1
+    : lines.findIndex((line, index) => index > beginIndex && line.trim() === end);
+  if (beginIndex < 0 || endIndex < 0) {
+    return { name: options.name, installed: false };
+  }
+
+  const commandLine = lines
+    .slice(beginIndex + 1, endIndex)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith('#'));
+  const cronExpression = commandLine?.split(/\s+/).slice(0, 5).join(' ');
+  return {
+    name: options.name,
+    installed: true,
+    ...(cronExpression ? { cronExpression } : {}),
+  };
+}
+
 async function removeSystemThreatFeedCron(
   options: {
     name: string;
@@ -605,7 +648,14 @@ async function removeSystemThreatFeedCron(
   const home = validateCronFilesystemPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
   const jobId = sanitizeCronJobId(options.name);
   try {
-    const existing = await runCommand('crontab', ['-l']).then((result) => result.stdout, () => '');
+    const read = await readSystemCrontab(runCommand);
+    if (read.kind === 'error') {
+      return { name: options.name, backend: 'system', removed: false, error: read.error };
+    }
+    if (read.kind === 'absent') {
+      return { name: options.name, backend: 'system', removed: false };
+    }
+    const existing = read.stdout;
     const next = removeAgentGuardCronBlock(existing, jobId).trimEnd();
     if (next === existing.trimEnd()) {
       return { name: options.name, backend: 'system', removed: false };
@@ -615,6 +665,24 @@ async function removeSystemThreatFeedCron(
     return { name: options.name, backend: 'system', removed: true };
   } catch (err) {
     return { name: options.name, backend: 'system', removed: false, error: (err as Error).message };
+  }
+}
+
+type SystemCrontabRead =
+  | { kind: 'present'; stdout: string }
+  | { kind: 'absent' }
+  | { kind: 'error'; error: string };
+
+async function readSystemCrontab(runCommand: CommandRunner): Promise<SystemCrontabRead> {
+  try {
+    const result = await runCommand('crontab', ['-l']);
+    return { kind: 'present', stdout: result.stdout };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/no crontab for\b/i.test(message)) {
+      return { kind: 'absent' };
+    }
+    return { kind: 'error', error: message };
   }
 }
 
