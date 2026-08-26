@@ -47,6 +47,11 @@ import {
   type ThreatFeedCronRemovalResult,
   type OpenClawGatewayOptions,
 } from './feed/cron.js';
+import { loadDshThreatFeedSubscription } from './feed/dsh-subscription.js';
+import {
+  buildDshThreatFeedNotification,
+  enqueueDshThreatFeedNotification,
+} from './feed/dsh-notifications.js';
 
 const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw', 'dsh'];
 const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
@@ -842,6 +847,26 @@ async function main() {
         console.log('NO_REPLY');
         process.exitCode = hardFailures > 0 ? 1 : 0;
         return;
+      }
+
+      if (cronInternalRun && cronAgentHost === 'dsh' && summary.shouldNotify) {
+        const agentGuardHome = getAgentGuardPaths().home;
+        const subscription = await loadDshThreatFeedSubscription(agentGuardHome);
+        if (!subscription) {
+          throw new Error('DSH threat-feed subscription state is missing. Run the DSH subscribe tool again.');
+        }
+        if (subscription.selfCheck !== quiet) {
+          throw new Error('DSH threat-feed subscription mode does not match the cron runner. Run the DSH subscribe tool again.');
+        }
+        const notification = buildDshThreatFeedNotification({
+          subscription,
+          freshAdvisories: fresh,
+          results,
+          selfCheck: quiet,
+        });
+        if (notification) {
+          await enqueueDshThreatFeedNotification(notification, agentGuardHome);
+        }
       }
 
       if (pendingStateEntry) {
