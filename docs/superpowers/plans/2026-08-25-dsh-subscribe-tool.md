@@ -64,7 +64,7 @@ Run: `npm run build && node --test dist/tests/dsh-subscription.test.js`
 
 Expected: all state tests pass with zero failures.
 
-- [ ] **Step 5: Commit the state module**
+- [x] **Step 5: Commit the state module**
 
 ```bash
 git add docs/superpowers/plans/2026-08-25-dsh-subscribe-tool.md src/feed/dsh-subscription.ts src/tests/dsh-subscription.test.ts
@@ -85,7 +85,7 @@ git commit -m "feat: add DSH threat feed subscription state"
 - Tool input: `{ cron?: string; selfCheck?: boolean; force?: boolean }`.
 - Tool output: `{ subscriptionId, targetAgentId, cronName, cronExpression, selfCheck, backend, created, modelSummary }`.
 
-- [ ] **Step 1: Write failing tool behavior tests**
+- [x] **Step 1: Write failing tool behavior tests**
 
 Add tests that exercise the real tool factory with a temporary AgentGuard home and boundary adapters. Verify:
 
@@ -98,25 +98,32 @@ await tool.execute(
 
 persists `dsh-agent-1`, requests the system backend, maps `selfCheck` to cron `quiet`, calls Cloud subscription before cron installation, and returns a bounded result. Add separate tests for missing agent context, missing Cloud credentials, non-DSH configuration, conflict without `force`, idempotent same-subscription calls, and best-effort rollback when state persistence fails.
 
-- [ ] **Step 2: Add failing registration and recursive-exemption tests**
+- [x] **Step 2: Add failing registration and recursive-exemption tests**
 
 Update the plugin registration expectation so `agentguard_dsh_subscribe` appears after the four existing tools. Assert `isAgentGuardDshTool('agentguard_dsh_subscribe')` is true while `agentguard_dsh_subscribe_evil` remains false.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 Run: `npm run build`
 
 Expected: TypeScript fails because the subscribe factory and types are not defined.
 
-- [ ] **Step 4: Implement the minimal tool**
+- [x] **Step 4: Implement the minimal tool**
 
 Extend the local DSH tool definition to accept the optional execution context argument. Implement validation, idempotency/conflict handling, connected Cloud subscription, explicit system cron installation, atomic state save, config cron metadata update, and rollback of a newly created cron when persistence fails. Register the tool in `apply()` and add its exact name to the runtime self-exemption set.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run: `npm run build && node --test dist/tests/dsh-subscription.test.js dist/tests/dsh-plugin.test.js dist/tests/dsh-runtime.test.js dist/tests/feed-cron.test.js`
 
 Expected: all focused tests pass with zero failures.
+
+- [ ] **Step 6: Commit the native tool**
+
+```bash
+git add docs/superpowers/plans/2026-08-25-dsh-subscribe-tool.md src/dsh/plugin.ts src/dsh/runtime.ts src/tests/dsh-plugin.test.ts src/tests/dsh-runtime.test.ts
+git commit -m "feat: add native DSH threat feed subscribe tool"
+```
 
 ### Task 3: Documentation and verification
 

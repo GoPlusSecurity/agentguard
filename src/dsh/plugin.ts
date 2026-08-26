@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { scanDshPlugin } from './scan.js';
 import { renderDshMarkdown } from '../reports/dsh-report.js';
 import { getDshScannerMetadata } from './metadata.js';
@@ -15,8 +16,25 @@ import {
   type DshRuntimeDependencies,
 } from './runtime.js';
 import { summarizeDshRuntimeAudit, type DshRuntimeSummary } from './runtime-summary.js';
-import { loadConfig } from '../config.js';
+import {
+  getAgentGuardPaths,
+  loadConfig,
+  saveConfig,
+  type AgentGuardConfig,
+} from '../config.js';
 import { normalizeDshOwnerPolicies } from './owner-policy.js';
+import { AgentGuardCloudClient } from '../cloud/client.js';
+import {
+  installThreatFeedCron,
+  removeThreatFeedCron,
+  validateCronExpression,
+} from '../feed/cron.js';
+import {
+  loadDshThreatFeedSubscription,
+  removeDshThreatFeedSubscription,
+  saveDshThreatFeedSubscription,
+  type DshThreatFeedSubscription,
+} from '../feed/dsh-subscription.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools'];
@@ -29,8 +47,14 @@ type ToolDefinition<TArgs, TResult> = {
     schema: Record<string, unknown>;
     render: (args: unknown, value: TResult) => Array<{ type: 'text'; text: string }>;
   };
-  timeoutMs: number;
-  execute: (args: TArgs) => Promise<TResult>;
+  timeoutMs?: number;
+  execute: (args: TArgs, exec?: DshToolRunContext) => Promise<TResult>;
+};
+
+type DshToolRunContext = {
+  agent?: {
+    id?: unknown;
+  };
 };
 
 type DshPluginContext = {
@@ -39,7 +63,8 @@ type DshPluginContext = {
       | ToolDefinition<AgentGuardDshToolArgs, AgentGuardDshToolResult>
       | ToolDefinition<AgentGuardDshBatchToolArgs, AgentGuardDshBatchToolResult>
       | ToolDefinition<AgentGuardDshCompareToolArgs, AgentGuardDshCompareToolResult>
-      | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>) => unknown;
+      | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>
+      | ToolDefinition<AgentGuardDshSubscribeToolArgs, AgentGuardDshSubscribeToolResult>) => unknown;
   };
   on?: (
     event: 'tools/pre-execute' | 'tools/post-execute',
@@ -131,10 +156,237 @@ export type AgentGuardDshRuntimeSummaryToolResult = DshRuntimeSummary & {
   modelSummary: string;
 };
 
+export type AgentGuardDshSubscribeToolArgs = {
+  cron?: string;
+  selfCheck?: boolean;
+  force?: boolean;
+};
+
+export type AgentGuardDshSubscribeToolResult = {
+  subscriptionId: string;
+  targetAgentId: string;
+  cronName: string;
+  cronExpression: string;
+  selfCheck: boolean;
+  backend: 'system';
+  created: boolean;
+  modelSummary: string;
+};
+
+export interface AgentGuardDshSubscribeDependencies {
+  agentGuardHome?: () => string;
+  loadAgentGuardConfig?: () => AgentGuardConfig;
+  saveAgentGuardConfig?: (config: AgentGuardConfig) => void | Promise<void>;
+  subscribeCloudFeed?: (config: AgentGuardConfig) => Promise<void>;
+  installCron?: typeof installThreatFeedCron;
+  removeCron?: typeof removeThreatFeedCron;
+  loadSubscription?: (home: string) => Promise<DshThreatFeedSubscription | null>;
+  saveSubscription?: (subscription: DshThreatFeedSubscription, home: string) => Promise<void>;
+  removeSubscription?: (home: string) => Promise<void>;
+  createSubscriptionId?: () => string;
+  now?: () => string;
+}
+
 type DshConfiguredRuntimeStatus = Pick<
   AgentGuardDshRuntimeSummaryToolResult,
   'configuredMode' | 'preExecuteProtectionActive' | 'configuredPostResponseMode'
 >;
+
+const DSH_THREAT_FEED_CRON_NAME = 'agentguard-threat-feed';
+const DEFAULT_DSH_THREAT_FEED_CRON = '0 * * * *';
+
+export function createAgentGuardDshSubscribeTool(
+  dependencies: AgentGuardDshSubscribeDependencies = {},
+): ToolDefinition<AgentGuardDshSubscribeToolArgs, AgentGuardDshSubscribeToolResult> {
+  return {
+    name: 'agentguard_dsh_subscribe',
+    description:
+      'Subscribe the current DSH session to AgentGuard threat intelligence using a persistent system cron poller. ' +
+      'By default this notifies without automatically scanning local artifacts; set selfCheck to true to enable scheduled self-checks.',
+    parameters: {
+      type: 'object',
+      properties: {
+        cron: {
+          type: 'string',
+          description: 'Optional five-field cron expression. Defaults to hourly: 0 * * * *.',
+        },
+        selfCheck: {
+          type: 'boolean',
+          description: 'Run scheduled local self-checks before reporting matches. Defaults to false.',
+        },
+        force: {
+          type: 'boolean',
+          description: 'Replace an existing subscription that targets another DSH session or schedule.',
+        },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          subscriptionId: { type: 'string' },
+          targetAgentId: { type: 'string' },
+          cronName: { type: 'string' },
+          cronExpression: { type: 'string' },
+          selfCheck: { type: 'boolean' },
+          backend: { type: 'string', enum: ['system'] },
+          created: { type: 'boolean' },
+          modelSummary: { type: 'string' },
+        },
+        required: [
+          'subscriptionId',
+          'targetAgentId',
+          'cronName',
+          'cronExpression',
+          'selfCheck',
+          'backend',
+          'created',
+          'modelSummary',
+        ],
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{ type: 'text', text: value.modelSummary }],
+    },
+    async execute(args, exec) {
+      const input = normalizeDshSubscribeArgs(args);
+      const agentId = normalizeDshSubscribeAgentId(exec);
+      const home = (dependencies.agentGuardHome ?? (() => getAgentGuardPaths().home))();
+      const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
+      if (config.agentHost !== 'dsh' && !config.agentHosts?.includes('dsh')) {
+        throw new Error('AgentGuard is not initialized for DSH. Run `agentguard init --agent dsh` first.');
+      }
+      if (!config.apiKey && !config.agentJwt) {
+        throw new Error('AgentGuard Cloud is not connected. Run `agentguard connect` before subscribing.');
+      }
+
+      const loadSubscription = dependencies.loadSubscription ?? loadDshThreatFeedSubscription;
+      const saveSubscription = dependencies.saveSubscription ?? saveDshThreatFeedSubscription;
+      const removeSubscription = dependencies.removeSubscription ?? removeDshThreatFeedSubscription;
+      const existing = await loadSubscription(home);
+      const isSameSubscription = Boolean(existing
+        && existing.agentId === agentId
+        && existing.cronName === DSH_THREAT_FEED_CRON_NAME
+        && existing.cronExpression === input.cronExpression
+        && existing.selfCheck === input.selfCheck);
+      if (existing && !isSameSubscription && !input.force) {
+        throw new Error(
+          'AgentGuard threat-feed subscription already targets another DSH session or schedule. ' +
+          'Set force to true to replace it.',
+        );
+      }
+
+      const subscribeCloudFeed = dependencies.subscribeCloudFeed ?? defaultSubscribeCloudFeed;
+      await subscribeCloudFeed(config);
+      const installCron = dependencies.installCron ?? installThreatFeedCron;
+      const cronResult = await installCron({
+        name: DSH_THREAT_FEED_CRON_NAME,
+        cronExpression: input.cronExpression,
+        quiet: input.selfCheck,
+        force: input.force,
+        backend: 'system',
+        agentHost: 'dsh',
+        agentGuardHome: home,
+      });
+
+      const timestamp = (dependencies.now ?? (() => new Date().toISOString()))();
+      const subscription: DshThreatFeedSubscription = {
+        version: 1,
+        subscriptionId: isSameSubscription
+          ? existing!.subscriptionId
+          : (dependencies.createSubscriptionId ?? randomUUID)(),
+        agentId,
+        cronName: DSH_THREAT_FEED_CRON_NAME,
+        cronExpression: input.cronExpression,
+        selfCheck: input.selfCheck,
+        createdAt: isSameSubscription ? existing!.createdAt : timestamp,
+        updatedAt: timestamp,
+      };
+
+      let subscriptionSaved = false;
+      try {
+        await saveSubscription(subscription, home);
+        subscriptionSaved = true;
+        await (dependencies.saveAgentGuardConfig ?? saveConfig)({
+          ...config,
+          threatFeedCronName: cronResult.name,
+          threatFeedCronInstalledAt: timestamp,
+        });
+      } catch (error) {
+        if (subscriptionSaved) {
+          if (existing) {
+            await saveSubscription(existing, home).catch(() => undefined);
+          } else {
+            await removeSubscription(home).catch(() => undefined);
+          }
+        }
+        if (cronResult.created) {
+          const removeCron = dependencies.removeCron ?? removeThreatFeedCron;
+          await removeCron({
+            name: cronResult.name,
+            backend: 'system',
+            agentHost: 'dsh',
+            agentGuardHome: home,
+          }).catch(() => undefined);
+        }
+        throw error;
+      }
+
+      const state = cronResult.created ? 'created' : 'already active';
+      const selfCheckState = input.selfCheck
+        ? 'with automatic self-check enabled'
+        : 'without automatic self-check';
+      return {
+        subscriptionId: subscription.subscriptionId,
+        targetAgentId: subscription.agentId,
+        cronName: subscription.cronName,
+        cronExpression: subscription.cronExpression,
+        selfCheck: subscription.selfCheck,
+        backend: 'system',
+        created: cronResult.created,
+        modelSummary:
+          `AgentGuard threat-feed subscription ${state} for this DSH session. ` +
+          `The system cron runs every ${subscription.cronExpression} ${selfCheckState}.`,
+      };
+    },
+  };
+}
+
+function normalizeDshSubscribeArgs(args: AgentGuardDshSubscribeToolArgs): {
+  cronExpression: string;
+  selfCheck: boolean;
+  force: boolean;
+} {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    throw new Error('DSH subscribe arguments must be an object.');
+  }
+  if (args.cron !== undefined && typeof args.cron !== 'string') {
+    throw new Error('cron must be a five-field cron expression.');
+  }
+  if (args.selfCheck !== undefined && typeof args.selfCheck !== 'boolean') {
+    throw new Error('selfCheck must be a boolean.');
+  }
+  if (args.force !== undefined && typeof args.force !== 'boolean') {
+    throw new Error('force must be a boolean.');
+  }
+  return {
+    cronExpression: validateCronExpression(args.cron ?? DEFAULT_DSH_THREAT_FEED_CRON),
+    selfCheck: args.selfCheck ?? false,
+    force: args.force ?? false,
+  };
+}
+
+function normalizeDshSubscribeAgentId(exec?: DshToolRunContext): string {
+  const value = exec?.agent?.id;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error('The current DSH agent id is unavailable; subscription targets cannot be supplied by tool arguments.');
+  }
+  return value.trim();
+}
+
+async function defaultSubscribeCloudFeed(config: AgentGuardConfig): Promise<void> {
+  await new AgentGuardCloudClient(config).subscribeFeed();
+}
 
 export function createAgentGuardDshTool(): ToolDefinition<AgentGuardDshToolArgs, AgentGuardDshToolResult> {
   return {
@@ -526,6 +778,7 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
     () => loadConfig().auditPath,
     runtimeStatus,
   ));
+  ctx.tools.register(createAgentGuardDshSubscribeTool());
   ctx.logger?.info?.(
     runtimeMode === 'protect'
       ? `AgentGuard DSH runtime mode: protect (pre-execute enforcement active; post-response ${postResponseMode}).`

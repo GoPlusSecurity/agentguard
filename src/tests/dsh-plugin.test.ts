@@ -10,8 +10,12 @@ import {
   createAgentGuardDshBatchTool,
   createAgentGuardDshCompareTool,
   createAgentGuardDshRuntimeSummaryTool,
+  createAgentGuardDshSubscribeTool,
   createAgentGuardDshTool,
 } from '../dsh/plugin.js';
+import type { AgentGuardConfig } from '../config.js';
+import { loadDshThreatFeedSubscription, saveDshThreatFeedSubscription } from '../feed/dsh-subscription.js';
+import type { installThreatFeedCron } from '../feed/cron.js';
 import { DSH_INTEGRATION_PHASE, DSH_RULES_BASELINE } from '../dsh/metadata.js';
 import { packageVersion } from '../version.js';
 
@@ -20,6 +24,33 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
+
+function dshCloudConfig(): AgentGuardConfig {
+  return {
+    version: 1,
+    level: 'balanced',
+    agentHost: 'dsh',
+    agentHosts: ['dsh'],
+    cloudUrl: 'https://agentguard.example',
+    apiKey: 'ag_live_test1234',
+    policyCachePath: '/tmp/unused-policy.json',
+    auditPath: '/tmp/unused-audit.jsonl',
+    eventSpoolPath: '/tmp/unused-spool.jsonl',
+  };
+}
+
+function existingSubscription() {
+  return {
+    version: 1 as const,
+    subscriptionId: 'sub-existing',
+    agentId: 'dsh-agent-1',
+    cronName: 'agentguard-threat-feed',
+    cronExpression: '0 * * * *',
+    selfCheck: false,
+    createdAt: '2026-08-24T00:00:00.000Z',
+    updatedAt: '2026-08-24T00:00:00.000Z',
+  };
+}
 
 describe('AgentGuard DSH runtime plugin', () => {
   it('enables pre-execute protection in the packaged DSH integration', () => {
@@ -45,14 +76,21 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.match(logs.at(-1) ?? '', /mode: protect.*enforcement active/i);
   });
 
-  it('registers the read-only scanner tool', () => {
+  it('registers the DSH tools', () => {
     const registered: Array<{ name: string }> = [];
     apply({ tools: { register(tool) { registered.push(tool); } } });
     const single = createAgentGuardDshTool();
     const batch = createAgentGuardDshBatchTool();
     const compare = createAgentGuardDshCompareTool();
     const runtimeSummary = createAgentGuardDshRuntimeSummaryTool();
-    assert.deepEqual(registered.map(tool => tool.name), [single.name, batch.name, compare.name, runtimeSummary.name]);
+    const subscribe = createAgentGuardDshSubscribeTool();
+    assert.deepEqual(registered.map(tool => tool.name), [
+      single.name,
+      batch.name,
+      compare.name,
+      runtimeSummary.name,
+      subscribe.name,
+    ]);
     const registeredSingle = single;
     assert.equal(registeredSingle.name, 'agentguard_dsh_scan');
     assert.match(registeredSingle.description, /without installing or executing/i);
@@ -61,6 +99,208 @@ describe('AgentGuard DSH runtime plugin', () => {
       type: 'string',
       description: 'Optional GitHub branch, tag, fully qualified ref, or full commit SHA.',
     });
+  });
+
+  it('subscribes the calling DSH agent and installs a persistent system cron', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-subscribe-tool-'));
+    roots.push(home);
+    const order: string[] = [];
+    const cronOptions: Array<Parameters<typeof installThreatFeedCron>[0]> = [];
+    let savedConfig: AgentGuardConfig | undefined;
+    const tool = createAgentGuardDshSubscribeTool({
+      agentGuardHome: () => home,
+      loadAgentGuardConfig: () => dshCloudConfig(),
+      saveAgentGuardConfig(next) {
+        order.push('config');
+        savedConfig = next;
+      },
+      async subscribeCloudFeed() {
+        order.push('cloud');
+      },
+      async installCron(options) {
+        order.push('cron');
+        cronOptions.push(options);
+        return {
+          name: options.name,
+          schedule: options.cronExpression,
+          timezone: 'UTC',
+          created: true,
+          backend: 'system',
+          command: 'agentguard subscribe --quiet --json --cron-run',
+        };
+      },
+      createSubscriptionId: () => 'sub-dsh-1',
+      now: () => '2026-08-25T01:02:03.000Z',
+    });
+
+    const result = await tool.execute(
+      { cron: '*/15 * * * *', selfCheck: true },
+      { agent: { id: 'dsh-agent-1' } },
+    );
+
+    assert.deepEqual(order, ['cloud', 'cron', 'config']);
+    assert.deepEqual(cronOptions, [{
+      name: 'agentguard-threat-feed',
+      cronExpression: '*/15 * * * *',
+      quiet: true,
+      force: false,
+      backend: 'system',
+      agentHost: 'dsh',
+      agentGuardHome: home,
+    }]);
+    assert.deepEqual(await loadDshThreatFeedSubscription(home), {
+      version: 1,
+      subscriptionId: 'sub-dsh-1',
+      agentId: 'dsh-agent-1',
+      cronName: 'agentguard-threat-feed',
+      cronExpression: '*/15 * * * *',
+      selfCheck: true,
+      createdAt: '2026-08-25T01:02:03.000Z',
+      updatedAt: '2026-08-25T01:02:03.000Z',
+    });
+    assert.equal(savedConfig?.threatFeedCronName, 'agentguard-threat-feed');
+    assert.equal(savedConfig?.threatFeedCronInstalledAt, '2026-08-25T01:02:03.000Z');
+    assert.deepEqual(result, {
+      subscriptionId: 'sub-dsh-1',
+      targetAgentId: 'dsh-agent-1',
+      cronName: 'agentguard-threat-feed',
+      cronExpression: '*/15 * * * *',
+      selfCheck: true,
+      backend: 'system',
+      created: true,
+      modelSummary: 'AgentGuard threat-feed subscription created for this DSH session. The system cron runs every */15 * * * * with automatic self-check enabled.',
+    });
+    assert.deepEqual(tool.output.render({}, result), [{ type: 'text', text: result.modelSummary }]);
+  });
+
+  it('rejects subscribe calls without a verified DSH agent or connected DSH host', async () => {
+    const connectedTool = createAgentGuardDshSubscribeTool({
+      loadAgentGuardConfig: () => dshCloudConfig(),
+    });
+    await assert.rejects(
+      () => connectedTool.execute({}, {}),
+      /current DSH agent id is unavailable/,
+    );
+
+    const wrongHostTool = createAgentGuardDshSubscribeTool({
+      loadAgentGuardConfig: () => ({ ...dshCloudConfig(), agentHost: 'openclaw', agentHosts: ['openclaw'] }),
+    });
+    await assert.rejects(
+      () => wrongHostTool.execute({}, { agent: { id: 'dsh-agent-1' } }),
+      /initialized for DSH/,
+    );
+
+    const disconnectedTool = createAgentGuardDshSubscribeTool({
+      loadAgentGuardConfig: () => {
+        const config = dshCloudConfig();
+        delete config.apiKey;
+        return config;
+      },
+    });
+    await assert.rejects(
+      () => disconnectedTool.execute({}, { agent: { id: 'dsh-agent-1' } }),
+      /AgentGuard Cloud is not connected/,
+    );
+  });
+
+  it('is idempotent for the same DSH subscription and rejects a different target without force', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-subscribe-idempotent-'));
+    roots.push(home);
+    await saveDshThreatFeedSubscription(existingSubscription(), home);
+    let cloudCalls = 0;
+    const tool = createAgentGuardDshSubscribeTool({
+      agentGuardHome: () => home,
+      loadAgentGuardConfig: () => dshCloudConfig(),
+      saveAgentGuardConfig() {},
+      async subscribeCloudFeed() { cloudCalls += 1; },
+      async installCron(options) {
+        return {
+          name: options.name,
+          schedule: options.cronExpression,
+          timezone: 'UTC',
+          created: false,
+          backend: 'system',
+        };
+      },
+      createSubscriptionId: () => 'sub-replacement',
+      now: () => '2026-08-25T01:02:03.000Z',
+    });
+
+    const result = await tool.execute({}, { agent: { id: 'dsh-agent-1' } });
+    assert.equal(result.subscriptionId, 'sub-existing');
+    assert.equal(result.created, false);
+    assert.equal((await loadDshThreatFeedSubscription(home))?.createdAt, '2026-08-24T00:00:00.000Z');
+
+    await assert.rejects(
+      () => tool.execute({}, { agent: { id: 'dsh-agent-2' } }),
+      /already targets another DSH session.*force/i,
+    );
+    assert.equal(cloudCalls, 1);
+  });
+
+  it('replaces a conflicting subscription only with force', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-subscribe-force-'));
+    roots.push(home);
+    await saveDshThreatFeedSubscription(existingSubscription(), home);
+    let forced = false;
+    const tool = createAgentGuardDshSubscribeTool({
+      agentGuardHome: () => home,
+      loadAgentGuardConfig: () => dshCloudConfig(),
+      saveAgentGuardConfig() {},
+      async subscribeCloudFeed() {},
+      async installCron(options) {
+        forced = options.force;
+        return {
+          name: options.name,
+          schedule: options.cronExpression,
+          timezone: 'UTC',
+          created: true,
+          backend: 'system',
+        };
+      },
+      createSubscriptionId: () => 'sub-replacement',
+      now: () => '2026-08-25T01:02:03.000Z',
+    });
+
+    const result = await tool.execute(
+      { cron: '30 * * * *', force: true },
+      { agent: { id: 'dsh-agent-2' } },
+    );
+
+    assert.equal(forced, true);
+    assert.equal(result.subscriptionId, 'sub-replacement');
+    assert.equal((await loadDshThreatFeedSubscription(home))?.agentId, 'dsh-agent-2');
+  });
+
+  it('removes a newly created cron when subscription persistence fails', async () => {
+    const removed: string[] = [];
+    const tool = createAgentGuardDshSubscribeTool({
+      loadAgentGuardConfig: () => dshCloudConfig(),
+      saveAgentGuardConfig() {},
+      async subscribeCloudFeed() {},
+      async installCron(options) {
+        return {
+          name: options.name,
+          schedule: options.cronExpression,
+          timezone: 'UTC',
+          created: true,
+          backend: 'system',
+        };
+      },
+      async saveSubscription() {
+        throw new Error('disk full');
+      },
+      async removeCron(options) {
+        removed.push(options.name);
+        return [{ name: options.name, backend: 'system', removed: true }];
+      },
+    });
+
+    await assert.rejects(
+      () => tool.execute({}, { agent: { id: 'dsh-agent-1' } }),
+      /disk full/,
+    );
+    assert.deepEqual(removed, ['agentguard-threat-feed']);
   });
 
   it('exposes a bounded runtime summary without raw tool inputs', async () => {
