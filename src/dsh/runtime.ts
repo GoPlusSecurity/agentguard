@@ -140,6 +140,8 @@ const AGENTGUARD_DSH_TOOLS = new Set([
   'agentguard_dsh_compare',
   'agentguard_dsh_runtime_summary',
   'agentguard_dsh_subscribe',
+  'agentguard_dsh_subscription_status',
+  'agentguard_dsh_unsubscribe',
 ]);
 const DSH_OWNER_ID_PATTERN = /^[A-Za-z0-9@][A-Za-z0-9@._/:-]{0,159}$/;
 const MAX_DSH_TOOL_OWNER_BINDINGS = 500;

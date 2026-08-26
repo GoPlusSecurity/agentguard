@@ -25,8 +25,11 @@ import {
 import { normalizeDshOwnerPolicies } from './owner-policy.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import {
+  inspectSystemThreatFeedCron,
   installThreatFeedCron,
   removeThreatFeedCron,
+  type SystemThreatFeedCronStatus,
+  type ThreatFeedCronRemovalResult,
   validateCronExpression,
 } from '../feed/cron.js';
 import {
@@ -35,6 +38,11 @@ import {
   saveDshThreatFeedSubscription,
   type DshThreatFeedSubscription,
 } from '../feed/dsh-subscription.js';
+import {
+  listDshThreatFeedNotifications,
+  removeDshThreatFeedNotifications,
+  type QueuedDshThreatFeedNotification,
+} from '../feed/dsh-notifications.js';
 import {
   installDshThreatFeedNotificationDelivery,
   type DshNotificationAgent,
@@ -68,7 +76,9 @@ type DshPluginContext = {
       | ToolDefinition<AgentGuardDshBatchToolArgs, AgentGuardDshBatchToolResult>
       | ToolDefinition<AgentGuardDshCompareToolArgs, AgentGuardDshCompareToolResult>
       | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>
-      | ToolDefinition<AgentGuardDshSubscribeToolArgs, AgentGuardDshSubscribeToolResult>) => unknown;
+      | ToolDefinition<AgentGuardDshSubscribeToolArgs, AgentGuardDshSubscribeToolResult>
+      | ToolDefinition<AgentGuardDshSubscriptionStatusToolArgs, AgentGuardDshSubscriptionStatusToolResult>
+      | ToolDefinition<AgentGuardDshUnsubscribeToolArgs, AgentGuardDshUnsubscribeToolResult>) => unknown;
   };
   agents?: {
     get(id: string): DshNotificationAgent | undefined;
@@ -194,6 +204,60 @@ export interface AgentGuardDshSubscribeDependencies {
   removeSubscription?: (home: string) => Promise<void>;
   createSubscriptionId?: () => string;
   now?: () => string;
+}
+
+export type AgentGuardDshSubscriptionStatusToolArgs = Record<string, never>;
+
+export type AgentGuardDshSubscriptionStatusToolResult = {
+  subscribed: boolean;
+  subscriptionId?: string;
+  targetAgentId?: string;
+  currentAgentIsTarget: boolean;
+  cronName?: string;
+  cronExpression?: string;
+  selfCheck?: boolean;
+  cronInstalled: boolean;
+  pendingNotifications: number;
+  latestQueuedAt?: string;
+  modelSummary: string;
+};
+
+export interface AgentGuardDshSubscriptionStatusDependencies {
+  agentGuardHome?: () => string;
+  loadSubscription?: (home: string) => Promise<DshThreatFeedSubscription | null>;
+  inspectCron?: (
+    options: { name: string },
+  ) => Promise<SystemThreatFeedCronStatus>;
+  listNotifications?: (
+    options: { subscriptionId: string; agentId: string },
+    home: string,
+  ) => Promise<QueuedDshThreatFeedNotification[]>;
+}
+
+export type AgentGuardDshUnsubscribeToolArgs = Record<string, never>;
+
+export type AgentGuardDshUnsubscribeToolResult = {
+  unsubscribed: boolean;
+  cronRemoved: boolean;
+  pendingNotificationsRemoved: number;
+  modelSummary: string;
+};
+
+export interface AgentGuardDshUnsubscribeDependencies {
+  agentGuardHome?: () => string;
+  loadSubscription?: (home: string) => Promise<DshThreatFeedSubscription | null>;
+  removeCron?: (options: {
+    name: string;
+    backend: 'system';
+    agentHost: 'dsh';
+    agentGuardHome: string;
+  }) => Promise<ThreatFeedCronRemovalResult[]>;
+  listNotifications?: (
+    options: { subscriptionId: string; agentId: string },
+    home: string,
+  ) => Promise<QueuedDshThreatFeedNotification[]>;
+  removeNotifications?: (noticeIds: string[], home: string) => Promise<void>;
+  removeSubscription?: (home: string) => Promise<void>;
 }
 
 type DshConfiguredRuntimeStatus = Pick<
@@ -359,6 +423,187 @@ export function createAgentGuardDshSubscribeTool(
       };
     },
   };
+}
+
+export function createAgentGuardDshSubscriptionStatusTool(
+  dependencies: AgentGuardDshSubscriptionStatusDependencies = {},
+): ToolDefinition<AgentGuardDshSubscriptionStatusToolArgs, AgentGuardDshSubscriptionStatusToolResult> {
+  return {
+    name: 'agentguard_dsh_subscription_status',
+    description:
+      'Report the current DSH threat-feed subscription, system cron state, target session, and queued notification count without exposing notification contents.',
+    parameters: emptyToolParameters(),
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          subscribed: { type: 'boolean' },
+          subscriptionId: { type: 'string' },
+          targetAgentId: { type: 'string' },
+          currentAgentIsTarget: { type: 'boolean' },
+          cronName: { type: 'string' },
+          cronExpression: { type: 'string' },
+          selfCheck: { type: 'boolean' },
+          cronInstalled: { type: 'boolean' },
+          pendingNotifications: { type: 'number' },
+          latestQueuedAt: { type: 'string' },
+          modelSummary: { type: 'string' },
+        },
+        required: [
+          'subscribed',
+          'currentAgentIsTarget',
+          'cronInstalled',
+          'pendingNotifications',
+          'modelSummary',
+        ],
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{ type: 'text', text: value.modelSummary }],
+    },
+    async execute(args, exec) {
+      normalizeEmptyDshToolArgs(args, 'subscription status');
+      const agentId = normalizeDshSubscribeAgentId(exec);
+      const home = (dependencies.agentGuardHome ?? (() => getAgentGuardPaths().home))();
+      const loadSubscription = dependencies.loadSubscription ?? loadDshThreatFeedSubscription;
+      const subscription = await loadSubscription(home);
+      const inspectCron = dependencies.inspectCron ?? inspectSystemThreatFeedCron;
+      const cronStatus = await inspectCron({
+        name: subscription?.cronName ?? DSH_THREAT_FEED_CRON_NAME,
+      });
+      if (cronStatus.error) {
+        throw new Error(`Could not inspect the AgentGuard system cron: ${cronStatus.error}`);
+      }
+      if (!subscription) {
+        return {
+          subscribed: false,
+          currentAgentIsTarget: false,
+          cronInstalled: cronStatus.installed,
+          pendingNotifications: 0,
+          modelSummary: 'No AgentGuard threat-feed subscription is saved for DSH.',
+        };
+      }
+
+      const listNotifications = dependencies.listNotifications ?? listDshThreatFeedNotifications;
+      const queued = await listNotifications({
+        subscriptionId: subscription.subscriptionId,
+        agentId: subscription.agentId,
+      }, home);
+      const latestQueuedAt = queued.reduce<string | undefined>((latest, item) => (
+        latest === undefined || item.notification.createdAt > latest
+          ? item.notification.createdAt
+          : latest
+      ), undefined);
+      const currentAgentIsTarget = subscription.agentId === agentId;
+      const queueSummary = queued.length === 1 ? '1 queued notification' : `${queued.length} queued notifications`;
+      return {
+        subscribed: true,
+        subscriptionId: subscription.subscriptionId,
+        targetAgentId: subscription.agentId,
+        currentAgentIsTarget,
+        cronName: subscription.cronName,
+        cronExpression: subscription.cronExpression,
+        selfCheck: subscription.selfCheck,
+        cronInstalled: cronStatus.installed,
+        pendingNotifications: queued.length,
+        ...(latestQueuedAt ? { latestQueuedAt } : {}),
+        modelSummary:
+          `AgentGuard threat-feed subscription is saved for ${currentAgentIsTarget ? 'this' : 'another'} DSH session; `
+          + `system cron is ${cronStatus.installed ? 'installed' : 'absent'} with ${queueSummary}.`,
+      };
+    },
+  };
+}
+
+export function createAgentGuardDshUnsubscribeTool(
+  dependencies: AgentGuardDshUnsubscribeDependencies = {},
+): ToolDefinition<AgentGuardDshUnsubscribeToolArgs, AgentGuardDshUnsubscribeToolResult> {
+  return {
+    name: 'agentguard_dsh_unsubscribe',
+    description:
+      'Remove the current DSH session threat-feed subscription transactionally: system cron first, then exact queued notifications, then saved subscription state.',
+    parameters: emptyToolParameters(),
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          unsubscribed: { type: 'boolean' },
+          cronRemoved: { type: 'boolean' },
+          pendingNotificationsRemoved: { type: 'number' },
+          modelSummary: { type: 'string' },
+        },
+        required: ['unsubscribed', 'cronRemoved', 'pendingNotificationsRemoved', 'modelSummary'],
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{ type: 'text', text: value.modelSummary }],
+    },
+    async execute(args, exec) {
+      normalizeEmptyDshToolArgs(args, 'unsubscribe');
+      const agentId = normalizeDshSubscribeAgentId(exec);
+      const home = (dependencies.agentGuardHome ?? (() => getAgentGuardPaths().home))();
+      const loadSubscription = dependencies.loadSubscription ?? loadDshThreatFeedSubscription;
+      const subscription = await loadSubscription(home);
+      if (!subscription) {
+        return {
+          unsubscribed: false,
+          cronRemoved: false,
+          pendingNotificationsRemoved: 0,
+          modelSummary: 'No AgentGuard threat-feed subscription is saved for DSH.',
+        };
+      }
+      if (subscription.agentId !== agentId) {
+        throw new Error('Only the subscribed DSH session can remove this AgentGuard threat-feed subscription.');
+      }
+
+      const removeCron = dependencies.removeCron ?? removeThreatFeedCron;
+      const cronResults = await removeCron({
+        name: subscription.cronName,
+        backend: 'system',
+        agentHost: 'dsh',
+        agentGuardHome: home,
+      });
+      const cronResult = cronResults.find(result => result.backend === 'system');
+      if (!cronResult) {
+        throw new Error('Could not remove the AgentGuard system cron: removal result was unavailable.');
+      }
+      if (cronResult.error) {
+        throw new Error(`Could not remove the AgentGuard system cron: ${cronResult.error}`);
+      }
+
+      const listNotifications = dependencies.listNotifications ?? listDshThreatFeedNotifications;
+      const queued = await listNotifications({
+        subscriptionId: subscription.subscriptionId,
+        agentId: subscription.agentId,
+      }, home);
+      const noticeIds = queued.map(item => item.notification.noticeId);
+      const removeNotifications = dependencies.removeNotifications ?? removeDshThreatFeedNotifications;
+      await removeNotifications(noticeIds, home);
+      const removeSubscription = dependencies.removeSubscription ?? removeDshThreatFeedSubscription;
+      await removeSubscription(home);
+
+      const queueSummary = noticeIds.length === 1 ? '1 queued notification' : `${noticeIds.length} queued notifications`;
+      return {
+        unsubscribed: true,
+        cronRemoved: cronResult.removed,
+        pendingNotificationsRemoved: noticeIds.length,
+        modelSummary:
+          `AgentGuard threat-feed subscription removed for this DSH session. `
+          + `${cronResult.removed ? 'Removed the system cron' : 'The system cron was already absent'} and ${queueSummary}.`,
+      };
+    },
+  };
+}
+
+function emptyToolParameters(): Record<string, unknown> {
+  return { type: 'object', properties: {}, additionalProperties: false };
+}
+
+function normalizeEmptyDshToolArgs(value: unknown, operation: string): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`DSH ${operation} arguments must be an object.`);
+  }
+  if (Object.keys(value).length > 0) {
+    throw new Error(`DSH ${operation} does not accept arguments.`);
+  }
 }
 
 function normalizeDshSubscribeArgs(args: AgentGuardDshSubscribeToolArgs): {
@@ -788,6 +1033,8 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
     runtimeStatus,
   ));
   ctx.tools.register(createAgentGuardDshSubscribeTool());
+  ctx.tools.register(createAgentGuardDshSubscriptionStatusTool());
+  ctx.tools.register(createAgentGuardDshUnsubscribeTool());
   const agents = ctx.agents;
   const on = ctx.on;
   if (agents && on && ctx.effect) {

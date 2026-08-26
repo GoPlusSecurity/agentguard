@@ -597,6 +597,10 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(isAgentGuardDshTool('agentguard_dsh_scan'), true);
     assert.equal(isAgentGuardDshTool('agentguard_dsh_subscribe'), true);
     assert.equal(isAgentGuardDshTool('agentguard_dsh_subscribe_evil'), false);
+    assert.equal(isAgentGuardDshTool('agentguard_dsh_subscription_status'), true);
+    assert.equal(isAgentGuardDshTool('agentguard_dsh_subscription_status_evil'), false);
+    assert.equal(isAgentGuardDshTool('agentguard_dsh_unsubscribe'), true);
+    assert.equal(isAgentGuardDshTool('agentguard_dsh_unsubscribe_evil'), false);
     const observed = await observeDshToolCall(execution({ name: 'agentguard_dsh_scan' }), {
       loadAgentGuardConfig: () => config,
       evaluate: async () => {

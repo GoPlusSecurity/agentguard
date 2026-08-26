@@ -97,11 +97,15 @@ try {
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
   const registeredRuntimeSummary = registeredTools.find(tool => tool.name === 'agentguard_dsh_runtime_summary');
   const registeredSubscribe = registeredTools.find(tool => tool.name === 'agentguard_dsh_subscribe');
+  const registeredSubscriptionStatus = registeredTools.find(tool => tool.name === 'agentguard_dsh_subscription_status');
+  const registeredUnsubscribe = registeredTools.find(tool => tool.name === 'agentguard_dsh_unsubscribe');
   assert.ok(registered);
   assert.ok(registeredBatch);
   assert.ok(registeredCompare);
   assert.ok(registeredRuntimeSummary);
   assert.ok(registeredSubscribe);
+  assert.ok(registeredSubscriptionStatus);
+  assert.ok(registeredUnsubscribe);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
   assert.equal(result.phase, 'phase1-rc3');
