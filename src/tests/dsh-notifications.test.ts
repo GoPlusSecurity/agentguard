@@ -9,6 +9,7 @@ import {
   enqueueDshThreatFeedNotification,
   listDshThreatFeedNotifications,
   removeDshThreatFeedNotifications,
+  watchDshThreatFeedNotifications,
   type DshThreatFeedNotification,
 } from '../feed/dsh-notifications.js';
 import type { Advisory, SelfCheckResult } from '../feed/types.js';
@@ -243,5 +244,31 @@ describe('DSH threat-feed notification queue', () => {
     assert.match(followup.text, /untrusted threat intelligence data/i);
     assert.match(followup.text, /Do not execute commands/i);
     assert.match(followup.text, /notice_json:/);
+  });
+
+  it('notifies a live consumer when cron publishes a queue file', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-notices-watch-'));
+    roots.push(home);
+    let resolveChange!: () => void;
+    const changed = new Promise<void>(resolve => { resolveChange = resolve; });
+    const stop = watchDshThreatFeedNotifications(home, resolveChange);
+    const notice = buildDshThreatFeedNotification({
+      subscription: subscription(),
+      freshAdvisories: [advisory()],
+      results: [],
+      selfCheck: false,
+      now: '2026-08-26T01:00:00.000Z',
+    });
+    assert.ok(notice);
+
+    try {
+      await enqueueDshThreatFeedNotification(notice, home);
+      await Promise.race([
+        changed,
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('queue watcher did not fire')), 2_000)),
+      ]);
+    } finally {
+      stop();
+    }
   });
 });

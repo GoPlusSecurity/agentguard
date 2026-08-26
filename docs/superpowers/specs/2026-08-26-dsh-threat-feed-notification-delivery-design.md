@@ -44,7 +44,7 @@ system cron
   -> commit feed seen-state
 
 DSH plugin
-  -> observe matching agent lifecycle/status
+  -> observe matching agent lifecycle/status and queue-directory changes
   -> load matching queued notices while the agent is idle
   -> aggregate notices into one untrusted-data envelope
   -> Agent.followup(...)
@@ -54,6 +54,9 @@ DSH plugin
 An external cron process cannot access DSH's in-memory `ctx.agents`. Conversely,
 DSH's native Schedule is session-local and does not poll while DSH is stopped.
 The file queue is therefore the durable boundary between the two lifecycles.
+While DSH is live, a non-persistent filesystem watcher turns a newly published
+queue file into an immediate delivery attempt; lifecycle activation and idle
+events remain the recovery path after downtime, watcher errors, or busy agents.
 
 ## 3. Notification Queue
 
@@ -145,6 +148,7 @@ uses:
 - `ctx.agents.get(agentId)`;
 - `ctx.agents.list()` or equivalent initial live-agent enumeration;
 - `agent/created` and `agent/status` listeners;
+- a watcher on the private notification queue directory;
 - `Agent.runMaintenance()`;
 - `Agent.followup()`.
 
@@ -158,15 +162,17 @@ Delivery rules:
 2. On `agent/created`, schedule delivery only for the exact subscribed id.
 3. On matching `agent/status: idle`, retry if a previous maintenance claim was
    rejected because the agent was busy.
-4. Maintain one process-local delivery promise per agent id.
-5. Enter `runMaintenance()` before reading and claiming a batch.
-6. Re-read subscription state inside maintenance and list only exact
+4. On queue-directory change, reload the saved subscription and schedule its
+   exact live target, so cron output reaches an already-idle DSH session.
+5. Maintain one process-local delivery promise per agent id.
+6. Enter `runMaintenance()` before reading and claiming a batch.
+7. Re-read subscription state inside maintenance and list only exact
    subscription-id/agent-id matches.
-7. Aggregate at most 20 notifications and cap the final message at 24,000
+8. Aggregate at most 20 notifications and cap the final message at 24,000
    characters.
-8. Call `followup()` once with a stable user-role plugin message.
-9. After synchronous acceptance, remove exactly the files in that batch.
-10. On any failure before acceptance, retain all files and log one bounded
+9. Call `followup()` once with a stable user-role plugin message.
+10. After synchronous acceptance, remove exactly the files in that batch.
+11. On any failure before acceptance, retain all files and log one bounded
     warning.
 
 The narrow crash window after `followup()` accepts but before files are removed
@@ -229,7 +235,7 @@ Implementation follows red-green-refactor cycles for:
 4. no enqueue for non-DSH, non-cron, or `shouldNotify: false` paths;
 5. plugin injection and lifecycle registration;
 6. exact-agent isolation, already-live recovery, busy-to-idle retry, aggregation,
-   followup acceptance/removal, and failure retention;
+   live queue publication, followup acceptance/removal, and failure retention;
 7. stable safe framing and bounded message content;
 8. existing subscribe, cron, DSH runtime, OpenClaw, QClaw, and Hermes regressions;
 9. build, full unit suite, and packaged DSH plugin smoke test.

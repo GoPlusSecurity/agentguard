@@ -35,9 +35,13 @@ import {
   saveDshThreatFeedSubscription,
   type DshThreatFeedSubscription,
 } from '../feed/dsh-subscription.js';
+import {
+  installDshThreatFeedNotificationDelivery,
+  type DshNotificationAgent,
+} from './notification-delivery.js';
 
 export const name = 'agentguard-dsh-plugin';
-export const inject = ['tools'];
+export const inject = ['tools', 'agents'];
 
 type ToolDefinition<TArgs, TResult> = {
   name: string;
@@ -66,6 +70,11 @@ type DshPluginContext = {
       | ToolDefinition<AgentGuardDshRuntimeSummaryToolArgs, AgentGuardDshRuntimeSummaryToolResult>
       | ToolDefinition<AgentGuardDshSubscribeToolArgs, AgentGuardDshSubscribeToolResult>) => unknown;
   };
+  agents?: {
+    get(id: string): DshNotificationAgent | undefined;
+    list(): DshNotificationAgent[];
+  };
+  effect?: (setup: () => unknown, label?: string) => unknown;
   on?: (
     event: 'tools/pre-execute' | 'tools/post-execute',
     listener: (...args: any[]) => Promise<unknown>
@@ -779,6 +788,17 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
     runtimeStatus,
   ));
   ctx.tools.register(createAgentGuardDshSubscribeTool());
+  const agents = ctx.agents;
+  const on = ctx.on;
+  if (agents && on && ctx.effect) {
+    ctx.effect(() => installDshThreatFeedNotificationDelivery({
+      agents,
+      on(event, listener) {
+        return (on as (...args: any[]) => unknown)(event, listener);
+      },
+      logger: ctx.logger ? { warn: message => { ctx.logger?.warn(message); } } : undefined,
+    }), 'agentguard.dshThreatFeedNotificationDelivery()');
+  }
   ctx.logger?.info?.(
     runtimeMode === 'protect'
       ? `AgentGuard DSH runtime mode: protect (pre-execute enforcement active; post-response ${postResponseMode}).`

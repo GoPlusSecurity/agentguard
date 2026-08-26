@@ -34,6 +34,7 @@
 **Interfaces:**
 - Consumes: `DshThreatFeedSubscription`, `Advisory`, and `SelfCheckResult`.
 - Produces: `DshThreatFeedNotification`, `QueuedDshThreatFeedNotification`, `buildDshThreatFeedNotification(options)`, `enqueueDshThreatFeedNotification(notification, home)`, `listDshThreatFeedNotifications(options, home)`, `removeDshThreatFeedNotifications(noticeIds, home)`, and `buildDshThreatFeedFollowup(notifications)`.
+- Also produces: `watchDshThreatFeedNotifications(home, onChange, onWarning?)`, a non-persistent watcher used to wake an already-live DSH consumer after cron publishes a file.
 
 - [ ] **Step 1: Write the failing queue and safe-payload tests**
 
@@ -58,6 +59,8 @@ assert.doesNotMatch(JSON.stringify(notice), /secret details|token=secret|rm -rf/
 ```
 
 Also assert deterministic notice ids across different `now` values, match-mode bodies omit paths but include advisory id/count/matcher kinds, duplicate enqueue returns `created: false`, directory/file modes are `0700`/`0600`, listing filters exact subscription and agent ids, malformed files and symlinks are retained and reported, sorting is deterministic, removal accepts validated notice ids only, and follow-up framing is bounded to 20 notices/24,000 characters with the untrusted-data instruction.
+Add a watcher test that starts before enqueue and observes the final `.json`
+publication without keeping the Node process alive after disposal.
 
 - [ ] **Step 2: Build and run the new test to verify RED**
 
@@ -240,6 +243,9 @@ assert.equal((await listDshThreatFeedNotifications(match, home)).length, 0)
 ```
 
 Add separate tests for already-live activation, later `agent/created`, busy `runMaintenance()` rejection followed by `agent/status: idle`, concurrent triggers coalescing to one follow-up, followup failure retaining files, mismatched subscription/agent isolation, batching at 20, and listener teardown preventing later delivery.
+Also start delivery with an already-live idle target and an empty queue, publish a
+notice afterward, and assert the queue watcher triggers delivery without another
+agent lifecycle event.
 
 - [ ] **Step 2: Build and verify RED**
 
@@ -268,7 +274,7 @@ export interface DshNotificationAgent {
 }
 ```
 
-The installer tracks one in-flight promise per normalized agent id, reads the subscription both before scheduling and inside maintenance, lists exact matching notifications, builds one bounded follow-up, calls `followup()` synchronously, then removes only the selected notice ids. Catch busy/failure paths, retain files, and emit bounded warnings. Register global `agent/created` and `agent/status` listeners and inspect `ctx.agents.list()` at activation. Return an async disposer that disables new attempts, calls every listener disposer, and awaits all captured in-flight promises. Register that disposer through `ctx.effect()` from `apply()` so Cordis teardown drains delivery work.
+The installer tracks one in-flight promise per normalized agent id, reads the subscription both before scheduling and inside maintenance, lists exact matching notifications, builds one bounded follow-up, calls `followup()` synchronously, then removes only the selected notice ids. Catch busy/failure paths, retain files, and emit bounded warnings. Register global `agent/created` and `agent/status` listeners, inspect `ctx.agents.list()` at activation, and watch the private queue directory so a later cron publication schedules the saved exact target. Return an async disposer that disables new attempts, closes the watcher, calls every listener disposer, and awaits all captured in-flight promises. Register that disposer through `ctx.effect()` from `apply()` so Cordis teardown drains delivery work.
 
 - [ ] **Step 4: Rebuild and verify delivery GREEN**
 

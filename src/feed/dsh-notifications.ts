@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { chmodSync, constants, mkdirSync, unwatchFile, watchFile, type Stats } from 'node:fs';
 import { chmod, link, mkdir, open, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { DshThreatFeedSubscription } from './dsh-subscription.js';
@@ -224,6 +224,31 @@ export async function removeDshThreatFeedNotifications(
   }
   const directory = notificationDirectory(home);
   await Promise.all(noticeIds.map(noticeId => rm(join(directory, `${noticeId}.json`), { force: true })));
+}
+
+export function watchDshThreatFeedNotifications(
+  home: string,
+  onChange: () => void,
+  onWarning?: (message: string) => void,
+): () => void {
+  const directory = notificationDirectory(home);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const listener = (current: Stats, previous: Stats): void => {
+    if (current.mtimeMs !== previous.mtimeMs || current.ctimeMs !== previous.ctimeMs) onChange();
+  };
+  try {
+    watchFile(directory, { persistent: false, interval: 250 }, listener);
+  } catch (error) {
+    onWarning?.(`DSH threat-feed notification watcher failed: ${truncateText(errorMessage(error), 500)}`);
+    throw error;
+  }
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    unwatchFile(directory, listener);
+  };
 }
 
 export function buildDshThreatFeedFollowup(

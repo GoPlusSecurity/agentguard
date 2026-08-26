@@ -12,6 +12,7 @@ import {
   createAgentGuardDshRuntimeSummaryTool,
   createAgentGuardDshSubscribeTool,
   createAgentGuardDshTool,
+  inject,
 } from '../dsh/plugin.js';
 import type { AgentGuardConfig } from '../config.js';
 import { loadDshThreatFeedSubscription, saveDshThreatFeedSubscription } from '../feed/dsh-subscription.js';
@@ -53,6 +54,35 @@ function existingSubscription() {
 }
 
 describe('AgentGuard DSH runtime plugin', () => {
+  it('injects the agent registry and installs threat-feed delivery lifecycle hooks', async () => {
+    assert.deepEqual(inject, ['tools', 'agents']);
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-plugin-delivery-'));
+    roots.push(home);
+    const previousHome = process.env.AGENTGUARD_HOME;
+    process.env.AGENTGUARD_HOME = home;
+    const events: string[] = [];
+    let cleanup: unknown;
+    try {
+      apply({
+        tools: { register() {} },
+        agents: { get() { return undefined; }, list() { return []; } },
+        on(event: string) {
+          events.push(event);
+          return () => undefined;
+        },
+        effect(setup: () => unknown) {
+          cleanup = setup();
+        },
+      });
+      assert.ok(events.includes('agent/created'));
+      assert.ok(events.includes('agent/status'));
+    } finally {
+      if (typeof cleanup === 'function') await cleanup();
+      if (previousHome === undefined) delete process.env.AGENTGUARD_HOME;
+      else process.env.AGENTGUARD_HOME = previousHome;
+    }
+  });
+
   it('enables pre-execute protection in the packaged DSH integration', () => {
     const manifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
       dsh: { bundle: { patch: string } };
@@ -278,6 +308,7 @@ describe('AgentGuard DSH runtime plugin', () => {
       loadAgentGuardConfig: () => dshCloudConfig(),
       saveAgentGuardConfig() {},
       async subscribeCloudFeed() {},
+      async loadSubscription() { return null; },
       async installCron(options) {
         return {
           name: options.name,
