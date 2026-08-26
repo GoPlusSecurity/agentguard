@@ -135,6 +135,8 @@ try {
     runtimePostObserverRegistered: true,
     runtimeSummaryRegistered: true,
     subscribeRegistered: true,
+    subscriptionStatusRegistered: true,
+    unsubscribeRegistered: true,
     updatePreservedComposition: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,

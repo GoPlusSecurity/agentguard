@@ -316,6 +316,36 @@ describe('feed/cron', () => {
     assert.deepEqual(calls, [['-l'], ['-l']]);
   });
 
+  it('reports an incomplete managed cron block as an error without touching other jobs', async () => {
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const malformed = [
+      '# existing',
+      '# AgentGuard begin agentguard-threat-feed',
+      '0 * * * * /tmp/agentguard-threat-feed.sh',
+      '15 * * * * /tmp/other-job.sh',
+      '',
+    ].join('\n');
+    const runner: CommandRunner = async (_command, args, input) => {
+      calls.push({ args, input });
+      return { stdout: malformed, stderr: '' };
+    };
+
+    const status = await inspectSystemThreatFeedCron(
+      { name: 'agentguard-threat-feed' },
+      { runCommand: runner }
+    );
+    const removal = await removeThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'system' },
+      { runCommand: runner }
+    );
+
+    assert.match(status.error ?? '', /incomplete managed system cron block/i);
+    assert.equal(status.installed, false);
+    assert.match(removal[0].error ?? '', /incomplete managed system cron block/i);
+    assert.equal(removal[0].removed, false);
+    assert.deepEqual(calls.map(call => call.args), [['-l'], ['-l']]);
+  });
+
   it('removes OpenClaw gateway cron jobs by default subscribe name', async () => {
     const gateway = fakeGateway([{ id: 'job-1', name: 'agentguard-threat-feed' }]);
 

@@ -426,8 +426,9 @@ function dedupeArtifacts(artifacts: LocalArtifact[]): LocalArtifact[] {
   const seen = new Set<string>();
   const result: LocalArtifact[] = [];
   for (const artifact of artifacts) {
-    if (seen.has(artifact.path)) continue;
-    seen.add(artifact.path);
+    const identity = artifact.bodyPath ?? artifact.path;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     result.push(artifact);
   }
   return result;

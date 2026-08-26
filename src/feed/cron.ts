@@ -616,18 +616,17 @@ export async function inspectSystemThreatFeedCron(
   }
 
   const lines = read.stdout.split(/\r?\n/);
-  const begin = `# AgentGuard begin ${jobId}`;
-  const end = `# AgentGuard end ${jobId}`;
-  const beginIndex = lines.findIndex((line) => line.trim() === begin);
-  const endIndex = beginIndex < 0
-    ? -1
-    : lines.findIndex((line, index) => index > beginIndex && line.trim() === end);
-  if (beginIndex < 0 || endIndex < 0) {
+  const blocks = findAgentGuardCronBlocks(lines, jobId);
+  if (blocks.error) {
+    return { name: options.name, installed: false, error: blocks.error };
+  }
+  const block = blocks.ranges[0];
+  if (!block) {
     return { name: options.name, installed: false };
   }
 
   const commandLine = lines
-    .slice(beginIndex + 1, endIndex)
+    .slice(block.beginIndex + 1, block.endIndex)
     .map((line) => line.trim())
     .find((line) => line.length > 0 && !line.startsWith('#'));
   const cronExpression = commandLine?.split(/\s+/).slice(0, 5).join(' ');
@@ -656,6 +655,10 @@ async function removeSystemThreatFeedCron(
       return { name: options.name, backend: 'system', removed: false };
     }
     const existing = read.stdout;
+    const blocks = findAgentGuardCronBlocks(existing.split(/\r?\n/), jobId);
+    if (blocks.error) {
+      return { name: options.name, backend: 'system', removed: false, error: blocks.error };
+    }
     const next = removeAgentGuardCronBlock(existing, jobId).trimEnd();
     if (next === existing.trimEnd()) {
       return { name: options.name, backend: 'system', removed: false };
@@ -886,23 +889,54 @@ function qclawCronMessage(quiet: boolean): string {
 }
 
 function removeAgentGuardCronBlock(value: string, name: string): string {
-  const begin = `# AgentGuard begin ${name}`;
-  const end = `# AgentGuard end ${name}`;
   const lines = value.split(/\r?\n/);
+  const blocks = findAgentGuardCronBlocks(lines, name);
+  if (blocks.error || blocks.ranges.length === 0) return value;
   const kept: string[] = [];
-  let skipping = false;
-  for (const line of lines) {
-    if (line.trim() === begin) {
-      skipping = true;
+  let rangeIndex = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const range = blocks.ranges[rangeIndex];
+    if (range && index >= range.beginIndex && index <= range.endIndex) {
+      if (index === range.endIndex) rangeIndex += 1;
       continue;
     }
-    if (line.trim() === end) {
-      skipping = false;
-      continue;
-    }
-    if (!skipping) kept.push(line);
+    kept.push(lines[index]!);
   }
   return kept.join('\n');
+}
+
+function findAgentGuardCronBlocks(
+  lines: string[],
+  name: string,
+): {
+  ranges: Array<{ beginIndex: number; endIndex: number }>;
+  error?: string;
+} {
+  const begin = `# AgentGuard begin ${name}`;
+  const end = `# AgentGuard end ${name}`;
+  const ranges: Array<{ beginIndex: number; endIndex: number }> = [];
+  let beginIndex: number | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!.trim();
+    if (line === begin) {
+      if (beginIndex !== null) {
+        return { ranges, error: `Incomplete managed system cron block for ${name}: nested begin marker.` };
+      }
+      beginIndex = index;
+      continue;
+    }
+    if (line === end) {
+      if (beginIndex === null) {
+        return { ranges, error: `Incomplete managed system cron block for ${name}: end marker has no begin marker.` };
+      }
+      ranges.push({ beginIndex, endIndex: index });
+      beginIndex = null;
+    }
+  }
+  if (beginIndex !== null) {
+    return { ranges, error: `Incomplete managed system cron block for ${name}: begin marker has no end marker.` };
+  }
+  return { ranges };
 }
 
 function execCommand(command: string, args: string[], input?: string): Promise<CommandResult> {

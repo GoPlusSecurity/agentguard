@@ -48,12 +48,12 @@ export async function discoverDshSelfCheckRoots(
   for (const entry of profiles.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!entry.isDirectory()) continue;
     const profileRoot = join(profilesRoot, entry.name);
+    addCordisPatches(profileRoot, pluginRoots, urlScanPaths);
     const manifestPath = join(profileRoot, 'package.json');
     if (!existsSync(manifestPath)) continue;
     pluginRoots.push(manifestPath);
     supplyChainPaths.push(manifestPath);
     urlScanPaths.push(manifestPath);
-    addCordisPatches(profileRoot, pluginRoots, urlScanPaths);
 
     const dependencyNames = await readDirectDependencyNames(manifestPath);
     for (const dependencyName of dependencyNames) {

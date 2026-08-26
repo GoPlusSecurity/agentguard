@@ -40,6 +40,8 @@ describe('feed/dsh-discovery', () => {
     }));
     write(join(dshHome, 'cordis.patch.yml'), '- insert: []\n');
     write(join(web, 'cordis.patch.yaml'), '- insert: []\n');
+    const patchOnly = join(dshHome, 'profiles', 'patch-only', 'cordis.patch.yml');
+    write(patchOnly, '- insert: []\n');
 
     const roots = await discoverDshSelfCheckRoots({ dshHome, cwd });
 
@@ -51,6 +53,7 @@ describe('feed/dsh-discovery', () => {
     assert.ok(roots.pluginRoots.includes(join(web, 'node_modules', 'optional-plugin')));
     assert.ok(roots.pluginRoots.includes(join(dshHome, 'cordis.patch.yml')));
     assert.ok(roots.pluginRoots.includes(join(web, 'cordis.patch.yaml')));
+    assert.ok(roots.pluginRoots.includes(patchOnly));
     assert.ok(roots.supplyChainPaths.includes(join(web, 'package.json')));
     assert.ok(roots.supplyChainPaths.includes(join(web, 'node_modules', 'direct-plugin')));
     assert.ok(roots.urlScanPaths.includes(join(web, 'package.json')));

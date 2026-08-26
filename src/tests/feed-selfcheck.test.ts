@@ -395,6 +395,7 @@ describe('feed/selfcheck', () => {
       name: 'dsh-danger-plugin', version: '1.2.3', marker: 'DSH_PLUGIN_INDICATOR',
     }), 'utf8');
     writeFileSync(join(dshHome, 'cordis.patch.yml'), '- url: https://dsh-threat.example/payload\n', 'utf8');
+    writeFileSync(join(profile, 'cordis.patch.yml'), '- marker: DSH_PROFILE_PATCH_INDICATOR\n', 'utf8');
 
     const skill = await runSelfCheckForAdvisory(
       makeAdvisory({ ecosystem: 'skill', selfCheck: { matchers: [{ bodyRegex: 'DSH_SKILL_INDICATOR' }] } }),
@@ -402,6 +403,10 @@ describe('feed/selfcheck', () => {
     );
     const plugin = await runSelfCheckForAdvisory(
       makeAdvisory({ ecosystem: 'plugin', selfCheck: { matchers: [{ bodyRegex: 'DSH_PLUGIN_INDICATOR' }] } }),
+      { dshHome, cwd }
+    );
+    const profilePlugin = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'plugin', selfCheck: { matchers: [{ bodyRegex: 'DSH_PROFILE_INDICATOR' }] } }),
       { dshHome, cwd }
     );
     const manifest = await runSelfCheckForAdvisory(
@@ -417,6 +422,8 @@ describe('feed/selfcheck', () => {
     assert.match(skill.matchedArtifacts[0].path, /dsh-danger-skill$/);
     assert.equal(plugin.matchedArtifacts.length, 1);
     assert.match(plugin.matchedArtifacts[0].path, /dsh-danger-plugin$/);
+    assert.equal(profilePlugin.matchedArtifacts.length, 1);
+    assert.equal(profilePlugin.matchedArtifacts[0].path, profile);
     assert.equal(manifest.matchedArtifacts.length, 1);
     assert.equal(manifest.matchedArtifacts[0].path, join(profile, 'package.json'));
     assert.equal(patch.matchedArtifacts.length, 1);

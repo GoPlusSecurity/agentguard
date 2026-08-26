@@ -189,6 +189,10 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.equal(result.latestQueuedAt, '2026-08-26T02:00:00.000Z');
     assert.match(result.modelSummary, /2 queued/i);
     assert.doesNotMatch(JSON.stringify(result), /SECRET_ADVISORY_BODY|private\.txt|matched-plugin/);
+
+    const otherAgentResult = await tool.execute({}, { agent: { id: 'another-dsh-agent' } });
+    assert.equal(otherAgentResult.currentAgentIsTarget, false);
+    assert.match(otherAgentResult.modelSummary, /another DSH session/i);
   });
 
   it('reports an absent DSH subscription without exposing queue data', async () => {
