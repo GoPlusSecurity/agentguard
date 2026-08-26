@@ -63,6 +63,8 @@ try {
     'package/dist/dsh/metadata.js',
     'package/dist/dsh/runtime-summary.js',
     'package/dist/dsh/runtime-summary.d.ts',
+    'package/dist/feed/dsh-subscription.js',
+    'package/dist/feed/dsh-subscription.d.ts',
     'package/dist/reports/dsh-report.js',
     'package/docs/dsh.md',
     'package/docs/dsh-runtime.md',
@@ -94,10 +96,12 @@ try {
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
   const registeredRuntimeSummary = registeredTools.find(tool => tool.name === 'agentguard_dsh_runtime_summary');
+  const registeredSubscribe = registeredTools.find(tool => tool.name === 'agentguard_dsh_subscribe');
   assert.ok(registered);
   assert.ok(registeredBatch);
   assert.ok(registeredCompare);
   assert.ok(registeredRuntimeSummary);
+  assert.ok(registeredSubscribe);
   const result = await registered.execute({ target: safeFixture, format: 'json' });
   assert.equal(result.runtimeSurfaceRiskLevel, 'low');
   assert.equal(result.phase, 'phase1-rc3');
@@ -126,6 +130,7 @@ try {
     runtimeObserverRegistered: true,
     runtimePostObserverRegistered: true,
     runtimeSummaryRegistered: true,
+    subscribeRegistered: true,
     updatePreservedComposition: true,
     uninstallRemoved: true,
     scannerVersion: result.scannerVersion,

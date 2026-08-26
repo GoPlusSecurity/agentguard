@@ -202,7 +202,7 @@ export function createAgentGuardDshSubscribeTool(
     name: 'agentguard_dsh_subscribe',
     description:
       'Subscribe the current DSH session to AgentGuard threat intelligence using a persistent system cron poller. ' +
-      'By default this notifies without automatically scanning local artifacts; set selfCheck to true to enable scheduled self-checks.',
+      'By default this polls without automatically scanning local artifacts; set selfCheck to true to enable scheduled self-checks.',
     parameters: {
       type: 'object',
       properties: {

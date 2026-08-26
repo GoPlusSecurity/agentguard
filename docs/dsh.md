@@ -35,6 +35,50 @@ The profile then exposes `agentguard_dsh_scan`, which accepts a local directory 
 
 The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not install or execute the target plugin. The fourth tool only summarizes local runtime audit events and never returns raw tool input. The installed bundle enables `protect` by default; the [DSH runtime guard](dsh-runtime.md) documents audit-only `observe` mode and the available protection settings.
 
+### Subscribe to threat intelligence from DSH
+
+The native `agentguard_dsh_subscribe` tool binds a threat-feed subscription to
+the exact DSH agent that invokes it. It subscribes the currently connected
+AgentGuard Cloud identity, installs a system crontab poller, and stores the
+binding in `~/.agentguard/dsh-threat-feed-subscription.json`.
+
+Before invoking the tool, initialize the DSH integration and connect Cloud:
+
+```bash
+agentguard init --agent dsh
+agentguard connect
+```
+
+Then ask DSH, for example:
+
+```text
+Use AgentGuard to subscribe this DSH session to the threat feed every 15 minutes without automatic self-checks.
+```
+
+The tool accepts these optional arguments:
+
+- `cron`: a five-field cron expression; defaults to `0 * * * *`;
+- `selfCheck`: defaults to `false`; set it to `true` only when scheduled local self-checks are intended;
+- `force`: replace a subscription bound to another DSH agent or schedule.
+
+Polling continues while DSH is stopped because the job is owned by system
+crontab. The cron runner must be able to find the `agentguard` executable on
+its saved `PATH`, and writes output to `~/.agentguard/feed-cron.log`.
+
+This first implementation creates and persists the subscription. It does not
+yet provide native status/unsubscribe tools or deliver queued notifications
+back into the DSH session; inspect the cron log for scheduled pull results.
+
+For local checkout testing, expose both the local CLI and the local DSH plugin,
+then restart DSH:
+
+```bash
+cd /absolute/path/to/agentguard
+npm run build
+npm link
+dsh plugin --profile web add link:/absolute/path/to/agentguard
+```
+
 ### Operate the DSH installation
 
 DSH forwards plugin lifecycle commands to the profile package manager. Keep the profile name explicit so an update or removal cannot affect a different profile.

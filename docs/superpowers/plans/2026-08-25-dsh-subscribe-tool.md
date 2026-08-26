@@ -118,7 +118,7 @@ Run: `npm run build && node --test dist/tests/dsh-subscription.test.js dist/test
 
 Expected: all focused tests pass with zero failures.
 
-- [ ] **Step 6: Commit the native tool**
+- [x] **Step 6: Commit the native tool**
 
 ```bash
 git add docs/superpowers/plans/2026-08-25-dsh-subscribe-tool.md src/dsh/plugin.ts src/dsh/runtime.ts src/tests/dsh-plugin.test.ts src/tests/dsh-runtime.test.ts
@@ -133,7 +133,7 @@ git commit -m "feat: add native DSH threat feed subscribe tool"
 **Interfaces:**
 - Documents: tool arguments, Cloud prerequisite, system cron behavior, current absence of automatic DSH-session notification delivery, and local link/restart flow.
 
-- [ ] **Step 1: Document the implemented boundary**
+- [x] **Step 1: Document the implemented boundary**
 
 Add a DSH threat-feed section with this example request:
 
@@ -143,7 +143,7 @@ Use AgentGuard to subscribe this DSH session to the threat feed every 15 minutes
 
 State explicitly that this implementation creates/persists the subscription but does not yet deliver notifications back into a DSH session; current cron output remains in `~/.agentguard/feed-cron.log`.
 
-- [ ] **Step 2: Run verification**
+- [x] **Step 2: Run verification**
 
 Run: `npm run build`
 
@@ -153,9 +153,9 @@ Run when the local DSH binary is available: `env DSH_PACKAGE_BIN=/Users/jeff/.nv
 
 Expected: build and all applicable tests pass with zero failures.
 
-- [ ] **Step 3: Commit the sub-project**
+- [x] **Step 3: Commit the sub-project**
 
 ```bash
-git add docs/superpowers/plans/2026-08-25-dsh-subscribe-tool.md docs/dsh.md src/feed/dsh-subscription.ts src/dsh/plugin.ts src/dsh/runtime.ts src/tests/dsh-subscription.test.ts src/tests/dsh-plugin.test.ts src/tests/dsh-runtime.test.ts
+git add docs/superpowers/plans/2026-08-25-dsh-subscribe-tool.md docs/dsh.md scripts/test-dsh-package.mjs src/feed/dsh-subscription.ts src/dsh/plugin.ts src/dsh/runtime.ts src/tests/dsh-subscription.test.ts src/tests/dsh-plugin.test.ts src/tests/dsh-runtime.test.ts
 git commit -m "feat: add DSH threat feed subscribe tool"
 ```
