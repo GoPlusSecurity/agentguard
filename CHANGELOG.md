@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- Added native DSH threat-feed subscription management, advisory self-check discovery, and queued delivery of cron notifications to active DSH sessions.
+
+### Fixed
+- Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.
+
+## [1.1.29] - 2026-08-26
+
+### Added
 - Added the read-only DSH installation scanner, native DSH tool plugin, dual full-repository/runtime-surface risk views, review priority, generated-code context, evidence aggregation, and explainable Markdown/HTML/JSON reports.
 - Added a pinned real-world DSH regression benchmark with deterministic snapshots and manual source-review records for representative LOW-through-CRITICAL artifacts.
 - Added structured DSH scan coverage accounting and explicit configured runtime-mode visibility in startup logs and runtime summaries.
