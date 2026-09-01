@@ -378,6 +378,72 @@ describe('feed/selfcheck', () => {
     assert.equal(result.matchedArtifacts.length, 1);
     assert.match(result.matchedArtifacts[0].path, /xurl-native$/);
   });
+
+  it('matches DSH skill, profile dependency, profile manifest, and Cordis patch defaults', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ag-selfcheck-dsh-defaults-'));
+    const dshHome = join(root, 'dsh-home');
+    const cwd = join(root, 'project');
+    makeSkillDir(join(dshHome, 'skills'), 'dsh-danger-skill', 'DSH_SKILL_INDICATOR');
+    const profile = join(dshHome, 'profiles', 'web');
+    mkdirSync(join(profile, 'node_modules', 'dsh-danger-plugin'), { recursive: true });
+    writeFileSync(join(profile, 'package.json'), JSON.stringify({
+      name: 'web-profile',
+      dependencies: { 'dsh-danger-plugin': '1.2.3' },
+      profileMarker: 'DSH_PROFILE_INDICATOR',
+    }), 'utf8');
+    writeFileSync(join(profile, 'node_modules', 'dsh-danger-plugin', 'package.json'), JSON.stringify({
+      name: 'dsh-danger-plugin', version: '1.2.3', marker: 'DSH_PLUGIN_INDICATOR',
+    }), 'utf8');
+    writeFileSync(join(dshHome, 'cordis.patch.yml'), '- url: https://dsh-threat.example/payload\n', 'utf8');
+    writeFileSync(join(profile, 'cordis.patch.yml'), '- marker: DSH_PROFILE_PATCH_INDICATOR\n', 'utf8');
+
+    const skill = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'skill', selfCheck: { matchers: [{ bodyRegex: 'DSH_SKILL_INDICATOR' }] } }),
+      { dshHome, cwd }
+    );
+    const plugin = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'plugin', selfCheck: { matchers: [{ bodyRegex: 'DSH_PLUGIN_INDICATOR' }] } }),
+      { dshHome, cwd }
+    );
+    const profilePlugin = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'plugin', selfCheck: { matchers: [{ bodyRegex: 'DSH_PROFILE_INDICATOR' }] } }),
+      { dshHome, cwd }
+    );
+    const manifest = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'supply_chain', selfCheck: { matchers: [{ bodyRegex: 'DSH_PROFILE_INDICATOR' }] } }),
+      { dshHome, cwd }
+    );
+    const patch = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'url', selfCheck: { matchers: [{ domainExact: 'dsh-threat.example' }] } }),
+      { dshHome, cwd }
+    );
+
+    assert.equal(skill.matchedArtifacts.length, 1);
+    assert.match(skill.matchedArtifacts[0].path, /dsh-danger-skill$/);
+    assert.equal(plugin.matchedArtifacts.length, 1);
+    assert.match(plugin.matchedArtifacts[0].path, /dsh-danger-plugin$/);
+    assert.equal(profilePlugin.matchedArtifacts.length, 1);
+    assert.equal(profilePlugin.matchedArtifacts[0].path, profile);
+    assert.equal(manifest.matchedArtifacts.length, 1);
+    assert.equal(manifest.matchedArtifacts[0].path, join(profile, 'package.json'));
+    assert.equal(patch.matchedArtifacts.length, 1);
+    assert.equal(patch.matchedArtifacts[0].path, join(dshHome, 'cordis.patch.yml'));
+  });
+
+  it('keeps explicit ecosystem roots authoritative over DSH discovery defaults', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ag-selfcheck-dsh-override-'));
+    const dshHome = join(root, 'dsh-home');
+    makeSkillDir(join(dshHome, 'skills'), 'dsh-danger-skill', 'DSH_OVERRIDE_INDICATOR');
+    const explicit = join(root, 'explicit-skills');
+    makeSkillDir(explicit, 'safe-skill', 'SAFE');
+
+    const result = await runSelfCheckForAdvisory(
+      makeAdvisory({ ecosystem: 'skill', selfCheck: { matchers: [{ bodyRegex: 'DSH_OVERRIDE_INDICATOR' }] } }),
+      { dshHome, cwd: root, skillRoots: [explicit] }
+    );
+
+    assert.equal(result.matchedArtifacts.length, 0);
+  });
 });
 
 describe('safeRegexTest', () => {

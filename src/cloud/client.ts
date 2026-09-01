@@ -36,7 +36,7 @@ export class AgentGuardCloudClient {
   private readonly agentJwt?: string;
 
   constructor(config: Pick<AgentGuardConfig, 'cloudUrl' | 'apiKey' | 'agentJwt'>) {
-    this.cloudUrl = normalizeCloudUrl(config.cloudUrl || 'https://agentguard.gopluslabs.io');
+    this.cloudUrl = normalizeCloudUrl(config.cloudUrl || 'https://www.agentguard.one');
     this.apiKey = config.apiKey;
     this.agentJwt = config.agentJwt;
   }

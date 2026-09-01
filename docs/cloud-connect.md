@@ -29,7 +29,7 @@ API-key auth is also supported:
 
 ```bash
 AGENTGUARD_API_KEY=ag_live_xxxxx \
-  agentguard connect --url https://agentguard.gopluslabs.io
+  agentguard connect --url https://www.agentguard.one
 ```
 
 With API-key auth, `connect` stores the API key locally, fetches `/api/v1/policies/effective`, and caches the policy. With Agent JWT auth, `connect` stores the local agent credential instead of an API key. If Cloud is unavailable, AgentGuard keeps enforcing with cached policy or the bundled default policy.

@@ -47,6 +47,11 @@ import {
   type ThreatFeedCronRemovalResult,
   type OpenClawGatewayOptions,
 } from './feed/cron.js';
+import { loadDshThreatFeedSubscription } from './feed/dsh-subscription.js';
+import {
+  buildDshThreatFeedNotification,
+  enqueueDshThreatFeedNotification,
+} from './feed/dsh-notifications.js';
 
 const SUPPORTED_AGENT_INSTALLERS: AgentInstaller[] = ['claude-code', 'codex', 'openclaw', 'hermes', 'qclaw', 'dsh'];
 const AUTO_AGENT_DETECTION: Array<{ agent: AgentInstaller; dir: string }> = [
@@ -133,7 +138,7 @@ async function main() {
     .description('Connect local AgentGuard to AgentGuard Cloud')
     .option('--key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
     .option('--api-key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
-    .option('--url <url>', 'AgentGuard Cloud URL', 'https://agentguard.gopluslabs.io')
+    .option('--url <url>', 'AgentGuard Cloud URL', 'https://www.agentguard.one')
     .option('--cloud <url>', 'AgentGuard Cloud URL')
     .action(async (options) => {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
@@ -143,7 +148,7 @@ async function main() {
           throw new Error('AgentGuard Cloud connect supports API-key auth or Agent JWT registration for OpenClaw, Hermes, and DSH. No API key was provided, and no supported Agent JWT host has been initialized. Run `agentguard init` to auto-detect the host, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
         }
         config = withDetectedAgentJwtHost(config);
-        const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
+        const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://www.agentguard.one');
         if (config.agentId && config.agentJwt) {
           const existingConfig = { ...config, cloudUrl };
           const client = new AgentGuardCloudClient(existingConfig);
@@ -844,6 +849,26 @@ async function main() {
         return;
       }
 
+      if (cronInternalRun && cronAgentHost === 'dsh' && summary.shouldNotify) {
+        const agentGuardHome = getAgentGuardPaths().home;
+        const subscription = await loadDshThreatFeedSubscription(agentGuardHome);
+        if (!subscription) {
+          throw new Error('DSH threat-feed subscription state is missing. Run the DSH subscribe tool again.');
+        }
+        if (subscription.selfCheck !== quiet) {
+          throw new Error('DSH threat-feed subscription mode does not match the cron runner. Run the DSH subscribe tool again.');
+        }
+        const notification = buildDshThreatFeedNotification({
+          subscription,
+          freshAdvisories: fresh,
+          results,
+          selfCheck: quiet,
+        });
+        if (notification) {
+          await enqueueDshThreatFeedNotification(notification, agentGuardHome);
+        }
+      }
+
       if (pendingStateEntry) {
         saveFeedState(prependFeedStateEntry(state, pendingStateEntry));
       }
@@ -1539,7 +1564,7 @@ async function registerAgentCredential(options: {
     clearAgentJwt();
   }
   const baseConfig = ensureConfig();
-  const cloudUrl = normalizeCloudUrl(options.cloudUrl || baseConfig.cloudUrl || 'https://agentguard.gopluslabs.io');
+  const cloudUrl = normalizeCloudUrl(options.cloudUrl || baseConfig.cloudUrl || 'https://www.agentguard.one');
   const client = new AgentGuardCloudClient({ ...baseConfig, cloudUrl });
   const registration = await client.registerAgent({
     metadata: {

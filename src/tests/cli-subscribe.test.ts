@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -67,6 +67,31 @@ function writeConfig(home: string, cloudUrl: string): void {
     policyCachePath: join(home, 'policy-cache.json'),
     auditPath: join(home, 'audit.jsonl'),
     eventSpoolPath: join(home, 'events-spool.jsonl'),
+  }));
+}
+
+function writeDshCronConfig(home: string, cloudUrl: string, selfCheck = false): void {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, 'config.json'), JSON.stringify({
+    version: 1,
+    level: 'balanced',
+    cloudUrl,
+    apiKey: 'ag_live_test_key_123456',
+    agentHost: 'dsh',
+    agentHosts: ['dsh'],
+    policyCachePath: join(home, 'policy-cache.json'),
+    auditPath: join(home, 'audit.jsonl'),
+    eventSpoolPath: join(home, 'events-spool.jsonl'),
+  }));
+  writeFileSync(join(home, 'dsh-threat-feed-subscription.json'), JSON.stringify({
+    version: 1,
+    subscriptionId: 'subscription-cli-test',
+    agentId: 'dsh-agent-cli-test',
+    cronName: 'agentguard-threat-feed',
+    cronExpression: '0 * * * *',
+    selfCheck,
+    createdAt: '2026-08-26T00:00:00.000Z',
+    updatedAt: '2026-08-26T00:00:00.000Z',
   }));
 }
 
@@ -340,6 +365,47 @@ describe('CLI subscribe command modes', () => {
         await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
       }
     }
+  });
+
+  it('DSH cron notification is queued before the advisory is saved as seen', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-dsh-notice-'));
+      writeDshCronConfig(home, cloudUrl);
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json', '--cron-run'], home);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stderr, '');
+      const queueDirectory = join(home, 'dsh-feed-notifications');
+      const queueFiles = readdirSync(queueDirectory).filter(name => name.endsWith('.json'));
+      assert.equal(queueFiles.length, 1);
+      const notice = JSON.parse(readFileSync(join(queueDirectory, queueFiles[0]), 'utf8')) as {
+        subscriptionId: string;
+        agentId: string;
+        body: string;
+      };
+      assert.equal(notice.subscriptionId, 'subscription-cli-test');
+      assert.equal(notice.agentId, 'dsh-agent-cli-test');
+      assert.match(notice.body, /AGS-2026-subscribe/);
+      assert.doesNotMatch(notice.body, /Quarantine|remediation/i);
+      const state = JSON.parse(readFileSync(join(home, 'feed-state.json'), 'utf8')) as Array<{
+        newSeenIds: string[];
+      }>;
+      assert.deepEqual(state[0]?.newSeenIds, ['AGS-2026-subscribe']);
+    });
+  });
+
+  it('DSH cron notification queue failure does not save the advisory as seen', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-dsh-notice-fail-'));
+      writeDshCronConfig(home, cloudUrl);
+      writeFileSync(join(home, 'dsh-feed-notifications'), 'not a directory');
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json', '--cron-run'], home);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(existsSync(join(home, 'feed-state.json')), false);
+    });
   });
 
   it('without --quiet notifies about new advisories without reporting self-check matches', async () => {

@@ -13,7 +13,7 @@
   "homepage": "https://github.com/GoPlusSecurity/agentguard",
   "documentation": "https://github.com/GoPlusSecurity/agentguard#readme",
   "support": "https://github.com/GoPlusSecurity/agentguard/issues",
-  "privacy_policies": ["https://agentguard.gopluslabs.io/privacy"],
+  "privacy_policies": ["https://www.agentguard.one/privacy"],
   "repository": {
     "type": "git",
     "url": "https://github.com/GoPlusSecurity/agentguard"
