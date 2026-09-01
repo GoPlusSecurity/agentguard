@@ -138,7 +138,7 @@ async function main() {
     .description('Connect local AgentGuard to AgentGuard Cloud')
     .option('--key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
     .option('--api-key <key>', 'AgentGuard Cloud API key (prefer AGENTGUARD_API_KEY to avoid shell history)')
-    .option('--url <url>', 'AgentGuard Cloud URL', 'https://agentguard.gopluslabs.io')
+    .option('--url <url>', 'AgentGuard Cloud URL', 'https://www.agentguard.one')
     .option('--cloud <url>', 'AgentGuard Cloud URL')
     .action(async (options) => {
       const apiKey = options.key || options.apiKey || process.env.AGENTGUARD_API_KEY;
@@ -148,7 +148,7 @@ async function main() {
           throw new Error('AgentGuard Cloud connect supports API-key auth or Agent JWT registration for OpenClaw, Hermes, and DSH. No API key was provided, and no supported Agent JWT host has been initialized. Run `agentguard init` to auto-detect the host, then rerun `agentguard connect`; or pass --key, --api-key, or AGENTGUARD_API_KEY for API-key auth.');
         }
         config = withDetectedAgentJwtHost(config);
-        const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://agentguard.gopluslabs.io');
+        const cloudUrl = normalizeCloudUrl(options.cloud || options.url || config.cloudUrl || 'https://www.agentguard.one');
         if (config.agentId && config.agentJwt) {
           const existingConfig = { ...config, cloudUrl };
           const client = new AgentGuardCloudClient(existingConfig);
@@ -1564,7 +1564,7 @@ async function registerAgentCredential(options: {
     clearAgentJwt();
   }
   const baseConfig = ensureConfig();
-  const cloudUrl = normalizeCloudUrl(options.cloudUrl || baseConfig.cloudUrl || 'https://agentguard.gopluslabs.io');
+  const cloudUrl = normalizeCloudUrl(options.cloudUrl || baseConfig.cloudUrl || 'https://www.agentguard.one');
   const client = new AgentGuardCloudClient({ ...baseConfig, cloudUrl });
   const registration = await client.registerAgent({
     metadata: {

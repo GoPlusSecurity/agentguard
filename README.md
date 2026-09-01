@@ -70,7 +70,7 @@ printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/in
 agentguard connect
 
 # API-key auth is also supported when you explicitly want that mode.
-AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://agentguard.gopluslabs.io
+AGENTGUARD_API_KEY=ag_live_xxxxx agentguard connect --url https://www.agentguard.one
 
 # Optional: subscribe to AgentGuard's threat-intelligence feed. Pulls newly
 # published advisories from Cloud and asks you to review them.

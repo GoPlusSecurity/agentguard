@@ -5,7 +5,7 @@ import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAuditEvent } from '../runtime/types.js';
 
 const apiKey = process.env.AGENTGUARD_API_KEY;
-const cloudUrl = process.env.AGENTGUARD_CLOUD_URL || 'https://agentguard.gopluslabs.io';
+const cloudUrl = process.env.AGENTGUARD_CLOUD_URL || 'https://www.agentguard.one';
 const runLive = Boolean(apiKey);
 
 describe('Cloud live integration', { skip: !runLive }, () => {

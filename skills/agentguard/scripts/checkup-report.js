@@ -642,7 +642,7 @@ function pixelLobster(grade, color) {
 function generateReport(data) {
   const { composite_score = 0, dimensions = {}, recommendations = [], skills_scanned = 0, protection_level = 'unknown', timestamp } = data;
   const tier = getTier(composite_score);
-  const ctaUrl = `https://agentguard.gopluslabs.io?utm_source=checkup&utm_medium=cli&utm_campaign=health_report&score=${composite_score}`;
+  const ctaUrl = `https://www.agentguard.one?utm_source=checkup&utm_medium=cli&utm_campaign=health_report&score=${composite_score}`;
   const ts = timestamp || new Date().toISOString();
   const totalFindings = Object.values(dimensions).reduce((s, d) => s + (d.findings || []).length, 0);
   const lobsterSvg = pixelLobster(tier.grade, tier.color);
@@ -1139,7 +1139,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     en:_sharePick(_shareEn[_grade]||_shareEn.B),
   };
   function getShareText(){return shareTexts[curLang]||shareTexts.en;}
-  const shareUrl='https://agentguard.gopluslabs.io';
+  const shareUrl='https://www.agentguard.one';
 
   function showToast(msg){
     const t=document.createElement('div');
@@ -1230,7 +1230,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
     // Footer
     ctx.fillStyle='#849588';ctx.font='500 11px Inter,sans-serif';ctx.fillText(curLang==='zh'?'由 GoPlus Security 提供支持':'Powered by GoPlus Security',80,H-70);
-    ctx.fillStyle='#3a4a3f';ctx.fillText('agentguard.gopluslabs.io',80,H-55);
+    ctx.fillStyle='#3a4a3f';ctx.fillText('www.agentguard.one',80,H-55);
 
     return new Promise(res=>c.toBlob(res,'image/png'));
   }
