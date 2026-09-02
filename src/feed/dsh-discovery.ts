@@ -62,7 +62,7 @@ export async function discoverDshSelfCheckRoots(
       const dependencyRoot = join(profileRoot, 'node_modules', ...dependencyName.split('/'));
       if (!existsSync(dependencyRoot)) continue;
       pluginRoots.push(dependencyRoot);
-      installedPluginDirs.push(dependencyRoot);
+      if (dependencyName !== '@goplus/agentguard') installedPluginDirs.push(dependencyRoot);
       supplyChainPaths.push(dependencyRoot);
       const dependencyManifest = join(dependencyRoot, 'package.json');
       if (existsSync(dependencyManifest)) urlScanPaths.push(dependencyManifest);

@@ -22,13 +22,15 @@ export async function scanDshPluginsForCheckup(pluginDirs: string[]): Promise<Ds
     try {
       const report = await scanDshPlugin(dir);
       pluginsScanned += 1;
-      if (report.riskLevel === 'critical') scoreDeduction += 15;
-      if (report.riskLevel === 'high') scoreDeduction += 8;
-      if (report.riskLevel === 'medium') scoreDeduction += 3;
-      if (report.riskLevel !== 'low') {
+      for (const finding of report.findings) {
+        const severity = riskLevelToSeverity(finding.severity);
+        if (severity === 'CRITICAL') scoreDeduction += 15;
+        else if (severity === 'HIGH') scoreDeduction += 8;
+        else if (severity === 'MEDIUM') scoreDeduction += 3;
+        else continue;
         findings.push({
-          severity: riskLevelToSeverity(report.riskLevel),
-          text: `${report.identity.name}: ${report.summary}${report.riskTags.length ? ` (${report.riskTags.join(', ')})` : ''}`,
+          severity,
+          text: `${finding.ruleId} in ${report.identity.name}:${finding.file || '?'}:${finding.line || '?'}`,
         });
       }
     } catch (err) {
@@ -40,7 +42,7 @@ export async function scanDshPluginsForCheckup(pluginDirs: string[]): Promise<Ds
     }
   }
 
-  return { pluginsScanned, scoreDeduction, findings };
+  return { pluginsScanned, scoreDeduction: Math.min(100, scoreDeduction), findings };
 }
 
 function riskLevelToSeverity(risk: string): DshCheckupFinding['severity'] {

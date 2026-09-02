@@ -72,7 +72,9 @@ function readInput() {
 
 function scoreCodeSafety(skills, dshPlugins) {
   const findings = [];
-  const artifacts = [...(skills || []), ...(dshPlugins || [])];
+  const skillArtifacts = (skills || []).map(skill => ({ artifact: skill, isManagedAgentGuard: (skill.name || '').toLowerCase() === 'agentguard' }));
+  const dshArtifacts = (dshPlugins || []).map(plugin => ({ artifact: plugin, isManagedAgentGuard: false }));
+  const artifacts = [...skillArtifacts, ...dshArtifacts];
 
   if (artifacts.length === 0) {
     findings.push({ severity: 'LOW', text: 'No third-party skills or DSH plugins installed — no code to audit' });
@@ -81,12 +83,11 @@ function scoreCodeSafety(skills, dshPlugins) {
 
   let score = 100;
 
-  for (const skill of artifacts) {
-    const isAgentGuard = (skill.name || '').toLowerCase().includes('agentguard');
+  for (const { artifact: skill, isManagedAgentGuard } of artifacts) {
 
     for (const f of (skill.findings || [])) {
       // Suppress READ_ENV_SECRETS for agentguard itself
-      if (isAgentGuard && f.rule === 'READ_ENV_SECRETS') continue;
+      if (isManagedAgentGuard && f.rule === 'READ_ENV_SECRETS') continue;
 
       const sev = (f.severity || '').toUpperCase();
       if (sev === 'CRITICAL') {

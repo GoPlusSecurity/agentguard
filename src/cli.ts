@@ -1260,7 +1260,7 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
   ];
   const skillDirs = discoverSkillDirs(skillRoots);
   const dshRoots = await discoverDshSelfCheckRoots();
-  const dshPluginDirs = dshRoots.installedPluginDirs.filter(dir => !isManagedAgentGuardDshPluginDir(dir));
+  const dshPluginDirs = dshRoots.installedPluginDirs;
   const scanner = new SkillScanner({ useExternalScanner: false });
 
   const codeFindings: CheckupFinding[] = [];
@@ -1288,7 +1288,7 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
 
   const credential = checkCredentialSafety(skillDirs);
   const network = await checkNetworkExposure(config);
-  const runtime = checkRuntimeProtection(config, skillDirs.length + dshScan.pluginsScanned);
+  const runtime = checkRuntimeProtection(config, skillDirs.length);
   const web3 = checkWeb3Safety(skillDirs);
 
   const dimensions = {
@@ -1362,15 +1362,6 @@ function isManagedAgentGuardSkillDir(dir: string): boolean {
   if (!expectedScripts.every((path) => existsSync(path))) return false;
 
   return true;
-}
-
-function isManagedAgentGuardDshPluginDir(dir: string): boolean {
-  try {
-    const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: unknown };
-    return manifest.name === '@goplus/agentguard';
-  } catch {
-    return false;
-  }
 }
 
 function checkCredentialSafety(skillDirs: string[]): CheckupDimension {
