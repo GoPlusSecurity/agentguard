@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import type { Stats } from 'node:fs';
 import { lstat, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -28,21 +29,41 @@ export async function removeScanTempRoot(
   });
 }
 
-async function directoryBytesWithinBudget(rootDir: string, maxBytes: number): Promise<number> {
+export interface AcquisitionBudgetFileSystem {
+  readDirectory(directory: string): Promise<string[]>;
+  inspectPath(path: string): Promise<Stats>;
+}
+
+const acquisitionBudgetFileSystem: AcquisitionBudgetFileSystem = {
+  readDirectory: directory => readdir(directory),
+  inspectPath: path => lstat(path),
+};
+
+async function directoryBytesWithinBudget(
+  rootDir: string,
+  maxBytes: number,
+  fileSystem: AcquisitionBudgetFileSystem,
+): Promise<number> {
   const pending = [rootDir];
   let bytes = 0;
   while (pending.length > 0) {
     const directory = pending.pop()!;
     let entries;
     try {
-      entries = await readdir(directory, { withFileTypes: true });
+      entries = await fileSystem.readDirectory(directory);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw error;
     }
     for (const entry of entries) {
-      const path = join(directory, entry.name);
-      const info = await lstat(path);
+      const path = join(directory, entry);
+      let info;
+      try {
+        info = await fileSystem.inspectPath(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
       if (info.isSymbolicLink()) continue;
       if (info.isDirectory()) pending.push(path);
       else if (info.isFile()) {
@@ -57,8 +78,9 @@ async function directoryBytesWithinBudget(rootDir: string, maxBytes: number): Pr
 export async function assertGithubAcquisitionByteBudget(
   rootDir: string,
   maxBytes = MAX_GITHUB_ACQUISITION_BYTES,
+  fileSystem = acquisitionBudgetFileSystem,
 ): Promise<void> {
-  const bytes = await directoryBytesWithinBudget(rootDir, maxBytes);
+  const bytes = await directoryBytesWithinBudget(rootDir, maxBytes, fileSystem);
   if (bytes > maxBytes) {
     throw new Error(`GitHub repository exceeds ${maxBytes} byte acquisition limit`);
   }

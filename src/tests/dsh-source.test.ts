@@ -4,6 +4,7 @@ import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  assertDshAcquisitionByteBudget,
   removeDshTempRoot,
   runWithDshCleanup,
   startDshAcquisitionMonitor,
@@ -16,6 +17,33 @@ function busyError(): NodeJS.ErrnoException {
   error.code = 'EBUSY';
   return error;
 }
+
+function missingError(path: string): NodeJS.ErrnoException {
+  const error = new Error(`no such file or directory, lstat '${path}'`) as NodeJS.ErrnoException;
+  error.code = 'ENOENT';
+  return error;
+}
+
+describe('DSH GitHub source acquisition budget', () => {
+  it('ignores an entry removed after its parent directory was enumerated', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentguard-dsh-budget-race-test-'));
+    const lockPath = join(root, 'config.lock');
+    await writeFile(lockPath, 'lock');
+
+    try {
+      await assert.doesNotReject(() => assertDshAcquisitionByteBudget(
+        root,
+        0,
+        {
+          readDirectory: async () => ['config.lock'],
+          inspectPath: async () => { throw missingError(lockPath); },
+        },
+      ));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('DSH GitHub source cleanup', () => {
   it('enables retries when requesting recursive temporary directory removal', async () => {
