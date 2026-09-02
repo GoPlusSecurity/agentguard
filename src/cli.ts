@@ -29,6 +29,8 @@ import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
 import { installAgentTemplates, type AgentInstaller, type InstallResult } from './installers.js';
 import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
+import { discoverDshSelfCheckRoots } from './feed/dsh-discovery.js';
+import { scanDshPluginsForCheckup } from './checkup/dsh.js';
 import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import { CloudRequestError } from './cloud/client.js';
@@ -1241,6 +1243,7 @@ interface HealthCheckupReport {
     web3_safety: CheckupDimension;
   };
   skills_scanned: number;
+  dsh_plugins_scanned: number;
   protection_level: string;
   analysis: string;
   recommendations: CheckupFinding[];
@@ -1256,12 +1259,14 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
     join(homedir(), '.hermes', 'skills'),
   ];
   const skillDirs = discoverSkillDirs(skillRoots);
+  const dshRoots = await discoverDshSelfCheckRoots();
+  const dshPluginDirs = dshRoots.installedPluginDirs;
   const scanner = new SkillScanner({ useExternalScanner: false });
 
   const codeFindings: CheckupFinding[] = [];
-  let codeScore = skillDirs.length === 0 ? 70 : 100;
-  if (skillDirs.length === 0) {
-    codeFindings.push({ severity: 'LOW', text: 'No installed third-party skills were found to audit.' });
+  let codeScore = skillDirs.length === 0 && dshPluginDirs.length === 0 ? 70 : 100;
+  if (skillDirs.length === 0 && dshPluginDirs.length === 0) {
+    codeFindings.push({ severity: 'LOW', text: 'No installed third-party skills or DSH plugins were found to audit.' });
   }
   for (const dir of skillDirs) {
     const result = await scanner.quickScan(dir);
@@ -1276,6 +1281,9 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
       });
     }
   }
+  const dshScan = await scanDshPluginsForCheckup(dshPluginDirs);
+  codeScore -= dshScan.scoreDeduction;
+  codeFindings.push(...dshScan.findings);
   codeScore = clampScore(codeScore);
 
   const credential = checkCredentialSafety(skillDirs);
@@ -1287,7 +1295,7 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
     code_safety: {
       score: codeScore,
       findings: codeFindings,
-      details: `${skillDirs.length} installed skill(s) scanned with AgentGuard rules.`,
+      details: `${skillDirs.length} installed skill(s) and ${dshScan.pluginsScanned} DSH plugin(s) scanned with AgentGuard rules.`,
     },
     credential_safety: credential,
     network_exposure: network,
@@ -1309,6 +1317,7 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
     protection_level: config.level,
     analysis: buildHealthAnalysis(composite, dimensions),
     recommendations,
+    dsh_plugins_scanned: dshScan.pluginsScanned,
   };
 }
 
@@ -1758,6 +1767,7 @@ function printHealthCheckupSummary(report: HealthCheckupReport, htmlPath?: strin
   console.log(`Overall Health Score: ${report.composite_score}/100 (Tier ${report.tier})`);
   console.log(`Findings: ${totalFindings}`);
   console.log(`Skills scanned: ${report.skills_scanned}`);
+  console.log(`DSH plugins scanned: ${report.dsh_plugins_scanned}`);
   for (const [name, dim] of Object.entries(report.dimensions)) {
     const score = dim.na || dim.score === null ? 'N/A' : `${dim.score}/100`;
     console.log(`- ${name}: ${score} - ${dim.details}`);
@@ -1780,6 +1790,7 @@ function appendCheckupAudit(auditPath: string, report: HealthCheckupReport): voi
       checks: 5,
       findings: totalFindings,
       skills_scanned: report.skills_scanned,
+      dsh_plugins_scanned: report.dsh_plugins_scanned,
     })}\n`, { mode: 0o600 });
   } catch {
     // Checkup should still succeed if audit logging is unavailable.

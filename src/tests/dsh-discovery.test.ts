@@ -27,14 +27,22 @@ describe('feed/dsh-discovery', () => {
       dependencies: {
         'direct-plugin': '1.0.0',
         '@scope/direct-plugin': '2.0.0',
+        '@goplus/agentguard': '1.1.29',
+        'spoofed-agentguard': '1.0.0',
         '../escape': '3.0.0',
       },
       optionalDependencies: { 'optional-plugin': '1.0.0' },
     }));
     write(join(worker, 'package.json'), JSON.stringify({ name: 'worker-profile' }));
-    for (const name of ['direct-plugin', 'optional-plugin', 'transitive-only']) {
+    for (const name of ['direct-plugin', 'optional-plugin', 'transitive-only', 'spoofed-agentguard']) {
       write(join(web, 'node_modules', name, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
     }
+    write(join(web, 'node_modules', '@goplus', 'agentguard', 'package.json'), JSON.stringify({
+      name: '@goplus/agentguard', version: '1.1.29',
+    }));
+    write(join(web, 'node_modules', 'spoofed-agentguard', 'package.json'), JSON.stringify({
+      name: '@goplus/agentguard', version: '1.0.0',
+    }));
     write(join(web, 'node_modules', '@scope', 'direct-plugin', 'package.json'), JSON.stringify({
       name: '@scope/direct-plugin', version: '2.0.0',
     }));
@@ -60,7 +68,15 @@ describe('feed/dsh-discovery', () => {
     assert.ok(roots.urlScanPaths.includes(join(dshHome, 'cordis.patch.yml')));
     assert.equal(roots.pluginRoots.some(path => path.includes('transitive-only')), false);
     assert.equal(roots.pluginRoots.some(path => path.includes('escape')), false);
+    assert.deepEqual(roots.installedPluginDirs, [
+      join(web, 'node_modules', '@scope', 'direct-plugin'),
+      join(web, 'node_modules', 'direct-plugin'),
+      join(web, 'node_modules', 'optional-plugin'),
+      join(web, 'node_modules', 'spoofed-agentguard'),
+    ].sort());
+    assert.equal(roots.installedPluginDirs.includes(join(web, 'node_modules', '@goplus', 'agentguard')), false);
     assert.deepEqual(roots.pluginRoots, [...roots.pluginRoots].sort());
+    assert.deepEqual(roots.installedPluginDirs, [...roots.installedPluginDirs].sort());
     assert.deepEqual(roots.supplyChainPaths, [...roots.supplyChainPaths].sort());
     assert.deepEqual(roots.urlScanPaths, [...roots.urlScanPaths].sort());
   });

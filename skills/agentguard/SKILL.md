@@ -1047,9 +1047,9 @@ That CLI path fetches the current Cloud advisory feed and checks local skills ag
 
 **EVIDENCE RULE: Every finding you report MUST be backed by actual tool output collected in this step. You MUST quote the exact command output (or "no output" if the command returned nothing) in the finding's evidence field. Findings without concrete evidence from tool execution are FORBIDDEN — do not infer, assume, or fabricate results.**
 
-Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
+Run these checks in parallel where possible. These are **universal agent security checks** — they apply to Claude Code, OpenClaw, QClaw, Hermes, and DSH environments, regardless of whether AgentGuard is installed.
 
-1. **[REQUIRED] Discover & scan installed skills** (→ feeds Dimension 1: Code Safety): Glob ALL of the following paths for `*/SKILL.md`:
+1. **[REQUIRED] Discover & scan installed skills and DSH plugins** (→ feeds Dimension 1: Code Safety): Glob ALL of the following paths for `*/SKILL.md`:
    - `~/.claude/skills/*/SKILL.md`
    - `~/.openclaw/skills/*/SKILL.md`
    - `~/.openclaw/workspace/skills/*/SKILL.md`
@@ -1057,6 +1057,8 @@ Run these checks in parallel where possible. These are **universal agent securit
    - `~/.qclaw/workspace/skills/*/SKILL.md`
 
    For **every** discovered skill, **run `/agentguard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Do NOT skip any skill regardless of how many are found. Record for each skill: name, risk_level, and exact findings list (rule, severity, file, line).
+
+   Also discover installed DSH plugins under the resolved DSH home: use the non-empty `DSH_HOME` value when set, otherwise use the current user's real home directory plus `.dsh` (do not pass a literal unexpanded `~` to path APIs). Inspect `${dshHome}/profiles/*`; read each immediate profile's `package.json`, collect only names declared in `dependencies` and `optionalDependencies`, and resolve their existing directories beneath that same profile's `node_modules/`. Do not recursively walk `node_modules` or scan transitive-only dependencies. Exclude only the exact `@goplus/agentguard` dependency coordinate declared by the profile; never trust an installed plugin's self-reported package name for this exclusion. For **every** remaining direct plugin, run `agentguard dsh-scan <plugin_path> --format json` and record its name, `riskLevel`, and exact findings list (`ruleId`, severity, file, line), normalized to the raw-facts schema below. A failed DSH plugin scan must not prevent the remaining checks from completing; record it in `dsh_plugins` with `risk_level: "high"` and one finding `{ "rule": "DSH_SCAN_FAILED", "severity": "HIGH", "file": "<plugin_path>", "line": 0 }`.
 2. **[REQUIRED] Credential file permissions** (→ feeds Dimension 2: Credential Safety): Platform-aware check — behavior differs by OS:
    - **macOS/Linux**: Run `stat -f '%Lp' <path> 2>/dev/null || stat -c '%a' <path> 2>/dev/null` on `~/.ssh/`, `~/.gnupg/`. **If the command returns empty output, the directory does not exist — record `exists: false`.**
    - **Windows**: `stat` is not available. Use `icacls <path>` to check ACLs instead. If directory doesn't exist, record `exists: false`. If it exists, record whether the ACL grants access to `Everyone`, `Users`, or `Authenticated Users`.
@@ -1085,6 +1087,15 @@ After completing all 7 checks, assemble the raw facts into a structured JSON and
   "skills": [
     {
       "name": "<skill-name>",
+      "risk_level": "<low|medium|high|critical>",
+      "findings": [
+        { "rule": "<RULE_ID>", "severity": "<CRITICAL|HIGH|MEDIUM|LOW>", "file": "<filename>", "line": <number> }
+      ]
+    }
+  ],
+  "dsh_plugins": [
+    {
+      "name": "<plugin-name>",
       "risk_level": "<low|medium|high|critical>",
       "findings": [
         { "rule": "<RULE_ID>", "severity": "<CRITICAL|HIGH|MEDIUM|LOW>", "file": "<filename>", "line": <number> }
@@ -1125,6 +1136,7 @@ After completing all 7 checks, assemble the raw facts into a structured JSON and
 
 **Pre-Step-3 validation** — verify all fields are populated before proceeding:
 - [ ] `skills` — from check 1
+- [ ] `dsh_plugins` — from check 1; use an empty array when no DSH plugins are installed
 - [ ] `credential_files` — from check 2
 - [ ] `dlp` — from check 3
 - [ ] `network` — from checks 4, 5, 6
@@ -1181,6 +1193,7 @@ Assemble the final JSON by merging the scored output from Step 3 with the analys
     "web3_safety":        { "score": <from score|null>, "na": <bool>, "findings": [...], "details": "<one-line summary>" }
   },
   "skills_scanned": <count of skills from Step 1>,
+  "dsh_plugins_scanned": <count of successfully scanned DSH plugins from Step 1>,
   "protection_level": "<level>",
   "analysis": "<the comprehensive AI-written security analysis report>",
   "recommendations": [
@@ -1288,7 +1301,7 @@ Regardless of channel, always end with:
 
 Append a summary entry to `~/.agentguard/audit.jsonl`:
 ```json
-{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>}
+{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>,"dsh_plugins_scanned":<count>}
 ```
 
 ---

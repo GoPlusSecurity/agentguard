@@ -344,7 +344,7 @@ Give your agent a full physical exam! The checkup evaluates your agent's securit
 
 | Dimension | What's Evaluated |
 |-----------|-----------------|
-| **Code Safety** | Scan findings across all installed skills (24 detection rules) |
+| **Code Safety** | Scan findings across all installed skills plus direct DSH profile plugins (transitive dependencies excluded) |
 | **Trust Hygiene** | Trust registry health — expired, stale, unregistered, over-privileged entries |
 | **Runtime Defense** | Audit log analysis — threats blocked, attack patterns, deny/confirm ratios |
 | **Secret Protection** | Credential exposure — file permissions, env vars, hardcoded secrets |
