@@ -17,7 +17,7 @@ import { getDshScannerMetadata } from './metadata.js';
 import { inspectRegularFileWithinRoot } from '../scanner/safe-file.js';
 import { walkDirectoryWithCoverage } from '../scanner/file-walker.js';
 import { addFindingContext, calculateReviewPriority, runtimeSurfaceTags } from './finding-context.js';
-import { resolveDshSource } from './source.js';
+import { resolveDshSource, runWithDshCleanup } from './source.js';
 import type {
   DshCapabilityProfile,
   DshFinding,
@@ -157,7 +157,7 @@ export async function scanDshPlugin(
   options: ScanDshPluginOptions = {},
 ): Promise<DshPluginScanReport> {
   const source = await resolveDshSource(input, options);
-  try {
+  const { value: report, cleanupWarning } = await runWithDshCleanup(async (): Promise<DshPluginScanReport> => {
     const directory = await walkDirectoryWithCoverage(source.rootDir, { includeGeneratedRuntime: true });
     const detection = await detectDshPlugin(source.rootDir, directory.files);
     const capabilityProfile = await buildCapabilityProfile(source.rootDir, detection, directory.files);
@@ -304,9 +304,9 @@ export async function scanDshPlugin(
         cordisParseErrors: detection.cordis.parseErrors,
       },
     };
-  } finally {
-    await source.cleanup();
-  }
+  }, source.cleanup);
+  if (cleanupWarning) report.diagnostics.cleanupWarning = cleanupWarning;
+  return report;
 }
 
 export { DSH_RULES, RULES as DSH_SCAN_RULES };

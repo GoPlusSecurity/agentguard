@@ -188,5 +188,7 @@ export interface DshPluginScanReport {
   diagnostics: {
     packageParseError?: string;
     cordisParseErrors: Array<{ file: string; message: string }>;
+    /** Operational warning only; does not affect the security risk result. */
+    cleanupWarning?: string;
   };
 }
