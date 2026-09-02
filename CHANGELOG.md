@@ -1,9 +1,10 @@
 # Changelog
 
-## [1.1.29] - 2026-06-16
+## Unreleased
 
 ### Added
 - Added native DSH threat-feed subscription management, advisory self-check discovery, and queued delivery of cron notifications to active DSH sessions.
+- Added HTTPS GitHub repository support to `agentguard scan`, including `--ref` selection for branches, tags, fully qualified refs, and full commit SHAs, with bounded non-interactive Git acquisition.
 
 ### Fixed
 - Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.

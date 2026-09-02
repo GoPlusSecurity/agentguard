@@ -8,7 +8,13 @@ Codex can use AgentGuard as a local skill/runtime template for command, file, an
 npm install -g @goplus/agentguard
 agentguard init
 agentguard scan ./skills/example
+agentguard scan https://github.com/owner/repository --ref v1.2.3 --json
 ```
+
+`scan` accepts local directories and HTTPS GitHub repository URLs. `--ref`
+accepts a branch, tag, fully qualified ref, or full commit SHA. Branches and tags
+select a revision but can move; use a full commit SHA when the scan must be
+reproducible.
 
 ## Runtime template
 

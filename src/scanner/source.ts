@@ -1,0 +1,374 @@
+import { execFile } from 'node:child_process';
+import { lstat, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+const GITHUB_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+export const MAX_GITHUB_ACQUISITION_BYTES = 256 * 1024 * 1024;
+export const MAX_GITHUB_OBJECTS = 100_000;
+const ACQUISITION_POLL_MS = 100;
+const CLEANUP_MAX_RETRIES = 8;
+const CLEANUP_RETRY_DELAY_MS = 100;
+
+function hardenedGitEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+}
+
+export async function removeScanTempRoot(
+  tempRoot: string,
+  remove: typeof rm = rm,
+): Promise<void> {
+  await remove(tempRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: CLEANUP_MAX_RETRIES,
+    retryDelay: CLEANUP_RETRY_DELAY_MS,
+  });
+}
+
+async function directoryBytesWithinBudget(rootDir: string, maxBytes: number): Promise<number> {
+  const pending = [rootDir];
+  let bytes = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const info = await lstat(path);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) pending.push(path);
+      else if (info.isFile()) {
+        bytes += info.size;
+        if (bytes > maxBytes) return bytes;
+      }
+    }
+  }
+  return bytes;
+}
+
+export async function assertGithubAcquisitionByteBudget(
+  rootDir: string,
+  maxBytes = MAX_GITHUB_ACQUISITION_BYTES,
+): Promise<void> {
+  const bytes = await directoryBytesWithinBudget(rootDir, maxBytes);
+  if (bytes > maxBytes) {
+    throw new Error(`GitHub repository exceeds ${maxBytes} byte acquisition limit`);
+  }
+}
+
+interface KillableGitChild {
+  readonly killed: boolean;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+export function startScanAcquisitionMonitor(
+  child: KillableGitChild,
+  checkBudget: () => Promise<void>,
+  pollMs = ACQUISITION_POLL_MS,
+): { stop(): Promise<Error | undefined> } {
+  let budgetError: Error | undefined;
+  let activeCheck: Promise<void> | undefined;
+  const monitor = setInterval(() => {
+    if (activeCheck || child.killed) return;
+    activeCheck = checkBudget().catch(error => {
+      budgetError = error as Error;
+      child.kill('SIGKILL');
+    }).finally(() => {
+      activeCheck = undefined;
+    });
+  }, pollMs);
+  return {
+    async stop(): Promise<Error | undefined> {
+      clearInterval(monitor);
+      await activeCheck;
+      return budgetError;
+    },
+  };
+}
+
+function execBoundedGit(args: string[], rootDir: string, timeout: number): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const child = execFile('git', args, {
+      timeout,
+      maxBuffer: 4 * 1024 * 1024,
+      env: hardenedGitEnvironment(),
+    }, (error, stdout, stderr) => {
+      void monitor.stop().then(budgetError => {
+        if (budgetError) reject(budgetError);
+        else if (error) reject(error);
+        else resolvePromise({ stdout, stderr });
+      }, reject);
+    });
+    const monitor = startScanAcquisitionMonitor(
+      child,
+      () => assertGithubAcquisitionByteBudget(rootDir),
+    );
+  });
+}
+
+async function assertGitObjectBudget(rootDir: string): Promise<void> {
+  await assertGithubAcquisitionByteBudget(rootDir);
+  const { stdout } = await execFileAsync('git', ['-C', rootDir, 'count-objects', '-v'], {
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    env: hardenedGitEnvironment(),
+  });
+  const values = Object.fromEntries(stdout.trim().split('\n').map(line => {
+    const [key, value] = line.split(':', 2);
+    return [key, Number(value?.trim())];
+  }));
+  const objects = (values.count || 0) + (values['in-pack'] || 0);
+  if (objects > MAX_GITHUB_OBJECTS) {
+    throw new Error(`GitHub repository exceeds ${MAX_GITHUB_OBJECTS} Git object acquisition limit`);
+  }
+}
+
+/** Normalize the exact HTTPS GitHub repository forms supported by the scanner. */
+export function normalizeGithubRepositoryUrl(input: string): string | undefined {
+  const match = input.match(GITHUB_REPO);
+  return match ? `https://github.com/${match[1]}/${match[2]}.git` : undefined;
+}
+
+export interface ResolvedScanSource {
+  rootDir: string;
+  kind: 'local' | 'github';
+  input: string;
+  repositoryUrl?: string;
+  requestedRef?: string;
+  revision?: string;
+  lastCommitAt?: string;
+  cleanup(): Promise<void>;
+}
+
+export interface ResolveScanSourceOptions {
+  /** Optional GitHub branch, tag, fully qualified ref, or full commit SHA. */
+  ref?: string;
+}
+
+export interface ScanCleanupResult<T> {
+  value: T;
+  cleanupWarning?: string;
+}
+
+function describeCleanupFailure(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  return `Temporary GitHub checkout cleanup failed${code ? ` (${code})` : ''}; files may remain in the OS temporary directory`;
+}
+
+export async function runWithScanCleanup<T>(
+  operation: () => Promise<T>,
+  cleanup: () => Promise<void>,
+): Promise<ScanCleanupResult<T>> {
+  let value!: T;
+  let operationFailed = false;
+  let operationError: unknown;
+  try {
+    value = await operation();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+  let cleanupWarning: string | undefined;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupWarning = describeCleanupFailure(error);
+  }
+  if (operationFailed) {
+    if (cleanupWarning) {
+      const message = operationError instanceof Error ? operationError.message : String(operationError);
+      throw new Error(`${message}; ${cleanupWarning}`, { cause: operationError });
+    }
+    throw operationError;
+  }
+  return { value, cleanupWarning };
+}
+
+async function gitMetadata(rootDir: string): Promise<{ revision?: string; lastCommitAt?: string }> {
+  try {
+    const [{ stdout: revision }, { stdout: lastCommitAt }] = await Promise.all([
+      execFileAsync('git', ['-C', rootDir, 'rev-parse', 'HEAD'], {
+        timeout: 10_000,
+        env: hardenedGitEnvironment(),
+      }),
+      execFileAsync('git', ['-C', rootDir, 'show', '-s', '--format=%cI', 'HEAD'], {
+        timeout: 10_000,
+        env: hardenedGitEnvironment(),
+      }),
+    ]);
+    return { revision: revision.trim(), lastCommitAt: lastCommitAt.trim() };
+  } catch {
+    return {};
+  }
+}
+
+function assertValidGithubRef(ref: string): void {
+  if (ref.length === 0 || ref.length > 255 || ref.trim() !== ref) {
+    throw new Error('GitHub ref must be a non-empty value of at most 255 characters');
+  }
+  if (/^[0-9a-f]{40}$/i.test(ref)) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+    || ref.includes('..')
+    || ref.includes('@{')
+    || ref.includes('//')
+    || ref.endsWith('/')
+    || ref.endsWith('.')
+    || ref.split('/').some(part => part === '' || part.startsWith('.') || part.endsWith('.lock'))) {
+    throw new Error('Invalid GitHub ref; use a branch, tag, fully qualified ref, or full 40-character commit SHA');
+  }
+}
+
+export function resolveAdvertisedGithubRef(ref: string, output: string): string {
+  assertValidGithubRef(ref);
+  const matches = new Map<string, string>();
+  for (const line of output.trim().split('\n')) {
+    if (!line.trim()) continue;
+    const [revision, advertisedRef] = line.trim().split(/\s+/, 2);
+    if (/^[0-9a-f]{40,64}$/i.test(revision ?? '') && advertisedRef) {
+      matches.set(advertisedRef, revision.toLowerCase());
+    }
+  }
+
+  if (ref.startsWith('refs/heads/')) {
+    const revision = matches.get(ref);
+    if (revision) return revision;
+  } else if (ref.startsWith('refs/tags/')) {
+    const revision = matches.get(`${ref}^{}`) ?? matches.get(ref);
+    if (revision) return revision;
+  } else {
+    const branch = matches.get(`refs/heads/${ref}`);
+    const tag = matches.get(`refs/tags/${ref}^{}`) ?? matches.get(`refs/tags/${ref}`);
+    if (branch && tag) {
+      throw new Error(`GitHub ref ${JSON.stringify(ref)} is ambiguous; use refs/heads/... or refs/tags/...`);
+    }
+    if (branch ?? tag) return (branch ?? tag)!;
+  }
+  throw new Error(`GitHub ref ${JSON.stringify(ref)} was not advertised as a branch or tag`);
+}
+
+async function resolveGithubRevision(repositoryUrl: string, requestedRef?: string): Promise<string> {
+  if (requestedRef && /^[0-9a-f]{40}$/i.test(requestedRef)) return requestedRef.toLowerCase();
+  if (requestedRef) assertValidGithubRef(requestedRef);
+  const patterns = !requestedRef
+    ? ['HEAD']
+    : requestedRef.startsWith('refs/heads/')
+      ? [requestedRef]
+      : requestedRef.startsWith('refs/tags/')
+        ? [requestedRef, `${requestedRef}^{}`]
+        : [`refs/heads/${requestedRef}`, `refs/tags/${requestedRef}`, `refs/tags/${requestedRef}^{}`];
+  const { stdout } = await execFileAsync('git', [
+    '-c', 'core.hooksPath=/dev/null',
+    'ls-remote', '--exit-code', '--', repositoryUrl, ...patterns,
+  ], { timeout: 30_000, maxBuffer: 1024 * 1024, env: hardenedGitEnvironment() });
+  if (requestedRef) return resolveAdvertisedGithubRef(requestedRef, stdout);
+  const revision = stdout.trim().split(/\s+/)[0];
+  if (!revision || !/^[0-9a-f]{40,64}$/i.test(revision)) {
+    throw new Error('GitHub repository did not advertise a valid HEAD revision');
+  }
+  return revision.toLowerCase();
+}
+
+async function requireGitForGithubScan(): Promise<void> {
+  try {
+    await execFileAsync('git', ['--version'], {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+      env: hardenedGitEnvironment(),
+    });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new Error('GitHub repository scans require git, but no git executable was found in PATH');
+    }
+    throw new Error(`Unable to run git for GitHub repository scan: ${(error as Error).message}`);
+  }
+}
+
+/** Resolve a local directory or HTTPS GitHub repository into a scan directory. */
+export async function resolveScanSource(
+  input: string,
+  options: ResolveScanSourceOptions = {},
+): Promise<ResolvedScanSource> {
+  const repositoryUrl = normalizeGithubRepositoryUrl(input);
+  if (repositoryUrl) {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'agentguard-scan-'));
+    const rootDir = join(tempRoot, 'repo');
+    try {
+      await requireGitForGithubScan();
+      const requestedRef = options.ref;
+      if (requestedRef !== undefined) assertValidGithubRef(requestedRef);
+      const expectedRevision = await resolveGithubRevision(repositoryUrl, requestedRef);
+      await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'init', rootDir], {
+        timeout: 10_000,
+        env: hardenedGitEnvironment(),
+      });
+      await execFileAsync('git', ['-C', rootDir, 'remote', 'add', 'origin', repositoryUrl], {
+        timeout: 10_000,
+        env: hardenedGitEnvironment(),
+      });
+      await execBoundedGit([
+        '-c', 'core.hooksPath=/dev/null',
+        '-C', rootDir,
+        'fetch', '--depth', '1', '--no-tags', '--filter=blob:none', 'origin', expectedRevision,
+      ], rootDir, 120_000);
+      await assertGitObjectBudget(rootDir);
+      await execBoundedGit([
+        '-c', 'core.hooksPath=/dev/null',
+        '-C', rootDir,
+        'checkout', '--detach', expectedRevision,
+      ], rootDir, 30_000);
+      await assertGitObjectBudget(rootDir);
+      const metadata = await gitMetadata(rootDir);
+      if (metadata.revision?.toLowerCase() !== expectedRevision) {
+        throw new Error(`Checked out ${metadata.revision ?? 'no revision'} instead of resolved revision ${expectedRevision}`);
+      }
+      return {
+        rootDir,
+        kind: 'github',
+        input,
+        repositoryUrl,
+        requestedRef,
+        ...metadata,
+        cleanup: () => removeScanTempRoot(tempRoot),
+      };
+    } catch (error) {
+      const { cleanupWarning } = await runWithScanCleanup(
+        async () => undefined,
+        () => removeScanTempRoot(tempRoot),
+      );
+      const fetchMessage = `Failed to fetch GitHub repository: ${(error as Error).message}`;
+      throw new Error(cleanupWarning ? `${fetchMessage}; ${cleanupWarning}` : fetchMessage, { cause: error });
+    }
+  }
+
+  if (options.ref !== undefined) {
+    throw new Error('A GitHub ref is only supported for HTTPS GitHub repository scans');
+  }
+
+  if (/^https?:\/\//i.test(input)) {
+    throw new Error('Only HTTPS GitHub repository URLs are supported.');
+  }
+  const rootDir = resolve(input);
+  try {
+    const info = await stat(rootDir);
+    if (!info.isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(`Local scan directory not found: ${rootDir}`);
+  }
+  const metadata = await gitMetadata(rootDir);
+  return {
+    rootDir,
+    kind: 'local',
+    input,
+    ...metadata,
+    cleanup: async () => undefined,
+  };
+}

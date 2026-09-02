@@ -21,6 +21,7 @@ import {
 } from './config.js';
 import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
+import { resolveScanSource } from './scanner/source.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
 import { approvePendingApproval, listPendingApprovals } from './runtime/approvals.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
@@ -366,19 +367,27 @@ async function main() {
 
   program
     .command('scan')
-    .description('Scan a local skill/plugin directory')
-    .argument('<path>', 'Directory to scan')
+    .description('Scan a local skill/plugin directory or HTTPS GitHub repository')
+    .argument('<repo-or-path>', 'Local directory or https://github.com/owner/repo URL')
+    .option('--ref <ref>', 'GitHub branch, tag, fully qualified ref, or full commit SHA')
     .option('--json', 'Print JSON output')
-    .action(async (path, options) => {
-      const scanner = new SkillScanner({ useExternalScanner: false });
-      const result = await scanner.quickScan(path);
-      if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(`${result.risk_level.toUpperCase()}: ${result.summary}`);
-        if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
+    .action(async (input, options) => {
+      const source = await resolveScanSource(String(input), {
+        ref: options.ref === undefined ? undefined : String(options.ref),
+      });
+      try {
+        const scanner = new SkillScanner({ useExternalScanner: false });
+        const result = await scanner.quickScan(source.rootDir);
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`${result.risk_level.toUpperCase()}: ${result.summary}`);
+          if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
+        }
+        process.exitCode = result.risk_level === 'critical' ? 2 : 0;
+      } finally {
+        await source.cleanup();
       }
-      process.exitCode = result.risk_level === 'critical' ? 2 : 0;
     });
 
   program
