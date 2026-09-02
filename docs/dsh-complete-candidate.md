@@ -44,7 +44,7 @@ Automated DSH gates independently exercise the real `ToolRuntime`, `ApprovalServ
 
 ## Acceptance commands
 
-For guided in-product acceptance, give DSH the Chinese [user acceptance test](dsh-user-acceptance-test.zh-CN.md). It uses shell short-circuit probes so dangerous branches remain inert even if protection is unavailable.
+For guided in-product acceptance, give DSH the [user acceptance test](dsh-user-acceptance-test.md). It uses shell short-circuit probes so dangerous branches remain inert even if protection is unavailable.
 
 ```bash
 npm run build
