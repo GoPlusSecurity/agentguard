@@ -60,7 +60,13 @@ describe('feed/dsh-discovery', () => {
     assert.ok(roots.urlScanPaths.includes(join(dshHome, 'cordis.patch.yml')));
     assert.equal(roots.pluginRoots.some(path => path.includes('transitive-only')), false);
     assert.equal(roots.pluginRoots.some(path => path.includes('escape')), false);
+    assert.deepEqual(roots.installedPluginDirs, [
+      join(web, 'node_modules', '@scope', 'direct-plugin'),
+      join(web, 'node_modules', 'direct-plugin'),
+      join(web, 'node_modules', 'optional-plugin'),
+    ].sort());
     assert.deepEqual(roots.pluginRoots, [...roots.pluginRoots].sort());
+    assert.deepEqual(roots.installedPluginDirs, [...roots.installedPluginDirs].sort());
     assert.deepEqual(roots.supplyChainPaths, [...roots.supplyChainPaths].sort());
     assert.deepEqual(roots.urlScanPaths, [...roots.urlScanPaths].sort());
   });

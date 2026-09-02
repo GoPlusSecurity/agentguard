@@ -9,6 +9,7 @@ const CORDIS_PATCH_FILENAMES = ['cordis.patch.yml', 'cordis.patch.yaml'] as cons
 export interface DshSelfCheckRoots {
   skillRoots: string[];
   pluginRoots: string[];
+  installedPluginDirs: string[];
   supplyChainPaths: string[];
   urlScanPaths: string[];
 }
@@ -33,6 +34,7 @@ export async function discoverDshSelfCheckRoots(
     join(cwd, '.dsh', 'skills'),
   ]);
   const pluginRoots: string[] = [];
+  const installedPluginDirs: string[] = [];
   const supplyChainPaths: string[] = [];
   const urlScanPaths: string[] = [];
 
@@ -60,6 +62,7 @@ export async function discoverDshSelfCheckRoots(
       const dependencyRoot = join(profileRoot, 'node_modules', ...dependencyName.split('/'));
       if (!existsSync(dependencyRoot)) continue;
       pluginRoots.push(dependencyRoot);
+      installedPluginDirs.push(dependencyRoot);
       supplyChainPaths.push(dependencyRoot);
       const dependencyManifest = join(dependencyRoot, 'package.json');
       if (existsSync(dependencyManifest)) urlScanPaths.push(dependencyManifest);
@@ -69,6 +72,7 @@ export async function discoverDshSelfCheckRoots(
   return {
     skillRoots: sortedUnique(skillRoots),
     pluginRoots: sortedUnique(pluginRoots),
+    installedPluginDirs: sortedUnique(installedPluginDirs),
     supplyChainPaths: sortedUnique(supplyChainPaths),
     urlScanPaths: sortedUnique(urlScanPaths),
   };

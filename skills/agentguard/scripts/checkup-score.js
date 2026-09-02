@@ -16,6 +16,11 @@
  *       { "rule": "RULE_ID", "severity": "CRITICAL|HIGH|MEDIUM|LOW", "file": "...", "line": 0 }
  *     ]}
  *   ],
+ *   "dsh_plugins": [
+ *     { "name": "plugin-name", "risk_level": "low|medium|high|critical", "findings": [
+ *       { "rule": "RULE_ID", "severity": "CRITICAL|HIGH|MEDIUM|LOW", "file": "...", "line": 0 }
+ *     ]}
+ *   ],
  *   "credential_files": {
  *     "ssh_dir":       { "exists": true,  "permissions": "700" },
  *     "gnupg_dir":     { "exists": false },
@@ -65,17 +70,18 @@ function readInput() {
 // Dimension 1: Skill & Code Safety (weight 25%)
 // ---------------------------------------------------------------------------
 
-function scoreCodeSafety(skills) {
+function scoreCodeSafety(skills, dshPlugins) {
   const findings = [];
+  const artifacts = [...(skills || []), ...(dshPlugins || [])];
 
-  if (!skills || skills.length === 0) {
-    findings.push({ severity: 'LOW', text: 'No third-party skills installed — no code to audit' });
+  if (artifacts.length === 0) {
+    findings.push({ severity: 'LOW', text: 'No third-party skills or DSH plugins installed — no code to audit' });
     return { score: 70, findings };
   }
 
   let score = 100;
 
-  for (const skill of skills) {
+  for (const skill of artifacts) {
     const isAgentGuard = (skill.name || '').toLowerCase().includes('agentguard');
 
     for (const f of (skill.findings || [])) {
@@ -322,7 +328,7 @@ function assignTier(score) {
 const raw = readInput();
 
 const dimensions = {
-  code_safety:       scoreCodeSafety(raw.skills),
+  code_safety:       scoreCodeSafety(raw.skills, raw.dsh_plugins),
   credential_safety: scoreCredentialSafety(raw.credential_files, raw.dlp),
   network_exposure:  scoreNetworkExposure(raw.network),
   runtime_protection: scoreRuntimeProtection(raw.runtime),

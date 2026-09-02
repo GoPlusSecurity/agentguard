@@ -640,11 +640,12 @@ function pixelLobster(grade, color) {
 // ---------------------------------------------------------------------------
 
 function generateReport(data) {
-  const { composite_score = 0, dimensions = {}, recommendations = [], skills_scanned = 0, protection_level = 'unknown', timestamp } = data;
+  const { composite_score = 0, dimensions = {}, recommendations = [], skills_scanned = 0, dsh_plugins_scanned = 0, protection_level = 'unknown', timestamp } = data;
   const tier = getTier(composite_score);
   const ctaUrl = `https://www.agentguard.one?utm_source=checkup&utm_medium=cli&utm_campaign=health_report&score=${composite_score}`;
   const ts = timestamp || new Date().toISOString();
   const totalFindings = Object.values(dimensions).reduce((s, d) => s + (d.findings || []).length, 0);
+  const scannedArtifacts = skills_scanned + dsh_plugins_scanned;
   const lobsterSvg = pixelLobster(tier.grade, tier.color);
 
   // ── Page 1: Dimension rows (skip N/A dimensions) ──
@@ -791,7 +792,7 @@ function generateReport(data) {
 <title>AgentGuard Diagnostic Report — ${composite_score}/100</title>
 ${faviconB64 ? `<link rel="icon" type="image/png" href="data:image/png;base64,${faviconB64}"/>` : ''}
 <meta property="og:title" content="AgentGuard Security Report — Score: ${composite_score}/100"/>
-<meta property="og:description" content="Tier ${tier.grade} — ${tier.label}. ${totalFindings} findings across ${skills_scanned} skills."/>
+<meta property="og:description" content="Tier ${tier.grade} — ${tier.label}. ${totalFindings} findings across ${skills_scanned} skills and ${dsh_plugins_scanned} DSH plugins."/>
 <meta name="twitter:card" content="summary"/>
 <meta name="twitter:title" content="AgentGuard Security Report — ${composite_score}/100"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"><\/script>
@@ -896,8 +897,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
           </div>
           <div class="mt-auto pt-3 sm:pt-5 grid grid-cols-3 gap-2 sm:gap-3 stats-row">
             <div class="bg-[#10141a] p-2 sm:p-3 rounded-lg flex flex-col items-center border border-[#3a4a3f]/5">
-              <span class="text-lg sm:text-xl font-headline font-bold text-[#f5fff5]">${skills_scanned}</span>
-              <span class="text-[8px] sm:text-[9px] uppercase tracking-widest text-[#849588]" data-i18n="skills">Skills</span>
+              <span class="text-lg sm:text-xl font-headline font-bold text-[#f5fff5]">${scannedArtifacts}</span>
+              <span class="text-[8px] sm:text-[9px] uppercase tracking-widest text-[#849588]" data-i18n="artifacts_scanned">Scanned artifacts</span>
             </div>
             <div class="bg-[#10141a] p-2 sm:p-3 rounded-lg flex flex-col items-center border border-[#3a4a3f]/5">
               <span class="text-lg sm:text-xl font-headline font-bold text-[#ffb4ab]">${totalFindings}</span>
@@ -1042,8 +1043,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
   // ── i18n ──
   const i18n={
-    en:{title:'AgentGuard Report',share:'Share',diag_metrics:'Diagnostic Metrics',sec_dims:'SECURITY DIMENSIONS',back:'Back',next:'Next',nav_overview:'Overview',nav_analysis:'Analysis',nav_report:'Report',vuln_stream:'Active Vulnerability Stream',findings:'Findings',sec_analysis:'Security Analysis',diag_report:'Diagnostic Report',action_items:'Action Items',cta_title:'Enhanced Skill Scanning',cta_desc:'Deeper code analysis, threat intelligence feeds & real-time protection.',cta_btn:'Upgrade Skill Scanning',skills:'Skills',findings_label:'Findings',tier_label:'Tier',copy_report:'Copy Report',system_health:'System Health',dim_code_safety:'Skill & Code Safety',dim_credential_safety:'Credential & Secrets',dim_network_exposure:'Network & System',dim_runtime_protection:'Runtime Protection',dim_web3_safety:'Web3 Safety',no_threats_clean:'No active threats detected. Clinically sterile.',all_clear:'All Clear',no_threats_all:'No active threats detected across all dimensions.',share_report_title:'Share Report',generating_preview:'Generating preview...',copy_image:'Copy image to clipboard',share_img_hint:'📋 Clicking a platform copies the image — just paste when posting',no_recs:'No recommendations.',tier_badge:'TIER ${tier.grade} — ${tier.label}',status_label:'STATUS: ${healthLabel}',prot_mode:'${protection_level} mode',download_btn:'Download'},
-    zh:{title:'AgentGuard 诊断报告',share:'分享',diag_metrics:'诊断指标',sec_dims:'安全维度',back:'上一页',next:'下一页',nav_overview:'总览',nav_analysis:'威胁分析',nav_report:'诊断报告',vuln_stream:'活跃漏洞流',findings:'发现',sec_analysis:'安全分析',diag_report:'诊断报告',action_items:'修复建议',cta_title:'更强的 Skill 扫描',cta_desc:'更深度的代码分析、威胁情报推送、实时安全防护',cta_btn:'升级到更强的skill扫描',skills:'技能',findings_label:'发现',tier_label:'等级',copy_report:'复制报告',system_health:'系统健康',dim_code_safety:'技能与代码安全',dim_credential_safety:'凭证与密钥安全',dim_network_exposure:'网络与系统暴露',dim_runtime_protection:'运行时防护',dim_web3_safety:'Web3 安全',no_threats_clean:'未检测到活跃威胁，环境安全无虞。',all_clear:'全部通过',no_threats_all:'所有维度均未检测到活跃威胁。',share_report_title:'分享报告',generating_preview:'正在生成预览...',copy_image:'复制图片到剪贴板',share_img_hint:'📋 点击平台按钮会自动复制图片，去粘贴发出去就行',no_recs:'暂无修复建议。',tier_badge:'等级 ${tier.grade} — ${{S:'强壮',A:'健康',B:'疲惫',F:'危急'}[tier.grade]||tier.label}',status_label:'状态: ${{OPTIMAL:'最佳',STABILIZING:'恢复中',CRITICAL_ALERT:'危急警报'}[healthLabel]||healthLabel}',prot_mode:'${{strict:'严格',balanced:'均衡',permissive:'宽松'}[protection_level]||protection_level} 模式',download_btn:'下载'}
+    en:{title:'AgentGuard Report',share:'Share',diag_metrics:'Diagnostic Metrics',sec_dims:'SECURITY DIMENSIONS',back:'Back',next:'Next',nav_overview:'Overview',nav_analysis:'Analysis',nav_report:'Report',vuln_stream:'Active Vulnerability Stream',findings:'Findings',sec_analysis:'Security Analysis',diag_report:'Diagnostic Report',action_items:'Action Items',cta_title:'Enhanced Skill Scanning',cta_desc:'Deeper code analysis, threat intelligence feeds & real-time protection.',cta_btn:'Upgrade Skill Scanning',artifacts_scanned:'Scanned artifacts',findings_label:'Findings',tier_label:'Tier',copy_report:'Copy Report',system_health:'System Health',dim_code_safety:'Skill & Code Safety',dim_credential_safety:'Credential & Secrets',dim_network_exposure:'Network & System',dim_runtime_protection:'Runtime Protection',dim_web3_safety:'Web3 Safety',no_threats_clean:'No active threats detected. Clinically sterile.',all_clear:'All Clear',no_threats_all:'No active threats detected across all dimensions.',share_report_title:'Share Report',generating_preview:'Generating preview...',copy_image:'Copy image to clipboard',share_img_hint:'📋 Clicking a platform copies the image — just paste when posting',no_recs:'No recommendations.',tier_badge:'TIER ${tier.grade} — ${tier.label}',status_label:'STATUS: ${healthLabel}',prot_mode:'${protection_level} mode',download_btn:'Download'},
+    zh:{title:'AgentGuard 诊断报告',share:'分享',diag_metrics:'诊断指标',sec_dims:'安全维度',back:'上一页',next:'下一页',nav_overview:'总览',nav_analysis:'威胁分析',nav_report:'诊断报告',vuln_stream:'活跃漏洞流',findings:'发现',sec_analysis:'安全分析',diag_report:'诊断报告',action_items:'修复建议',cta_title:'更强的 Skill 扫描',cta_desc:'更深度的代码分析、威胁情报推送、实时安全防护',cta_btn:'升级到更强的skill扫描',artifacts_scanned:'已扫描项目',findings_label:'发现',tier_label:'等级',copy_report:'复制报告',system_health:'系统健康',dim_code_safety:'技能与代码安全',dim_credential_safety:'凭证与密钥安全',dim_network_exposure:'网络与系统暴露',dim_runtime_protection:'运行时防护',dim_web3_safety:'Web3 安全',no_threats_clean:'未检测到活跃威胁，环境安全无虞。',all_clear:'全部通过',no_threats_all:'所有维度均未检测到活跃威胁。',share_report_title:'分享报告',generating_preview:'正在生成预览...',copy_image:'复制图片到剪贴板',share_img_hint:'📋 点击平台按钮会自动复制图片，去粘贴发出去就行',no_recs:'暂无修复建议。',tier_badge:'等级 ${tier.grade} — ${{S:'强壮',A:'健康',B:'疲惫',F:'危急'}[tier.grade]||tier.label}',status_label:'状态: ${{OPTIMAL:'最佳',STABILIZING:'恢复中',CRITICAL_ALERT:'危急警报'}[healthLabel]||healthLabel}',prot_mode:'${{strict:'严格',balanced:'均衡',permissive:'宽松'}[protection_level]||protection_level} 模式',download_btn:'下载'}
   };
   const _qzh={S:['"你的 Agent 壮得像头牛！💪 没有什么能突破这双钳子！"','"天生猛男，这只龙虾在举铁 🏋️"','"铜墙铁壁！这安全性简直满分 🤌"','"诺克斯堡？不，是龙虾堡 🦞🔒"','"巅峰状态！你的 Agent 把威胁当早餐吃 💪"'],A:['"状态不错！再调整一下就无敌了。"','"快了——再努力一下这只龙虾就能练出腹肌！🦞"','"盾牌就位，钳子锋利，只差最后一点打磨 🛡️"','"你的 Agent 状态很好——微调一下就是 S 级！✨"','"健康又警觉，这只龙虾每天晨跑五公里 🏃"'],B:['"你的 Agent 需要锻炼一下……还有来杯咖啡 ☕"','"困困龙虾，有潜力就是需要鸡血 😴"','"快没油了——该给这只甲壳动物加加油！⛽"','"你的 Agent 在刷剧，没空巡逻 📺"','"这只龙虾跳过了腿日……胳膊日……每一天 🦞💤"'],F:['"危急状态！这个 Agent 需要紧急救治！🚨"','"红色警报！这只龙虾正在被抢救！🏥"','"SOS！你的 Agent 正在用摩斯密码发求救信号 📡"','"求救求救！这只甲壳动物快不行了！🆘"','"你 Agent 的免疫系统已退出群聊 💀"']};
   const quotes_zh=Object.fromEntries(Object.entries(_qzh).map(([k,v])=>[k,v[Math.floor(Math.random()*v.length)]]));
@@ -1216,8 +1217,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 
     // Stats
     const stats=curLang==='zh'
-      ?[{v:'${skills_scanned}',l:'技能'},{v:'${totalFindings}',l:'发现'},{v:'${tier.grade}',l:'等级'}]
-      :[{v:'${skills_scanned}',l:'SKILLS'},{v:'${totalFindings}',l:'FINDINGS'},{v:'${tier.grade}',l:'TIER'}];
+      ?[{v:'${scannedArtifacts}',l:'已扫描项目'},{v:'${totalFindings}',l:'发现'},{v:'${tier.grade}',l:'等级'}]
+      :[{v:'${scannedArtifacts}',l:'SCANNED ARTIFACTS'},{v:'${totalFindings}',l:'FINDINGS'},{v:'${tier.grade}',l:'TIER'}];
     let sx=620;
     stats.forEach(s=>{
       ctx.fillStyle='#1c2026';roundRect(ctx,sx,H-115,140,55,8);ctx.fill();
