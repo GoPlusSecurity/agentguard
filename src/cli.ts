@@ -23,6 +23,7 @@ import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import { resolveScanSource } from './scanner/source.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
+import { defaultBrokerEvaluator, runMcpBrokerStdio } from './runtime/mcp-broker.js';
 import { approvePendingApproval, listPendingApprovals } from './runtime/approvals.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
@@ -551,6 +552,30 @@ async function main() {
       if (!result) return;
       console.log(formatProtectResult(result, Boolean(options.json)));
       process.exitCode = exitCodeForDecision(result.decision, result);
+    });
+
+  program
+    .command('mcp-broker')
+    .description('Proxy a downstream MCP server, vetoing tools/call traffic inline against runtime policy')
+    .argument('<command>', 'Downstream MCP server command to spawn')
+    .argument('[args...]', 'Arguments passed to the downstream MCP server command')
+    .option('--agent <agent>', 'Agent host label for audit, e.g. claude-code, codex', 'other')
+    .option('--source-skill <id>', 'Skill id to attribute tool calls to (enables capability scoping)')
+    .action(async (command: string, args: string[], options) => {
+      const config = ensureConfig();
+      const exitCode = await runMcpBrokerStdio({
+        command,
+        args,
+        evaluate: defaultBrokerEvaluator(config, options.agent as RuntimeAgentHost),
+        sourceSkill: options.sourceSkill,
+        onBlocked: (result) => {
+          console.error(
+            `[agentguard] blocked MCP tool call: ${result.decision.decision} ` +
+            `(risk ${result.decision.riskScore}/100, action ${result.decision.actionId})`
+          );
+        },
+      });
+      process.exitCode = exitCode;
     });
 
   program

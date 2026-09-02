@@ -18,6 +18,7 @@ import type {
   RuntimeSeverity,
 } from './types.js';
 import { redactPreview, redactReasons } from './redaction.js';
+import { capabilityScopeReasons, isCapabilityReason, resolveSkillScope } from './capabilities.js';
 
 const ONE_MINUTE_MS = 60_000;
 const TEN_MINUTES_MS = 10 * ONE_MINUTE_MS;
@@ -88,7 +89,10 @@ export async function evaluateLocalAction(
   action: RuntimeAction,
   options: LocalActionEvaluationOptions = {}
 ): Promise<RuntimeDecision> {
-  if (isAllowedByCommandPolicy(policy, action)) {
+  const scope = resolveSkillScope(policy, action);
+  const scopeReasons = scope.scoped ? capabilityScopeReasons(scope.capabilities, action) : [];
+
+  if (scopeReasons.length === 0 && isAllowedByCommandPolicy(policy, action)) {
     return {
       actionId: `act_local_${Date.now()}_${process.pid}`,
       decision: 'allow',
@@ -104,10 +108,14 @@ export async function evaluateLocalAction(
   const ossReasons = (ossDecision?.risk_tags || []).map((tag, index) =>
     normalizeOssReason(tag, ossDecision?.evidence?.[index], action)
   );
-  const reasons = redactReasons([...customReasons, ...ossReasons]);
+  const reasons = redactReasons([...scopeReasons, ...customReasons, ...ossReasons]);
   const riskScore = riskScoreFor(reasons, ossDecision?.risk_level || 'safe');
   const riskLevel = riskLevelFor(riskScore);
-  const decision = shouldAutoAllowRuntimeDecision(riskScore, riskLevel)
+  // Capability denials are enforced even when the action's risk score would
+  // otherwise trip the auto-allow gate, so a confined skill cannot escape its
+  // declared scope by virtue of looking benign to the OSS scanner.
+  const hasCapabilityDenial = reasons.some((item) => isCapabilityReason(item.code));
+  const decision = !hasCapabilityDenial && shouldAutoAllowRuntimeDecision(riskScore, riskLevel)
     ? 'allow'
     : decisionFor(policy, reasons, riskLevel, ossDecision?.decision);
 
@@ -720,6 +728,7 @@ function decisionFor(
 
 function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePolicy): CloudPolicyDecision | null {
   const code = reasonItem.code;
+  if (isCapabilityReason(code)) return policy.mode === 'strict' ? 'block' : 'require_approval';
   if (code === 'CUSTOM_BLOCKED_COMMAND' || code === 'DESTRUCTIVE_COMMAND') return policy.decisions.destructiveCommand;
   if (code === 'DESTRUCTIVE_FILE_OPERATION') return 'require_approval';
   if (code === 'SYSTEM_PATH_MUTATION') return 'block';
