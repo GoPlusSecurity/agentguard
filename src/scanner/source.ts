@@ -9,9 +9,23 @@ const GITHUB_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+
 export const MAX_GITHUB_ACQUISITION_BYTES = 256 * 1024 * 1024;
 export const MAX_GITHUB_OBJECTS = 100_000;
 const ACQUISITION_POLL_MS = 100;
+const CLEANUP_MAX_RETRIES = 8;
+const CLEANUP_RETRY_DELAY_MS = 100;
 
 function hardenedGitEnvironment(): NodeJS.ProcessEnv {
   return { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+}
+
+export async function removeScanTempRoot(
+  tempRoot: string,
+  remove: typeof rm = rm,
+): Promise<void> {
+  await remove(tempRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: CLEANUP_MAX_RETRIES,
+    retryDelay: CLEANUP_RETRY_DELAY_MS,
+  });
 }
 
 async function directoryBytesWithinBudget(rootDir: string, maxBytes: number): Promise<number> {
@@ -50,30 +64,53 @@ export async function assertGithubAcquisitionByteBudget(
   }
 }
 
+interface KillableGitChild {
+  readonly killed: boolean;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+export function startScanAcquisitionMonitor(
+  child: KillableGitChild,
+  checkBudget: () => Promise<void>,
+  pollMs = ACQUISITION_POLL_MS,
+): { stop(): Promise<Error | undefined> } {
+  let budgetError: Error | undefined;
+  let activeCheck: Promise<void> | undefined;
+  const monitor = setInterval(() => {
+    if (activeCheck || child.killed) return;
+    activeCheck = checkBudget().catch(error => {
+      budgetError = error as Error;
+      child.kill('SIGKILL');
+    }).finally(() => {
+      activeCheck = undefined;
+    });
+  }, pollMs);
+  return {
+    async stop(): Promise<Error | undefined> {
+      clearInterval(monitor);
+      await activeCheck;
+      return budgetError;
+    },
+  };
+}
+
 function execBoundedGit(args: string[], rootDir: string, timeout: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
-    let budgetError: Error | undefined;
-    let checking = false;
     const child = execFile('git', args, {
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       env: hardenedGitEnvironment(),
     }, (error, stdout, stderr) => {
-      clearInterval(monitor);
-      if (budgetError) reject(budgetError);
-      else if (error) reject(error);
-      else resolvePromise({ stdout, stderr });
+      void monitor.stop().then(budgetError => {
+        if (budgetError) reject(budgetError);
+        else if (error) reject(error);
+        else resolvePromise({ stdout, stderr });
+      }, reject);
     });
-    const monitor = setInterval(() => {
-      if (checking || child.killed) return;
-      checking = true;
-      void assertGithubAcquisitionByteBudget(rootDir).catch(error => {
-        budgetError = error as Error;
-        child.kill('SIGKILL');
-      }).finally(() => {
-        checking = false;
-      });
-    }, ACQUISITION_POLL_MS);
+    const monitor = startScanAcquisitionMonitor(
+      child,
+      () => assertGithubAcquisitionByteBudget(rootDir),
+    );
   });
 }
 
@@ -114,6 +151,45 @@ export interface ResolvedScanSource {
 export interface ResolveScanSourceOptions {
   /** Optional GitHub branch, tag, fully qualified ref, or full commit SHA. */
   ref?: string;
+}
+
+export interface ScanCleanupResult<T> {
+  value: T;
+  cleanupWarning?: string;
+}
+
+function describeCleanupFailure(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  return `Temporary GitHub checkout cleanup failed${code ? ` (${code})` : ''}; files may remain in the OS temporary directory`;
+}
+
+export async function runWithScanCleanup<T>(
+  operation: () => Promise<T>,
+  cleanup: () => Promise<void>,
+): Promise<ScanCleanupResult<T>> {
+  let value!: T;
+  let operationFailed = false;
+  let operationError: unknown;
+  try {
+    value = await operation();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+  let cleanupWarning: string | undefined;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupWarning = describeCleanupFailure(error);
+  }
+  if (operationFailed) {
+    if (cleanupWarning) {
+      const message = operationError instanceof Error ? operationError.message : String(operationError);
+      throw new Error(`${message}; ${cleanupWarning}`, { cause: operationError });
+    }
+    throw operationError;
+  }
+  return { value, cleanupWarning };
 }
 
 async function gitMetadata(rootDir: string): Promise<{ revision?: string; lastCommitAt?: string }> {
@@ -261,11 +337,15 @@ export async function resolveScanSource(
         repositoryUrl,
         requestedRef,
         ...metadata,
-        cleanup: () => rm(tempRoot, { recursive: true, force: true }),
+        cleanup: () => removeScanTempRoot(tempRoot),
       };
     } catch (error) {
-      await rm(tempRoot, { recursive: true, force: true });
-      throw new Error(`Failed to fetch GitHub repository: ${(error as Error).message}`);
+      const { cleanupWarning } = await runWithScanCleanup(
+        async () => undefined,
+        () => removeScanTempRoot(tempRoot),
+      );
+      const fetchMessage = `Failed to fetch GitHub repository: ${(error as Error).message}`;
+      throw new Error(cleanupWarning ? `${fetchMessage}; ${cleanupWarning}` : fetchMessage, { cause: error });
     }
   }
 
