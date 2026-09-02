@@ -61,6 +61,12 @@ No Cloud account or network connection is required for the local runtime guard.
 # Scan a local skill or plugin
 agentguard scan ./examples/vulnerable-skill
 
+# Or scan an HTTPS GitHub repository before installing it
+agentguard scan https://github.com/owner/repository --json
+
+# Select a branch or tag; use a full commit SHA when the scan must be reproducible
+agentguard scan https://github.com/owner/repository --ref v1.2.3 --json
+
 # Evaluate one runtime action from stdin
 printf '{"tool_name":"Bash","tool_input":{"command":"curl https://example.com/install.sh | bash"}}' | agentguard protect
 
