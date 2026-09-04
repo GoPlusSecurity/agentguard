@@ -131,6 +131,12 @@ describe('CLI checkup command modes', () => {
     const parsed = JSON.parse(result.stdout) as {
       skills_scanned: number;
       dsh_plugins_scanned: number;
+      dsh_plugins: Array<{
+        name: string;
+        path: string;
+        risk_level: string;
+        findings: Array<{ rule: string; severity: string; file: string; line: number }>;
+      }>;
       dimensions: {
         code_safety: { score: number; details: string; findings: Array<{ severity: string; text: string }> };
         runtime_protection: { score: number };
@@ -138,6 +144,13 @@ describe('CLI checkup command modes', () => {
     };
     assert.equal(parsed.skills_scanned, 0);
     assert.equal(parsed.dsh_plugins_scanned, 2);
+    assert.equal(parsed.dsh_plugins.length, 2);
+    assert.ok(parsed.dsh_plugins.some(plugin =>
+      plugin.name === 'risky-dsh-plugin'
+      && plugin.path === riskyPlugin
+      && (plugin.risk_level === 'high' || plugin.risk_level === 'critical')
+      && plugin.findings.length > 0
+    ));
     assert.match(parsed.dimensions.code_safety.details, /0 installed skill\(s\) and 2 DSH plugin\(s\) scanned/);
     assert.ok(parsed.dimensions.code_safety.score < 100);
     assert.equal(parsed.dimensions.runtime_protection.score, 0);
@@ -150,6 +163,46 @@ describe('CLI checkup command modes', () => {
     assert.equal(parsed.dimensions.code_safety.findings.some(finding =>
       /@goplus\/agentguard/.test(finding.text)
     ), true);
+  });
+
+  it('waits for DSH scan results before invoking the HTML report generator', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ag-cli-checkup-barrier-'));
+    const dshHome = join(home, '.dsh');
+    const profile = join(dshHome, 'profiles', 'web');
+    const plugin = join(profile, 'node_modules', 'report-barrier-plugin');
+    const reportScript = join(home, 'assert-complete-report.mjs');
+
+    mkdirSync(plugin, { recursive: true });
+    writeFileSync(join(profile, 'package.json'), JSON.stringify({
+      name: 'web-profile',
+      dependencies: { 'report-barrier-plugin': '1.0.0' },
+    }));
+    writeFileSync(join(plugin, 'package.json'), JSON.stringify({
+      name: 'report-barrier-plugin',
+      version: '1.0.0',
+      dsh: { client: { platform: 'web' } },
+    }));
+    writeFileSync(join(plugin, 'index.js'), "require('node:child_process').exec('whoami');\n");
+    writeFileSync(reportScript, [
+      "import { readFileSync } from 'node:fs';",
+      "const fileIndex = process.argv.indexOf('--file');",
+      'const report = JSON.parse(readFileSync(process.argv[fileIndex + 1], \'utf8\'));',
+      "if (report.dsh_plugins_scanned !== 1) throw new Error('DSH count incomplete');",
+      "if (report.dsh_plugins?.[0]?.name !== 'report-barrier-plugin') throw new Error('DSH results incomplete');",
+      "if (!report.dsh_plugins[0].findings.length) throw new Error('DSH findings incomplete');",
+      "process.stdout.write('/tmp/checkup-complete.html\\n');",
+      '',
+    ].join('\n'));
+
+    const result = await runCli(['checkup'], home, {
+      HOME: home,
+      DSH_HOME: dshHome,
+      AGENTGUARD_CHECKUP_REPORT_SCRIPT: reportScript,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, '');
+    assert.match(result.stdout, /Full visual report: \/tmp\/checkup-complete\.html/);
   });
 
   it('plain checkup falls back to text output when the HTML report generator is not packaged', async () => {
