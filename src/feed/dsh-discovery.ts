@@ -1,9 +1,12 @@
 import { existsSync, type Dirent } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { parseCordisConfigs } from '../dsh/parse-cordis-patch.js';
 
 const MAX_PROFILE_MANIFEST_BYTES = 1_000_000;
+const MAX_BUNDLE_DEPTH = 32;
+const MAX_BUNDLE_PLUGINS = 1_000;
 const CORDIS_PATCH_FILENAMES = ['cordis.patch.yml', 'cordis.patch.yaml'] as const;
 
 export interface DshSelfCheckRoots {
@@ -20,8 +23,8 @@ export interface DiscoverDshSelfCheckRootsOptions {
 }
 
 /**
- * Discover DSH-owned self-check inputs without recursively walking profile
- * dependency trees. Environment defaults are intentionally resolved per call.
+ * Discover DSH-owned self-check inputs, following only dependency edges named
+ * by installed bundle patches. Environment defaults are resolved per call.
  */
 export async function discoverDshSelfCheckRoots(
   options: DiscoverDshSelfCheckRootsOptions = {},
@@ -37,6 +40,7 @@ export async function discoverDshSelfCheckRoots(
   const installedPluginDirs: string[] = [];
   const supplyChainPaths: string[] = [];
   const urlScanPaths: string[] = [];
+  const directDependencyPaths = new Set<string>();
 
   addCordisPatches(dshHome, pluginRoots, urlScanPaths);
   const profilesRoot = join(dshHome, 'profiles');
@@ -61,21 +65,133 @@ export async function discoverDshSelfCheckRoots(
     for (const dependencyName of dependencyNames) {
       const dependencyRoot = join(profileRoot, 'node_modules', ...dependencyName.split('/'));
       if (!existsSync(dependencyRoot)) continue;
+      directDependencyPaths.add(dependencyRoot);
       pluginRoots.push(dependencyRoot);
-      if (dependencyName !== '@goplus/agentguard') installedPluginDirs.push(dependencyRoot);
+      if (dependencyName !== '@goplus/agentguard') {
+        installedPluginDirs.push(dependencyRoot);
+        const bundlePlugins = await discoverReferencedBundlePlugins(dependencyRoot, profileRoot);
+        for (const pluginRoot of bundlePlugins) {
+          pluginRoots.push(pluginRoot);
+          installedPluginDirs.push(pluginRoot);
+          supplyChainPaths.push(pluginRoot);
+          const pluginManifest = join(pluginRoot, 'package.json');
+          if (existsSync(pluginManifest)) urlScanPaths.push(pluginManifest);
+        }
+      }
       supplyChainPaths.push(dependencyRoot);
       const dependencyManifest = join(dependencyRoot, 'package.json');
-      if (existsSync(dependencyManifest)) urlScanPaths.push(dependencyManifest);
+      if (existsSync(dependencyManifest)) {
+        directDependencyPaths.add(dependencyManifest);
+        urlScanPaths.push(dependencyManifest);
+      }
     }
   }
 
   return {
     skillRoots: sortedUnique(skillRoots),
-    pluginRoots: sortedUnique(pluginRoots),
-    installedPluginDirs: sortedUnique(installedPluginDirs),
-    supplyChainPaths: sortedUnique(supplyChainPaths),
-    urlScanPaths: sortedUnique(urlScanPaths),
+    pluginRoots: await canonicalSortedUnique(pluginRoots, directDependencyPaths),
+    installedPluginDirs: await canonicalSortedUnique(installedPluginDirs, directDependencyPaths),
+    supplyChainPaths: await canonicalSortedUnique(supplyChainPaths, directDependencyPaths),
+    urlScanPaths: await canonicalSortedUnique(urlScanPaths, directDependencyPaths),
   };
+}
+
+async function canonicalSortedUnique(paths: string[], preferredPaths: Set<string>): Promise<string[]> {
+  const selected = new Map<string, string>();
+  for (const path of paths) {
+    const identity = await realpath(path).catch(() => resolve(path));
+    const current = selected.get(identity);
+    if (!current || (preferredPaths.has(path) && !preferredPaths.has(current))) {
+      selected.set(identity, path);
+    }
+  }
+  return [...selected.values()].sort();
+}
+
+async function discoverReferencedBundlePlugins(bundleRoot: string, profileRoot: string): Promise<string[]> {
+  const discovered: string[] = [];
+  const visited = new Set<string>();
+
+  async function visit(packageRoot: string, depth: number, isRoot = false): Promise<void> {
+    if (depth > MAX_BUNDLE_DEPTH || (!isRoot && discovered.length >= MAX_BUNDLE_PLUGINS)) return;
+    const identity = await realpath(packageRoot).catch(() => resolve(packageRoot));
+    if (visited.has(identity)) return;
+    visited.add(identity);
+    if (!isRoot) discovered.push(packageRoot);
+
+    const manifest = await readPackageManifest(join(packageRoot, 'package.json'));
+    if (!manifest?.bundlePatch) return;
+    const patchPath = normalizeBundlePatchPath(manifest.bundlePatch);
+    if (!patchPath) return;
+    const cordis = await parseCordisConfigs(identity);
+    const referencedNames = sortedUnique(cordis.rows
+      .filter(row => row.file.replace(/\\/g, '/') === patchPath)
+      .flatMap(row => {
+        const name = packageNameFromSpecifier(row.name);
+        return name && manifest.dependencyNames.includes(name) ? [name] : [];
+      }));
+
+    for (const name of referencedNames) {
+      if (name === '@goplus/agentguard') continue;
+      const childRoot = await resolveInstalledDependency(packageRoot, profileRoot, name);
+      if (!childRoot) continue;
+      await visit(childRoot, depth + 1);
+    }
+  }
+
+  await visit(bundleRoot, 0, true);
+  return sortedUnique(discovered);
+}
+
+async function resolveInstalledDependency(
+  packageRoot: string,
+  profileRoot: string,
+  name: string,
+): Promise<string | undefined> {
+  const packageSegments = name.split('/');
+  const boundary = await realpath(profileRoot).catch(() => resolve(profileRoot));
+  let current = await realpath(packageRoot).catch(() => resolve(packageRoot));
+  while (isWithinBoundary(current, boundary)) {
+    const candidate = join(current, 'node_modules', ...packageSegments);
+    if (existsSync(candidate)) {
+      const physicalCandidate = await realpath(candidate).catch(() => resolve(candidate));
+      if (isWithinBoundary(physicalCandidate, boundary)) {
+        const manifest = await readPackageManifest(join(physicalCandidate, 'package.json'));
+        if (manifest?.name === name) return await mapToProfilePath(physicalCandidate, profileRoot);
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return undefined;
+}
+
+function isWithinBoundary(path: string, boundary: string): boolean {
+  return path === boundary || path.startsWith(`${boundary}${sep}`);
+}
+
+async function mapToProfilePath(path: string, profileRoot: string): Promise<string> {
+  const physicalProfileRoot = await realpath(profileRoot).catch(() => resolve(profileRoot));
+  if (path === physicalProfileRoot) return resolve(profileRoot);
+  if (path.startsWith(`${physicalProfileRoot}${sep}`)) {
+    return join(resolve(profileRoot), relative(physicalProfileRoot, path));
+  }
+  return path;
+}
+
+function normalizeBundlePatchPath(path: string): string | undefined {
+  if (isAbsolute(path)) return undefined;
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalized || normalized.split('/').some(segment => segment === '..')) return undefined;
+  return normalized;
+}
+
+function packageNameFromSpecifier(specifier: unknown): string | undefined {
+  if (typeof specifier !== 'string' || specifier.startsWith('.') || specifier.startsWith('/')) return undefined;
+  const parts = specifier.split('/');
+  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+  return name && isSafePackageName(name) ? name : undefined;
 }
 
 function addCordisPatches(root: string, pluginRoots: string[], urlScanPaths: string[]): void {
@@ -88,11 +204,21 @@ function addCordisPatches(root: string, pluginRoots: string[], urlScanPaths: str
 }
 
 async function readDirectDependencyNames(manifestPath: string): Promise<string[]> {
+  return (await readPackageManifest(manifestPath))?.dependencyNames ?? [];
+}
+
+interface PackageManifestInfo {
+  name?: string;
+  dependencyNames: string[];
+  bundlePatch?: string;
+}
+
+async function readPackageManifest(manifestPath: string): Promise<PackageManifestInfo | undefined> {
   try {
     const info = await stat(manifestPath);
-    if (!info.isFile() || info.size > MAX_PROFILE_MANIFEST_BYTES) return [];
+    if (!info.isFile() || info.size > MAX_PROFILE_MANIFEST_BYTES) return undefined;
     const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const manifest = parsed as Record<string, unknown>;
     const names: string[] = [];
     for (const field of ['dependencies', 'optionalDependencies']) {
@@ -102,9 +228,22 @@ async function readDirectDependencyNames(manifestPath: string): Promise<string[]
         if (isSafePackageName(name)) names.push(name);
       }
     }
-    return sortedUnique(names);
+    const dsh = manifest.dsh && typeof manifest.dsh === 'object' && !Array.isArray(manifest.dsh)
+      ? manifest.dsh as Record<string, unknown>
+      : undefined;
+    const bundle = dsh?.bundle;
+    const bundlePatch = typeof bundle === 'string'
+      ? bundle
+      : bundle && typeof bundle === 'object' && !Array.isArray(bundle)
+        ? (bundle as Record<string, unknown>).patch
+        : undefined;
+    return {
+      name: typeof manifest.name === 'string' ? manifest.name : undefined,
+      dependencyNames: sortedUnique(names),
+      bundlePatch: typeof bundlePatch === 'string' ? bundlePatch : undefined,
+    };
   } catch {
-    return [];
+    return undefined;
   }
 }
 

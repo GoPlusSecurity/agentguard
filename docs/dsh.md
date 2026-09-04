@@ -95,9 +95,11 @@ Scheduled self-check discovery includes `$DSH_HOME/skills` (default
 `~/.dsh/skills`), `<current-project>/.dsh/skills`, every immediate
 `$DSH_HOME/profiles/*/package.json`, each profile's declared direct and optional
 dependencies under `node_modules`, and existing `cordis.patch.yml` or
-`cordis.patch.yaml` files in the DSH home and profile directories. Dependency
-discovery is deliberately non-recursive: undeclared transitive packages and
-dependency names that could escape `node_modules` are excluded. Advisory-level
+`cordis.patch.yaml` files in the DSH home and profile directories. When a direct
+dependency is a DSH bundle, discovery follows package dependencies named by its
+Cordis plugin rows recursively, including pnpm virtual-store layouts. Unrelated
+transitive packages and dependency names that could escape `node_modules` stay
+excluded. Advisory-level
 `inspectPaths` and explicitly supplied self-check roots remain authoritative.
 
 For local checkout testing, install the CLI from a packed tarball but keep the

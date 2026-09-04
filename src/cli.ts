@@ -30,7 +30,7 @@ import { installAgentTemplates, type AgentInstaller, type InstallResult } from '
 import { packageVersion } from './version.js';
 import { runSelfCheckForAdvisory } from './feed/selfcheck.js';
 import { discoverDshSelfCheckRoots } from './feed/dsh-discovery.js';
-import { scanDshPluginsForCheckup } from './checkup/dsh.js';
+import { scanDshPluginsForCheckup, type DshCheckupPluginResult } from './checkup/dsh.js';
 import { getSeenAdvisoryIds, loadFeedState, prependFeedStateEntry, saveFeedState } from './feed/state.js';
 import type { Advisory, SelfCheckResult } from './feed/types.js';
 import { CloudRequestError } from './cloud/client.js';
@@ -1244,6 +1244,7 @@ interface HealthCheckupReport {
   };
   skills_scanned: number;
   dsh_plugins_scanned: number;
+  dsh_plugins: DshCheckupPluginResult[];
   protection_level: string;
   analysis: string;
   recommendations: CheckupFinding[];
@@ -1318,6 +1319,7 @@ async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCh
     analysis: buildHealthAnalysis(composite, dimensions),
     recommendations,
     dsh_plugins_scanned: dshScan.pluginsScanned,
+    dsh_plugins: dshScan.plugins,
   };
 }
 

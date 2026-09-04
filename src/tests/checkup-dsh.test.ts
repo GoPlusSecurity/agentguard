@@ -32,6 +32,25 @@ describe('checkup DSH plugin scanning', () => {
       severity: 'HIGH',
       text: `missing-plugin: DSH plugin scan failed: Local scan directory not found: ${missingPlugin}`,
     }]);
+    assert.deepEqual(result.plugins, [
+      {
+        name: 'missing-plugin',
+        path: missingPlugin,
+        risk_level: 'high',
+        findings: [{
+          rule: 'DSH_SCAN_FAILED',
+          severity: 'HIGH',
+          file: missingPlugin,
+          line: 0,
+        }],
+      },
+      {
+        name: 'safe-plugin',
+        path: safePlugin,
+        risk_level: 'low',
+        findings: [],
+      },
+    ]);
   });
 
   it('uses the same per-finding Code Safety scoring as the skill workflow', async () => {

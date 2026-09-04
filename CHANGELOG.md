@@ -9,6 +9,7 @@
 
 ### Fixed
 - Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.
+- Fixed `checkup` to recursively scan plugins referenced by DSH bundles, wait for all DSH scans before report generation, and include per-plugin results in JSON and HTML reports.
 
 ## [1.1.29] - 2026-08-26
 

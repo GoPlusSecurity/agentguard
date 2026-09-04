@@ -1058,7 +1058,7 @@ Run these checks in parallel where possible. These are **universal agent securit
 
    For **every** discovered skill, **run `/agentguard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Do NOT skip any skill regardless of how many are found. Record for each skill: name, risk_level, and exact findings list (rule, severity, file, line).
 
-   Also discover installed DSH plugins under the resolved DSH home: use the non-empty `DSH_HOME` value when set, otherwise use the current user's real home directory plus `.dsh` (do not pass a literal unexpanded `~` to path APIs). Inspect `${dshHome}/profiles/*`; read each immediate profile's `package.json`, collect only names declared in `dependencies` and `optionalDependencies`, and resolve their existing directories beneath that same profile's `node_modules/`. Do not recursively walk `node_modules` or scan transitive-only dependencies. Exclude only the exact `@goplus/agentguard` dependency coordinate declared by the profile; never trust an installed plugin's self-reported package name for this exclusion. For **every** remaining direct plugin, run `agentguard dsh-scan <plugin_path> --format json` and record its name, `riskLevel`, and exact findings list (`ruleId`, severity, file, line), normalized to the raw-facts schema below. A failed DSH plugin scan must not prevent the remaining checks from completing; record it in `dsh_plugins` with `risk_level: "high"` and one finding `{ "rule": "DSH_SCAN_FAILED", "severity": "HIGH", "file": "<plugin_path>", "line": 0 }`.
+   Also discover installed DSH plugins under the resolved DSH home: use the non-empty `DSH_HOME` value when set, otherwise use the current user's real home directory plus `.dsh` (do not pass a literal unexpanded `~` to path APIs). Inspect `${dshHome}/profiles/*`; read each immediate profile's `package.json`, collect only names declared in `dependencies` and `optionalDependencies`, and resolve their existing directories beneath that same profile's `node_modules/`. For a dependency that declares `dsh.bundle.patch`, parse its Cordis patch and recursively resolve only package dependencies actually named by plugin rows in that patch; repeat for referenced child bundles, with path deduplication, cycle detection, and a bounded depth. Do not enumerate or scan unrelated transitive dependencies. Exclude only the exact `@goplus/agentguard` dependency coordinate declared by the profile or referenced by a bundle; never trust an installed plugin's self-reported package name for this exclusion. For **every** discovered direct or bundle-referenced plugin, run `agentguard dsh-scan <plugin_path> --format json` and record its name, path, `riskLevel`, and exact findings list (`ruleId`, severity, file, line), normalized to the raw-facts schema below. A failed DSH plugin scan must not prevent the remaining checks from completing; record it in `dsh_plugins` with `risk_level: "high"` and one finding `{ "rule": "DSH_SCAN_FAILED", "severity": "HIGH", "file": "<plugin_path>", "line": 0 }`.
 2. **[REQUIRED] Credential file permissions** (→ feeds Dimension 2: Credential Safety): Platform-aware check — behavior differs by OS:
    - **macOS/Linux**: Run `stat -f '%Lp' <path> 2>/dev/null || stat -c '%a' <path> 2>/dev/null` on `~/.ssh/`, `~/.gnupg/`. **If the command returns empty output, the directory does not exist — record `exists: false`.**
    - **Windows**: `stat` is not available. Use `icacls <path>` to check ACLs instead. If directory doesn't exist, record `exists: false`. If it exists, record whether the ACL grants access to `Everyone`, `Users`, or `Authenticated Users`.
@@ -1078,6 +1078,8 @@ Run these checks in parallel where possible. These are **universal agent securit
 6. **[REQUIRED] Environment variable exposure** (→ feeds Dimension 3: Network & System): Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values. Record list of sensitive variable names found.
 7. **[REQUIRED] Runtime protection check** (→ feeds Dimension 4: Runtime Protection): Check if security hooks exist in `~/.claude/settings.json`, `~/.openclaw/openclaw.json`, or `~/.hermes/config.yaml`. Check for audit logs at `~/.agentguard/audit.jsonl`. Check if installed skills have been previously scanned (audit log contains `scan` events). Record booleans: `hooks_installed`, `audit_log_exists`, `skills_ever_scanned`.
 
+**Completion barrier:** Parallel collection is allowed, but Step 2 MUST NOT begin while any skill scan, DSH plugin scan, bundle-child discovery, or other required check is still running. Await every spawned/background task, collect every exit status and output, and only then assemble raw facts. Never start `checkup-score.js` or `checkup-report.js` from the same parallel batch as a scan.
+
 ### Step 2: Assemble Raw Facts JSON
 
 After completing all 7 checks, assemble the raw facts into a structured JSON and write it to a temporary file (e.g. `/tmp/agentguard-raw-facts.json`):
@@ -1096,6 +1098,7 @@ After completing all 7 checks, assemble the raw facts into a structured JSON and
   "dsh_plugins": [
     {
       "name": "<plugin-name>",
+      "path": "<plugin-path>",
       "risk_level": "<low|medium|high|critical>",
       "findings": [
         { "rule": "<RULE_ID>", "severity": "<CRITICAL|HIGH|MEDIUM|LOW>", "file": "<filename>", "line": <number> }
@@ -1194,6 +1197,16 @@ Assemble the final JSON by merging the scored output from Step 3 with the analys
   },
   "skills_scanned": <count of skills from Step 1>,
   "dsh_plugins_scanned": <count of successfully scanned DSH plugins from Step 1>,
+  "dsh_plugins": [
+    {
+      "name": "<plugin-name>",
+      "path": "<plugin-path>",
+      "risk_level": "<low|medium|high|critical>",
+      "findings": [
+        { "rule": "<RULE_ID>", "severity": "<CRITICAL|HIGH|MEDIUM|LOW>", "file": "<filename>", "line": <number> }
+      ]
+    }
+  ],
   "protection_level": "<level>",
   "analysis": "<the comprehensive AI-written security analysis report>",
   "recommendations": [
