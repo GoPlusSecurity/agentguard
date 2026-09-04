@@ -121,11 +121,16 @@ async function discoverReferencedBundlePlugins(bundleRoot: string, profileRoot: 
 
     const manifest = await readPackageManifest(join(packageRoot, 'package.json'));
     if (!manifest?.bundlePatch) return;
-    const patchPath = normalizeBundlePatchPath(manifest.bundlePatch);
-    if (!patchPath) return;
+    const patchIdentity = await resolveExistingPathWithinBoundary(manifest.bundlePatch, identity);
+    if (!patchIdentity) return;
     const cordis = await parseCordisConfigs(identity);
+    const matchingPatchFiles = new Set<string>();
+    for (const file of cordis.files) {
+      const fileIdentity = await resolveExistingPathWithinBoundary(file, identity);
+      if (fileIdentity === patchIdentity) matchingPatchFiles.add(file);
+    }
     const referencedNames = sortedUnique(cordis.rows
-      .filter(row => row.file.replace(/\\/g, '/') === patchPath)
+      .filter(row => matchingPatchFiles.has(row.file))
       .flatMap(row => {
         const name = packageNameFromSpecifier(row.name);
         return name && manifest.dependencyNames.includes(name) ? [name] : [];
@@ -180,11 +185,14 @@ async function mapToProfilePath(path: string, profileRoot: string): Promise<stri
   return path;
 }
 
-function normalizeBundlePatchPath(path: string): string | undefined {
+async function resolveExistingPathWithinBoundary(path: string, boundary: string): Promise<string | undefined> {
   if (isAbsolute(path)) return undefined;
-  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!normalized || normalized.split('/').some(segment => segment === '..')) return undefined;
-  return normalized;
+  const portablePath = path.replace(/\\/g, '/');
+  if (!portablePath) return undefined;
+  const candidate = resolve(boundary, portablePath);
+  if (!isWithinBoundary(candidate, boundary)) return undefined;
+  const identity = await realpath(candidate).catch(() => undefined);
+  return identity && isWithinBoundary(identity, boundary) ? identity : undefined;
 }
 
 function packageNameFromSpecifier(specifier: unknown): string | undefined {

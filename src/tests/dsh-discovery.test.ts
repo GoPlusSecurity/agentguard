@@ -146,6 +146,65 @@ describe('feed/dsh-discovery', () => {
     assert.equal(roots.installedPluginDirs.includes(unrelatedLibrary), false);
   });
 
+  it('matches configured bundle patches by canonical path identity', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-dsh-canonical-patch-'));
+    const dshHome = join(root, 'dsh-home');
+    const profile = join(dshHome, 'profiles', 'web');
+    const nodeModules = join(profile, 'node_modules');
+    const dotBundle = join(nodeModules, 'dot-bundle');
+    const dotChild = join(dotBundle, 'node_modules', 'dot-child');
+    const parentBundle = join(nodeModules, 'parent-bundle');
+    const parentChild = join(parentBundle, 'node_modules', 'parent-child');
+    const linkedBundle = join(nodeModules, 'linked-bundle');
+    const linkedChild = join(linkedBundle, 'node_modules', 'linked-child');
+
+    write(join(profile, 'package.json'), JSON.stringify({
+      name: 'web-profile',
+      dependencies: {
+        'dot-bundle': '1.0.0',
+        'parent-bundle': '1.0.0',
+        'linked-bundle': '1.0.0',
+      },
+    }));
+
+    write(join(dotBundle, 'package.json'), JSON.stringify({
+      name: 'dot-bundle',
+      dependencies: { 'dot-child': '1.0.0' },
+      dsh: { bundle: { patch: '././cordis.patch.yml' } },
+    }));
+    write(join(dotBundle, 'cordis.patch.yml'), '- insert:\n    - name: dot-child\n');
+    write(join(dotChild, 'package.json'), JSON.stringify({ name: 'dot-child' }));
+
+    write(join(parentBundle, 'package.json'), JSON.stringify({
+      name: 'parent-bundle',
+      dependencies: { 'parent-child': '1.0.0' },
+      dsh: { bundle: { patch: 'patches/../cordis.patch.yml' } },
+    }));
+    mkdirSync(join(parentBundle, 'patches'), { recursive: true });
+    write(join(parentBundle, 'cordis.patch.yml'), '- insert:\n    - name: parent-child\n');
+    write(join(parentChild, 'package.json'), JSON.stringify({ name: 'parent-child' }));
+
+    write(join(linkedBundle, 'package.json'), JSON.stringify({
+      name: 'linked-bundle',
+      dependencies: { 'linked-child': '1.0.0' },
+      dsh: { bundle: { patch: './linked/cordis.patch.yml' } },
+    }));
+    write(join(linkedBundle, 'actual', 'cordis.patch.yml'), '- insert:\n    - name: linked-child\n');
+    symlinkSync('actual', join(linkedBundle, 'linked'), 'dir');
+    write(join(linkedChild, 'package.json'), JSON.stringify({ name: 'linked-child' }));
+
+    const roots = await discoverDshSelfCheckRoots({ dshHome, cwd: root });
+
+    assert.deepEqual(roots.installedPluginDirs, [
+      dotBundle,
+      dotChild,
+      linkedBundle,
+      linkedChild,
+      parentBundle,
+      parentChild,
+    ].sort());
+  });
+
   it('resolves bundle child plugins from a pnpm virtual-store layout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agentguard-dsh-pnpm-discovery-'));
     const dshHome = join(root, 'dsh-home');
