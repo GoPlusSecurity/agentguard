@@ -1,14 +1,15 @@
 import { spawn } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign as signPayload } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, win32 } from 'node:path';
+import { Cron } from 'croner';
 
-export type CronBackend = 'auto' | 'openclaw' | 'qclaw' | 'hermes' | 'system';
-export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'qclaw-gateway' | 'hermes' | 'system';
+export type CronBackend = 'auto' | 'openclaw' | 'qclaw' | 'hermes' | 'system' | 'windows';
+export type ResolvedCronBackend = 'openclaw' | 'openclaw-gateway' | 'qclaw-gateway' | 'hermes' | 'system' | 'windows-task-scheduler';
 export type CronAgentHost = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | 'qclaw' | 'dsh';
 
 export interface OpenClawCronInstallResult {
@@ -35,6 +36,10 @@ export interface SystemThreatFeedCronStatus {
   error?: string;
 }
 
+export interface ThreatFeedCronStatus extends SystemThreatFeedCronStatus {
+  backend: 'system' | 'windows-task-scheduler';
+}
+
 export interface OpenClawGatewayOptions {
   host?: string;
   port?: number;
@@ -51,7 +56,17 @@ export interface CommandResult {
   stderr: string;
 }
 
-export type CommandRunner = (command: string, args: string[], input?: string) => Promise<CommandResult>;
+export interface CommandRunnerOptions {
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}
+
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  input?: string,
+  options?: CommandRunnerOptions,
+) => Promise<CommandResult>;
 
 interface OpenClawCronJob {
   id?: string;
@@ -90,6 +105,186 @@ export function localTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+export function cronMatchesAt(expression: string, timezone: string, at: Date): boolean {
+  const schedule = validateCronExpression(expression);
+  const minuteStartMs = Math.floor(at.getTime() / 60_000) * 60_000;
+  const cron = new Cron(schedule, { timezone, paused: true });
+  return cron.nextRun(new Date(minuteStartMs - 1))?.getTime() === minuteStartMs;
+}
+
+interface WindowsCronTaskConfig {
+  version: 1;
+  name: string;
+  cronExpression: string;
+  timezone: string;
+  quiet: boolean;
+  agentGuardHome: string;
+  nodeExecutable: string;
+  cliEntrypoint: string;
+}
+
+interface WindowsCronTaskState {
+  version: 1;
+  lastCheckedMinute: string;
+}
+
+interface WindowsCronRunnerLock {
+  version: 1;
+  pid: number;
+  startedAtMs: number;
+}
+
+interface WindowsRunnerProcessIdentity {
+  pid: number;
+  executablePath: string;
+  commandLine: string;
+  creationTimeMs: number;
+}
+
+export async function runWindowsCronTick(
+  configPath: string,
+  adapters: {
+    now?: () => Date;
+    runCommand?: CommandRunner;
+  } = {},
+): Promise<{ ran: boolean; reason: 'executed' | 'not-due' | 'already-checked' | 'busy' }> {
+  const config = readWindowsCronTaskConfig(configPath);
+  const now = adapters.now?.() ?? new Date();
+  const minuteMs = Math.floor(now.getTime() / 60_000) * 60_000;
+  const minute = new Date(minuteMs).toISOString();
+  const statePath = `${configPath}.state.json`;
+  const lockPath = `${configPath}.lock`;
+  let lock: Awaited<ReturnType<typeof open>>;
+  try {
+    lock = await open(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      const lockStat = await stat(lockPath).catch(() => null);
+      if (!lockStat || now.getTime() - lockStat.mtimeMs <= 10 * 60_000) {
+        return { ran: false, reason: 'busy' };
+      }
+      await rm(lockPath, { force: true });
+      try {
+        lock = await open(lockPath, 'wx', 0o600);
+      } catch (retryError) {
+        if ((retryError as NodeJS.ErrnoException).code === 'EEXIST') {
+          return { ran: false, reason: 'busy' };
+        }
+        throw retryError;
+      }
+    } else {
+      throw error;
+    }
+  }
+
+  try {
+    const lockMetadata: WindowsCronRunnerLock = {
+      version: 1,
+      pid: process.pid,
+      startedAtMs: now.getTime(),
+    };
+    await lock.writeFile(`${JSON.stringify(lockMetadata)}\n`);
+    let state: WindowsCronTaskState | null;
+    try {
+      state = readWindowsCronTaskState(statePath);
+    } catch {
+      const corruptPath = `${statePath}.corrupt-${now.getTime()}`;
+      await rename(statePath, corruptPath).catch(async () => {
+        await rm(statePath, { force: true });
+      });
+      state = null;
+    }
+    if (state?.lastCheckedMinute === minute) {
+      return { ran: false, reason: 'already-checked' };
+    }
+    const due = state
+      ? cronHasOccurrenceBetween(config.cronExpression, config.timezone, new Date(state.lastCheckedMinute), new Date(minuteMs))
+      : cronMatchesAt(config.cronExpression, config.timezone, now);
+    const nextState: WindowsCronTaskState = { version: 1, lastCheckedMinute: minute };
+    await atomicWritePrivateFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`);
+    if (!due) {
+      return { ran: false, reason: 'not-due' };
+    }
+
+    const args = [
+      config.cliEntrypoint,
+      'subscribe',
+      ...(config.quiet ? ['--quiet'] : []),
+      '--json',
+      '--cron-run',
+    ];
+    const runCommand = adapters.runCommand ?? execCommand;
+    const logPath = join(config.agentGuardHome, 'feed-cron.log');
+    try {
+      const result = await runCommand(config.nodeExecutable, args, undefined, {
+        env: { ...process.env, AGENTGUARD_HOME: config.agentGuardHome },
+        timeoutMs: 300_000,
+      });
+      const output = `${result.stdout}${result.stderr}`;
+      if (output) await appendFile(logPath, output, { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      await appendFile(logPath, `${error instanceof Error ? error.message : String(error)}\n`, { encoding: 'utf8', mode: 0o600 });
+      throw error;
+    }
+    return { ran: true, reason: 'executed' };
+  } finally {
+    await lock.close().catch(() => undefined);
+    await rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function cronHasOccurrenceBetween(expression: string, timezone: string, after: Date, through: Date): boolean {
+  const schedule = validateCronExpression(expression);
+  const cron = new Cron(schedule, { timezone, paused: true });
+  const next = cron.nextRun(after);
+  return Boolean(next && next.getTime() <= through.getTime());
+}
+
+function readWindowsCronTaskConfig(configPath: string): WindowsCronTaskConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Could not read Windows cron config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Invalid Windows cron config ${configPath}.`);
+  }
+  const value = parsed as Partial<WindowsCronTaskConfig>;
+  if (
+    value.version !== 1 ||
+    typeof value.name !== 'string' || !value.name ||
+    typeof value.cronExpression !== 'string' ||
+    typeof value.timezone !== 'string' || !value.timezone ||
+    typeof value.quiet !== 'boolean' ||
+    typeof value.agentGuardHome !== 'string' || !value.agentGuardHome ||
+    typeof value.nodeExecutable !== 'string' || !value.nodeExecutable ||
+    typeof value.cliEntrypoint !== 'string' || !value.cliEntrypoint
+  ) {
+    throw new Error(`Invalid Windows cron config ${configPath}.`);
+  }
+  validateCronExpression(value.cronExpression);
+  return value as WindowsCronTaskConfig;
+}
+
+function isUnreadableWindowsCronConfigError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith('Could not read Windows cron config ') || message.startsWith('Invalid Windows cron config ');
+}
+
+function readWindowsCronTaskState(statePath: string): WindowsCronTaskState | null {
+  if (!existsSync(statePath)) return null;
+  try {
+    const value = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<WindowsCronTaskState>;
+    if (value.version !== 1 || typeof value.lastCheckedMinute !== 'string' || !Number.isFinite(Date.parse(value.lastCheckedMinute))) {
+      throw new Error('invalid state');
+    }
+    return value as WindowsCronTaskState;
+  } catch (error) {
+    throw new Error(`Could not read Windows cron state ${statePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function installThreatFeedCron(
   options: {
     name: string;
@@ -105,12 +300,17 @@ export async function installThreatFeedCron(
   adapters: {
     gateway?: OpenClawGatewayOptions;
     runCommand?: CommandRunner;
+    platform?: NodeJS.Platform;
+    nodeExecutable?: string;
+    cliEntrypoint?: string;
+    now?: () => Date;
   } = {}
 ): Promise<OpenClawCronInstallResult> {
   const backend = options.backend ?? 'auto';
+  const platform = adapters.platform ?? process.platform;
   if (backend === 'auto' && !options.agentHost) {
     throw new Error(
-      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw|dsh>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system`.'
+      'Cron target auto requires a saved agent host. Run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw|dsh>` first, or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, `--cron-target system`, or `--cron-target windows`.'
     );
   }
   if (backend === 'openclaw' && options.agentHost && options.agentHost !== 'openclaw') {
@@ -118,6 +318,20 @@ export async function installThreatFeedCron(
       `Cron target openclaw conflicts with saved agent host "${options.agentHost}". ` +
       'Run `agentguard init --agent openclaw` first, omit `--cron-target` to use auto, or choose a different cron target.'
     );
+  }
+  if (backend === 'windows' || (
+    backend === 'auto' &&
+    platform === 'win32' &&
+    options.agentHost !== 'openclaw' &&
+    options.agentHost !== 'qclaw' &&
+    options.agentHost !== 'hermes'
+  )) {
+    return installWindowsThreatFeedTask(options, {
+      runCommand: adapters.runCommand,
+      nodeExecutable: adapters.nodeExecutable,
+      cliEntrypoint: adapters.cliEntrypoint,
+      now: adapters.now,
+    });
   }
   if (backend === 'system' || (backend === 'auto' && options.agentHost !== 'openclaw' && options.agentHost !== 'qclaw' && options.agentHost !== 'hermes')) {
     return installSystemThreatFeedCron(options, adapters.runCommand);
@@ -161,7 +375,463 @@ export async function installThreatFeedCron(
     return result;
   }
 
-  throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, or system.');
+  throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, system, or windows.');
+}
+
+async function installWindowsThreatFeedTask(
+  options: {
+    name: string;
+    cronExpression: string;
+    quiet: boolean;
+    force: boolean;
+    agentGuardHome?: string;
+    timezone?: string;
+  },
+  adapters: {
+    runCommand?: CommandRunner;
+    nodeExecutable?: string;
+    cliEntrypoint?: string;
+    now?: () => Date;
+  } = {}
+): Promise<OpenClawCronInstallResult> {
+  const runCommand = adapters.runCommand ?? execCommand;
+  const schedule = validateCronExpression(options.cronExpression);
+  const timezone = options.timezone ?? localTimeZone();
+  new Cron(schedule, { timezone, paused: true });
+  const home = validateWindowsTaskActionPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
+  const nodeExecutable = validateWindowsTaskActionPath(adapters.nodeExecutable ?? process.execPath, 'Node executable');
+  const cliEntrypoint = validateWindowsTaskActionPath(adapters.cliEntrypoint ?? join(__dirname, '..', 'cli.js'), 'AgentGuard CLI entrypoint');
+  const taskName = `AgentGuard-${sanitizeCronJobId(options.name)}`;
+  const jobId = sanitizeCronJobId(options.name);
+  const scriptsDir = join(home, 'scripts');
+  const configPath = join(scriptsDir, `${jobId}.windows-cron.json`);
+  const xmlPath = join(scriptsDir, `${jobId}.task.xml`);
+  let exists = true;
+  let existingXml = '';
+  try {
+    existingXml = (await runCommand('schtasks.exe', ['/Query', '/TN', taskName, '/XML', '/HRESULT'])).stdout;
+  } catch (error) {
+    if (isWindowsTaskNotFoundError(error)) {
+      exists = false;
+    } else {
+      throw new Error(`Could not query Windows scheduled task "${taskName}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  let userSid: string | undefined;
+  let existingWasEnabled = true;
+  if (exists) {
+    assertManagedWindowsTaskEnvelope(existingXml, configPath, options.name);
+    userSid = await currentWindowsUserSid(runCommand);
+    assertManagedWindowsTaskEnvelope(existingXml, configPath, options.name, userSid);
+    existingWasEnabled = windowsTaskEnabled(existingXml);
+    if (!options.force) {
+      const existingConfig = readManagedWindowsTaskConfig(existingXml, configPath, options.name, userSid);
+      return {
+        name: options.name,
+        schedule: existingConfig.cronExpression,
+        timezone: existingConfig.timezone,
+        created: false,
+        backend: 'windows-task-scheduler',
+        command: threatFeedCommand(existingConfig.quiet),
+        script: configPath,
+      };
+    }
+    try {
+      readManagedWindowsTaskConfig(existingXml, configPath, options.name, userSid);
+    } catch (error) {
+      if (!isUnreadableWindowsCronConfigError(error)) throw error;
+      assertManagedWindowsTaskAction(existingXml, configPath, options.name, nodeExecutable, cliEntrypoint);
+    }
+  }
+
+  userSid ??= await currentWindowsUserSid(runCommand);
+  await mkdir(scriptsDir, { recursive: true });
+  const previousConfig = existsSync(configPath) ? readFileSync(configPath) : null;
+  const previousXml = existsSync(xmlPath) ? readFileSync(xmlPath) : null;
+  let disabledForReplacement = false;
+  let registeredReplacement = false;
+  try {
+    if (exists && options.force) {
+      await runCommand('schtasks.exe', ['/Change', '/TN', taskName, '/Disable']);
+      disabledForReplacement = true;
+      await stopWindowsTaskInstance(runCommand, taskName, `${configPath}.lock`);
+    }
+    await atomicWritePrivateFile(configPath, `${JSON.stringify({
+      version: 1,
+      name: options.name,
+      cronExpression: schedule,
+      timezone,
+      quiet: options.quiet,
+      agentGuardHome: home,
+      nodeExecutable,
+      cliEntrypoint,
+    }, null, 2)}\n`);
+    await atomicWritePrivateFile(xmlPath, encodeUtf16LeWithBom(windowsTaskXml({
+      userSid,
+      nodeExecutable,
+      cliEntrypoint,
+      configPath,
+      startBoundary: nextMinuteBoundary(adapters.now?.() ?? new Date()),
+    })));
+    await runCommand('schtasks.exe', [
+      '/Create',
+      '/TN',
+      taskName,
+      '/XML',
+      xmlPath,
+      '/F',
+      '/HRESULT',
+    ]);
+    registeredReplacement = true;
+    if (options.force) {
+      await Promise.all([
+        rm(`${configPath}.state.json`, { force: true }),
+        rm(`${configPath}.lock`, { force: true }),
+      ]);
+    }
+  } catch (error) {
+    let rollbackError: unknown;
+    if (registeredReplacement) {
+      try {
+        await restoreRegisteredWindowsTask(runCommand, taskName, xmlPath, exists ? existingXml : null);
+      } catch (taskRollbackError) {
+        rollbackError = taskRollbackError;
+      }
+    }
+    await Promise.all([
+      restoreWindowsTaskArtifact(configPath, previousConfig),
+      restoreWindowsTaskArtifact(xmlPath, previousXml),
+    ]);
+    if (!registeredReplacement && disabledForReplacement && existingWasEnabled) {
+      await runCommand('schtasks.exe', ['/Change', '/TN', taskName, '/Enable']).catch(() => undefined);
+    }
+    if (rollbackError) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; could not restore the previously registered Windows task: ` +
+        `${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    throw error;
+  }
+  return {
+    name: options.name,
+    schedule,
+    timezone,
+    created: true,
+    backend: 'windows-task-scheduler',
+    command: threatFeedCommand(options.quiet),
+    script: configPath,
+  };
+}
+
+async function restoreRegisteredWindowsTask(
+  runCommand: CommandRunner,
+  taskName: string,
+  xmlPath: string,
+  previousTaskXml: string | null,
+): Promise<void> {
+  if (previousTaskXml === null) {
+    await runCommand('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
+    return;
+  }
+  const rollbackPath = `${xmlPath}.rollback-${process.pid}-${randomUUID()}`;
+  try {
+    const utf16Xml = previousTaskXml.replace(
+      /^(\s*<\?xml\s+[^>]*encoding=["'])(?:UTF-8|UTF-16)(["'][^>]*\?>)/i,
+      '$1UTF-16$2',
+    );
+    await writeFile(rollbackPath, encodeUtf16LeWithBom(utf16Xml), { mode: 0o600 });
+    await runCommand('schtasks.exe', ['/Create', '/TN', taskName, '/XML', rollbackPath, '/F', '/HRESULT']);
+  } finally {
+    await rm(rollbackPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function restoreWindowsTaskArtifact(path: string, previous: Buffer | null): Promise<void> {
+  if (previous) {
+    await writeFile(path, previous, { mode: 0o600 });
+  } else {
+    await rm(path, { force: true });
+  }
+}
+
+async function atomicWritePrivateFile(path: string, content: string | Buffer): Promise<void> {
+  const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeFile(temporaryPath, content, { mode: 0o600 });
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function validateWindowsTaskActionPath(value: string, label: string): string {
+  if (!isAbsolute(value) && !win32.isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute path for Windows Task Scheduler installation.`);
+  }
+  if (/[\u0000-\u001F\u007F"%]/.test(value)) {
+    throw new Error(`${label} must not contain quotes, %, or control characters for Windows Task Scheduler installation.`);
+  }
+  return value;
+}
+
+function readManagedWindowsTaskConfig(
+  xml: string,
+  configPath: string,
+  expectedName: string,
+  expectedUserSid?: string,
+): WindowsCronTaskConfig {
+  assertManagedWindowsTaskEnvelope(xml, configPath, expectedName, expectedUserSid);
+  const config = readWindowsCronTaskConfig(configPath);
+  if (config.name !== expectedName) {
+    throw new Error(`Windows scheduled task "AgentGuard-${sanitizeCronJobId(expectedName)}" has mismatched AgentGuard metadata.`);
+  }
+  validateWindowsTaskActionPath(config.agentGuardHome, 'Managed AGENTGUARD_HOME');
+  validateWindowsTaskActionPath(config.nodeExecutable, 'Managed Node executable');
+  validateWindowsTaskActionPath(config.cliEntrypoint, 'Managed AgentGuard CLI entrypoint');
+  if (
+    join(config.agentGuardHome, 'scripts', `${sanitizeCronJobId(expectedName)}.windows-cron.json`) !== configPath
+  ) {
+    throw new Error(`Windows scheduled task "AgentGuard-${sanitizeCronJobId(expectedName)}" has mismatched AgentGuard action metadata.`);
+  }
+  assertManagedWindowsTaskAction(xml, configPath, expectedName, config.nodeExecutable, config.cliEntrypoint);
+  return config;
+}
+
+function assertManagedWindowsTaskAction(
+  xml: string,
+  configPath: string,
+  expectedName: string,
+  nodeExecutable: string,
+  cliEntrypoint: string,
+): void {
+  const decoded = decodeXmlText(xml);
+  const execBlocks = [...decoded.matchAll(/<Exec(?:\s[^>]*)?>([\s\S]*?)<\/Exec>/gi)];
+  const command = execBlocks[0]?.[1]?.match(/<Command>([\s\S]*?)<\/Command>/i)?.[1]?.trim();
+  const argumentsValue = execBlocks[0]?.[1]?.match(/<Arguments>([\s\S]*?)<\/Arguments>/i)?.[1]?.trim();
+  const expectedArguments = `${windowsCommandLineQuote(cliEntrypoint)} windows-cron-run --config ${windowsCommandLineQuote(configPath)}`;
+  if (execBlocks.length !== 1 || command !== nodeExecutable || argumentsValue !== expectedArguments) {
+    throw new Error(`Windows scheduled task "AgentGuard-${sanitizeCronJobId(expectedName)}" has mismatched AgentGuard action metadata.`);
+  }
+}
+
+function assertManagedWindowsTaskEnvelope(
+  xml: string,
+  configPath: string,
+  expectedName: string,
+  expectedUserSid?: string,
+): void {
+  const decoded = decodeXmlText(xml);
+  const expectedAction = ` windows-cron-run --config ${windowsCommandLineQuote(configPath)}`;
+  const principals = [...decoded.matchAll(/<Principal(?:\s[^>]*)?>([\s\S]*?)<\/Principal>/gi)];
+  const principal = principals[0]?.[1] ?? '';
+  const logonType = principal.match(/<LogonType>([\s\S]*?)<\/LogonType>/i)?.[1]?.trim();
+  const runLevel = principal.match(/<RunLevel>([\s\S]*?)<\/RunLevel>/i)?.[1]?.trim();
+  const userSid = principal.match(/<UserId>([\s\S]*?)<\/UserId>/i)?.[1]?.trim();
+  if (
+    !decoded.includes(expectedAction) ||
+    principals.length !== 1 ||
+    logonType !== 'InteractiveToken' ||
+    runLevel !== 'LeastPrivilege' ||
+    (expectedUserSid !== undefined && userSid !== expectedUserSid)
+  ) {
+    throw new Error(`Windows scheduled task "AgentGuard-${sanitizeCronJobId(expectedName)}" is not a managed AgentGuard task.`);
+  }
+}
+
+function windowsTaskEnabled(xml: string): boolean {
+  const decoded = decodeXmlText(xml);
+  const settings = decoded.match(/<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/i)?.[1];
+  const enabled = settings?.match(/<Enabled>(true|false)<\/Enabled>/i)?.[1];
+  return enabled?.toLowerCase() !== 'false';
+}
+
+async function stopWindowsTaskInstance(
+  runCommand: CommandRunner,
+  taskName: string,
+  lockPath: string,
+): Promise<void> {
+  const initialLockStat = await stat(lockPath).catch(() => null);
+  const hasFreshLock = Boolean(initialLockStat && Date.now() - initialLockStat.mtimeMs <= 10 * 60_000);
+  const initialLock = hasFreshLock
+    ? readWindowsCronRunnerLock(lockPath)
+    : null;
+  if (hasFreshLock && !initialLock) {
+    throw new Error(`Could not stop active Windows scheduled task "${taskName}": runner lock metadata is incomplete or invalid.`);
+  }
+  let processTreeStopped = false;
+  if (initialLock) {
+    try {
+      await verifyWindowsRunnerProcess(runCommand, lockPath, initialLock);
+      await runCommand('taskkill.exe', ['/PID', String(initialLock.pid), '/T', '/F']);
+      processTreeStopped = true;
+    } catch (error) {
+      throw new Error(`Could not stop active Windows scheduled task "${taskName}" process tree: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  try {
+    await runCommand('schtasks.exe', ['/End', '/TN', taskName]);
+  } catch (error) {
+    if (processTreeStopped) {
+      await rm(lockPath, { force: true });
+      return;
+    }
+    const lockStat = await stat(lockPath).catch(() => null);
+    if (!lockStat) return;
+    if (Date.now() - lockStat.mtimeMs > 10 * 60_000) {
+      await rm(lockPath, { force: true });
+      return;
+    }
+    throw new Error(`Could not stop active Windows scheduled task "${taskName}": ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await rm(lockPath, { force: true });
+}
+
+async function verifyWindowsRunnerProcess(
+  runCommand: CommandRunner,
+  lockPath: string,
+  lock: WindowsCronRunnerLock,
+): Promise<void> {
+  const configPath = lockPath.endsWith('.lock') ? lockPath.slice(0, -'.lock'.length) : '';
+  const config = readWindowsCronTaskConfig(configPath);
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$process = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId = ' + $env:AGENTGUARD_RUNNER_PID)",
+    "if ($null -eq $process) { throw 'Runner process was not found.' }",
+    '$created = [DateTimeOffset]$process.CreationDate',
+    '[pscustomobject]@{ pid = [int]$process.ProcessId; executablePath = [string]$process.ExecutablePath; commandLine = [string]$process.CommandLine; creationTimeMs = $created.ToUnixTimeMilliseconds() } | ConvertTo-Json -Compress',
+  ].join('; ');
+  const result = await runCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], undefined, {
+    env: { ...process.env, AGENTGUARD_RUNNER_PID: String(lock.pid) },
+    timeoutMs: 10_000,
+  });
+  let identity: Partial<WindowsRunnerProcessIdentity>;
+  try {
+    identity = JSON.parse(result.stdout) as Partial<WindowsRunnerProcessIdentity>;
+  } catch {
+    throw new Error('Windows runner process identity query returned invalid JSON.');
+  }
+  const expectedArguments = `${windowsCommandLineQuote(config.cliEntrypoint)} windows-cron-run --config ${windowsCommandLineQuote(configPath)}`;
+  if (
+    identity.pid !== lock.pid ||
+    typeof identity.executablePath !== 'string' ||
+    win32.normalize(identity.executablePath).toLowerCase() !== win32.normalize(config.nodeExecutable).toLowerCase() ||
+    typeof identity.commandLine !== 'string' || !identity.commandLine.includes(expectedArguments) ||
+    typeof identity.creationTimeMs !== 'number' ||
+    !Number.isFinite(identity.creationTimeMs) ||
+    Math.abs(identity.creationTimeMs - lock.startedAtMs) > 120_000
+  ) {
+    throw new Error(`PID ${lock.pid} does not match the managed Windows runner.`);
+  }
+}
+
+function readWindowsCronRunnerLock(lockPath: string): WindowsCronRunnerLock | null {
+  try {
+    const value = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<WindowsCronRunnerLock>;
+    if (
+      value.version !== 1 ||
+      !Number.isSafeInteger(value.pid) || (value.pid ?? 0) <= 0 ||
+      typeof value.startedAtMs !== 'number' || !Number.isFinite(value.startedAtMs)
+    ) {
+      return null;
+    }
+    return value as WindowsCronRunnerLock;
+  } catch {
+    return null;
+  }
+}
+
+async function currentWindowsUserSid(runCommand: CommandRunner): Promise<string> {
+  const sidResult = await runCommand('whoami.exe', ['/User', '/FO', 'CSV', '/NH']);
+  const userSid = sidResult.stdout.match(/S-\d-\d+(?:-\d+)+/i)?.[0];
+  if (!userSid) {
+    throw new Error('Could not determine the current Windows user SID for Task Scheduler registration.');
+  }
+  return userSid;
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&gt;', '>')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&amp;', '&');
+}
+
+function isWindowsTaskNotFoundError(error: unknown): boolean {
+  const exitCode = (error as { exitCode?: unknown } | null)?.exitCode;
+  return exitCode === 0x80070002 || exitCode === -2147024894 || exitCode === 2;
+}
+
+function windowsTaskXml(options: {
+  userSid: string;
+  nodeExecutable: string;
+  cliEntrypoint: string;
+  configPath: string;
+  startBoundary: string;
+}): string {
+  const argumentsValue = `${windowsCommandLineQuote(options.cliEntrypoint)} windows-cron-run --config ${windowsCommandLineQuote(options.configPath)}`;
+  return [
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '  <Triggers>',
+    '    <TimeTrigger>',
+    `      <StartBoundary>${xmlEscape(options.startBoundary)}</StartBoundary>`,
+    '      <Enabled>true</Enabled>',
+    '      <Repetition>',
+    '        <Interval>PT1M</Interval>',
+    '        <StopAtDurationEnd>false</StopAtDurationEnd>',
+    '      </Repetition>',
+    '    </TimeTrigger>',
+    '  </Triggers>',
+    '  <Principals>',
+    '    <Principal id="Author">',
+    `      <UserId>${xmlEscape(options.userSid)}</UserId>`,
+    '      <LogonType>InteractiveToken</LogonType>',
+    '      <RunLevel>LeastPrivilege</RunLevel>',
+    '    </Principal>',
+    '  </Principals>',
+    '  <Settings>',
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>',
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
+    '    <StartWhenAvailable>true</StartWhenAvailable>',
+    '    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>',
+    '    <Enabled>true</Enabled>',
+    '  </Settings>',
+    '  <Actions Context="Author">',
+    '    <Exec>',
+    `      <Command>${xmlEscape(options.nodeExecutable)}</Command>`,
+    `      <Arguments>${xmlEscape(argumentsValue)}</Arguments>`,
+    '    </Exec>',
+    '  </Actions>',
+    '</Task>',
+    '',
+  ].join('\r\n');
+}
+
+function encodeUtf16LeWithBom(value: string): Buffer {
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(value, 'utf16le')]);
+}
+
+function nextMinuteBoundary(now: Date): string {
+  const next = new Date(Math.floor(now.getTime() / 60_000) * 60_000 + 60_000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}T${pad(next.getHours())}:${pad(next.getMinutes())}:00`;
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function windowsCommandLineQuote(value: string): string {
+  return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
 export async function removeThreatFeedCron(
@@ -175,14 +845,20 @@ export async function removeThreatFeedCron(
   adapters: {
     gateway?: OpenClawGatewayOptions;
     runCommand?: CommandRunner;
+    platform?: NodeJS.Platform;
   } = {}
 ): Promise<ThreatFeedCronRemovalResult[]> {
   const backend = options.backend ?? 'auto';
+  const platform = adapters.platform ?? process.platform;
   if (backend === 'all') {
-    return removeThreatFeedCronFromBackends(options, ['system', 'hermes', 'openclaw', 'openclaw-gateway', 'qclaw-gateway'], adapters);
+    const localBackend: ResolvedCronBackend = platform === 'win32' ? 'windows-task-scheduler' : 'system';
+    return removeThreatFeedCronFromBackends(options, [localBackend, 'hermes', 'openclaw', 'openclaw-gateway', 'qclaw-gateway'], adapters);
   }
   if (backend === 'system') {
     return [await removeSystemThreatFeedCron(options, adapters.runCommand)];
+  }
+  if (backend === 'windows') {
+    return [await removeWindowsThreatFeedTask(options, adapters.runCommand)];
   }
   if (backend === 'hermes') {
     return [await removeHermesThreatFeedCron(options, adapters.runCommand)];
@@ -194,7 +870,7 @@ export async function removeThreatFeedCron(
     return [await removeGatewayThreatFeedCron(options, qclawGatewayOptions(adapters.gateway), 'qclaw-gateway')];
   }
 
-  const targets: ResolvedCronBackend[] = ['system'];
+  const targets: ResolvedCronBackend[] = platform === 'win32' ? ['windows-task-scheduler'] : ['system'];
   if (options.agentHost === 'hermes') targets.push('hermes');
   if (options.agentHost === 'openclaw') targets.push('openclaw', 'openclaw-gateway');
   if (options.agentHost === 'qclaw') targets.push('qclaw-gateway');
@@ -217,6 +893,8 @@ async function removeThreatFeedCronFromBackends(
   for (const backend of backends) {
     if (backend === 'system') {
       results.push(await removeSystemThreatFeedCron(options, adapters.runCommand));
+    } else if (backend === 'windows-task-scheduler') {
+      results.push(await removeWindowsThreatFeedTask(options, adapters.runCommand));
     } else if (backend === 'hermes') {
       results.push(await removeHermesThreatFeedCron(options, adapters.runCommand));
     } else if (backend === 'openclaw') {
@@ -228,6 +906,155 @@ async function removeThreatFeedCronFromBackends(
     }
   }
   return results;
+}
+
+async function removeWindowsThreatFeedTask(
+  options: {
+    name: string;
+    agentGuardHome?: string;
+  },
+  runCommand: CommandRunner = execCommand,
+): Promise<ThreatFeedCronRemovalResult> {
+  const taskName = `AgentGuard-${sanitizeCronJobId(options.name)}`;
+  const home = validateCronFilesystemPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
+  const configPath = join(home, 'scripts', `${sanitizeCronJobId(options.name)}.windows-cron.json`);
+  let existingWasEnabled = true;
+  try {
+    const xml = (await runCommand('schtasks.exe', ['/Query', '/TN', taskName, '/XML', '/HRESULT'])).stdout;
+    assertManagedWindowsTaskEnvelope(xml, configPath, options.name);
+    const userSid = await currentWindowsUserSid(runCommand);
+    readManagedWindowsTaskConfig(xml, configPath, options.name, userSid);
+    existingWasEnabled = windowsTaskEnabled(xml);
+  } catch (error) {
+    if (isWindowsTaskNotFoundError(error)) {
+      try {
+        await cleanupWindowsTaskArtifacts(home, options.name);
+        return { name: options.name, backend: 'windows-task-scheduler', removed: false };
+      } catch (cleanupError) {
+        return {
+          name: options.name,
+          backend: 'windows-task-scheduler',
+          removed: false,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        };
+      }
+    }
+    return {
+      name: options.name,
+      backend: 'windows-task-scheduler',
+      removed: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  let disabledForRemoval = false;
+  let taskDeleted = false;
+  try {
+    await runCommand('schtasks.exe', ['/Change', '/TN', taskName, '/Disable']);
+    disabledForRemoval = true;
+    await stopWindowsTaskInstance(runCommand, taskName, `${configPath}.lock`);
+    await runCommand('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
+    taskDeleted = true;
+    await cleanupWindowsTaskArtifacts(home, options.name);
+    return { name: options.name, backend: 'windows-task-scheduler', removed: true };
+  } catch (error) {
+    if (isWindowsTaskNotFoundError(error)) {
+      try {
+        await cleanupWindowsTaskArtifacts(home, options.name);
+        return { name: options.name, backend: 'windows-task-scheduler', removed: false };
+      } catch (cleanupError) {
+        error = cleanupError;
+      }
+    }
+    if (disabledForRemoval && !taskDeleted && existingWasEnabled) {
+      await runCommand('schtasks.exe', ['/Change', '/TN', taskName, '/Enable']).catch(() => undefined);
+    }
+    return {
+      name: options.name,
+      backend: 'windows-task-scheduler',
+      removed: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function cleanupWindowsTaskArtifacts(home: string, name: string): Promise<void> {
+  const scriptsDir = join(home, 'scripts');
+  const jobId = sanitizeCronJobId(name);
+  let entries: string[];
+  try {
+    entries = await readdir(scriptsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const prefixes = [
+    `${jobId}.windows-cron.json`,
+    `${jobId}.task.xml`,
+  ];
+  await Promise.all(entries
+    .filter((entry) => prefixes.some((prefix) => entry === prefix || entry.startsWith(`${prefix}.`)))
+    .map((entry) => rm(join(scriptsDir, entry), { force: true })));
+}
+
+export async function inspectWindowsThreatFeedTask(
+  options: {
+    name: string;
+    agentGuardHome?: string;
+  },
+  adapters: { runCommand?: CommandRunner } = {},
+): Promise<SystemThreatFeedCronStatus> {
+  const runCommand = adapters.runCommand ?? execCommand;
+  const taskName = `AgentGuard-${sanitizeCronJobId(options.name)}`;
+  try {
+    const xml = (await runCommand('schtasks.exe', ['/Query', '/TN', taskName, '/XML', '/HRESULT'])).stdout;
+    const home = validateCronFilesystemPath(options.agentGuardHome ?? join(homedir(), '.agentguard'), 'AGENTGUARD_HOME');
+    const configPath = join(home, 'scripts', `${sanitizeCronJobId(options.name)}.windows-cron.json`);
+    assertManagedWindowsTaskEnvelope(xml, configPath, options.name);
+    const userSid = await currentWindowsUserSid(runCommand);
+    const config = readManagedWindowsTaskConfig(xml, configPath, options.name, userSid);
+    return {
+      name: options.name,
+      installed: true,
+      cronExpression: config.cronExpression,
+    };
+  } catch (error) {
+    if (isWindowsTaskNotFoundError(error)) {
+      return { name: options.name, installed: false };
+    }
+    return {
+      name: options.name,
+      installed: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function inspectThreatFeedCron(
+  options: {
+    name: string;
+    backend?: 'auto' | 'system' | 'windows';
+    agentHost?: CronAgentHost;
+    agentGuardHome?: string;
+  },
+  adapters: {
+    runCommand?: CommandRunner;
+    platform?: NodeJS.Platform;
+  } = {},
+): Promise<ThreatFeedCronStatus> {
+  const backend = options.backend ?? 'auto';
+  const platform = adapters.platform ?? process.platform;
+  const useWindows = backend === 'windows' || (backend === 'auto' && platform === 'win32');
+  if (useWindows) {
+    return {
+      ...await inspectWindowsThreatFeedTask(options, { runCommand: adapters.runCommand }),
+      backend: 'windows-task-scheduler',
+    };
+  }
+  return {
+    ...await inspectSystemThreatFeedCron(options, { runCommand: adapters.runCommand }),
+    backend: 'system',
+  };
 }
 
 export async function installOpenClawThreatFeedCron(
@@ -939,41 +1766,82 @@ function findAgentGuardCronBlocks(
   return { ranges };
 }
 
-function execCommand(command: string, args: string[], input?: string): Promise<CommandResult> {
+export function execCommand(command: string, args: string[], input?: string, options: CommandRunnerOptions = {}): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: options.env ?? process.env,
+    });
     let settled = false;
+    let timeoutError: Error | null = null;
+    let forceKillTimeout: NodeJS.Timeout | undefined;
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
       fn();
     };
+    const timeoutMs = options.timeoutMs ?? 10000;
     const timeout = setTimeout(() => {
+      timeoutError = new Error(`${command} ${args.join(' ')} timed out after ${timeoutMs}ms`);
       child.kill('SIGTERM');
-      finish(() => reject(new Error(`${command} ${args.join(' ')} timed out after 10000ms`)));
-    }, 10000);
-    let stdout = '';
-    let stderr = '';
+      forceKillTimeout = setTimeout(() => child.kill('SIGKILL'), 5_000);
+    }, timeoutMs);
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+      stdoutChunks.push(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderrChunks.push(chunk);
     });
     child.on('error', (err) => {
       finish(() => reject(err));
     });
     child.on('close', (code) => {
+      const stdout = decodeCommandOutput(Buffer.concat(stdoutChunks));
+      const stderr = decodeCommandOutput(Buffer.concat(stderrChunks));
+      if (timeoutError) {
+        finish(() => reject(timeoutError!));
+        return;
+      }
       if (code === 0) {
         finish(() => resolve({ stdout, stderr }));
         return;
       }
-      finish(() => reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}: ${stderr || stdout}`.trim())));
+      finish(() => reject(Object.assign(
+        new Error(`${command} ${args.join(' ')} failed with exit code ${code}: ${stderr || stdout}`.trim()),
+        { exitCode: code },
+      )));
     });
     if (input) child.stdin.write(input);
     child.stdin.end();
   });
+}
+
+function decodeCommandOutput(value: Buffer): string {
+  if (value.length >= 2 && value[0] === 0xff && value[1] === 0xfe) {
+    return value.subarray(2).toString('utf16le');
+  }
+  if (value.length >= 2 && value[0] === 0xfe && value[1] === 0xff) {
+    const littleEndian = Buffer.from(value.subarray(2));
+    if (littleEndian.length % 2 !== 0) return value.toString('utf8');
+    littleEndian.swap16();
+    return littleEndian.toString('utf16le');
+  }
+  if (value.length >= 3 && value[0] === 0xef && value[1] === 0xbb && value[2] === 0xbf) {
+    return value.subarray(3).toString('utf8');
+  }
+  const sampleLength = Math.min(value.length - (value.length % 2), 200);
+  let oddNulls = 0;
+  for (let index = 1; index < sampleLength; index += 2) {
+    if (value[index] === 0) oddNulls += 1;
+  }
+  if (sampleLength >= 4 && oddNulls >= sampleLength / 4) {
+    return value.toString('utf16le');
+  }
+  return value.toString('utf8');
 }
 
 async function removeOpenClawCronJobs(

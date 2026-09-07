@@ -169,6 +169,11 @@ Cross-reference remote IPs/domains against:
 # OpenClaw cron jobs
 openclaw cron list 2>/dev/null
 
+# Windows Task Scheduler (run on Windows)
+schtasks.exe /Query /FO CSV /V
+# For each AgentGuard or suspicious task, inspect the authoritative XML fields
+schtasks.exe /Query /TN "<task-name>" /XML
+
 # System crontab
 crontab -l 2>/dev/null
 
@@ -186,6 +191,9 @@ ls -la ~/.config/systemd/user/ 2>/dev/null
 
 Scan cron command bodies for:
 
+On Windows, inspect each selected task's XML `UserId`, `LogonType`, `RunLevel`,
+`Command`, and `Arguments`. Do not infer `RunLevel` from localized verbose CSV.
+
 | Pattern | Description | Severity |
 |---------|-------------|----------|
 | `curl.*\|\s*(bash\|sh)` | curl pipe to shell | CRITICAL |
@@ -202,6 +210,8 @@ Scan cron command bodies for:
 | Unknown cron job touching `$OC/` as root | HIGH |
 | Cron job downloading from external URL | HIGH |
 | Cron job not present in `openclaw cron list` but touches `$OC/` | MEDIUM |
+| Unknown Windows scheduled task touching AgentGuard or agent directories | MEDIUM |
+| Windows task runs as SYSTEM or with highest privileges without a documented need | HIGH |
 
 ---
 

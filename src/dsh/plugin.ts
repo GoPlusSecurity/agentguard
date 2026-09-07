@@ -25,10 +25,10 @@ import {
 import { normalizeDshOwnerPolicies } from './owner-policy.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import {
-  inspectSystemThreatFeedCron,
+  inspectThreatFeedCron,
   installThreatFeedCron,
   removeThreatFeedCron,
-  type SystemThreatFeedCronStatus,
+  type ThreatFeedCronStatus,
   type ThreatFeedCronRemovalResult,
   validateCronExpression,
 } from '../feed/cron.js';
@@ -187,7 +187,7 @@ export type AgentGuardDshSubscribeToolResult = {
   cronName: string;
   cronExpression: string;
   selfCheck: boolean;
-  backend: 'system';
+  backend: 'system' | 'windows-task-scheduler';
   created: boolean;
   modelSummary: string;
 };
@@ -210,6 +210,7 @@ export type AgentGuardDshSubscriptionStatusToolArgs = Record<string, never>;
 
 export type AgentGuardDshSubscriptionStatusToolResult = {
   subscribed: boolean;
+  backend: 'system' | 'windows-task-scheduler';
   subscriptionId?: string;
   targetAgentId?: string;
   currentAgentIsTarget: boolean;
@@ -226,8 +227,8 @@ export interface AgentGuardDshSubscriptionStatusDependencies {
   agentGuardHome?: () => string;
   loadSubscription?: (home: string) => Promise<DshThreatFeedSubscription | null>;
   inspectCron?: (
-    options: { name: string },
-  ) => Promise<SystemThreatFeedCronStatus>;
+    options: { name: string; backend: 'auto'; agentHost: 'dsh'; agentGuardHome: string },
+  ) => Promise<ThreatFeedCronStatus>;
   listNotifications?: (
     options: { subscriptionId: string; agentId: string },
     home: string,
@@ -248,7 +249,7 @@ export interface AgentGuardDshUnsubscribeDependencies {
   loadSubscription?: (home: string) => Promise<DshThreatFeedSubscription | null>;
   removeCron?: (options: {
     name: string;
-    backend: 'system';
+    backend: 'auto';
     agentHost: 'dsh';
     agentGuardHome: string;
   }) => Promise<ThreatFeedCronRemovalResult[]>;
@@ -274,7 +275,7 @@ export function createAgentGuardDshSubscribeTool(
   return {
     name: 'agentguard_dsh_subscribe',
     description:
-      'Subscribe the current DSH session to AgentGuard threat intelligence using a persistent system cron poller. ' +
+      'Subscribe the current DSH session to AgentGuard threat intelligence using the platform local scheduler. ' +
       'By default this polls without automatically scanning local artifacts; set selfCheck to true to enable scheduled self-checks.',
     parameters: {
       type: 'object',
@@ -357,7 +358,7 @@ export function createAgentGuardDshSubscribeTool(
         cronExpression: input.cronExpression,
         quiet: input.selfCheck,
         force: input.force,
-        backend: 'system',
+        backend: 'auto',
         agentHost: 'dsh',
         agentGuardHome: home,
       });
@@ -397,7 +398,7 @@ export function createAgentGuardDshSubscribeTool(
           const removeCron = dependencies.removeCron ?? removeThreatFeedCron;
           await removeCron({
             name: cronResult.name,
-            backend: 'system',
+            backend: 'auto',
             agentHost: 'dsh',
             agentGuardHome: home,
           }).catch(() => undefined);
@@ -409,17 +410,23 @@ export function createAgentGuardDshSubscribeTool(
       const selfCheckState = input.selfCheck
         ? 'with automatic self-check enabled'
         : 'without automatic self-check';
+      const backend = cronResult.backend === 'windows-task-scheduler'
+        ? 'windows-task-scheduler'
+        : 'system';
+      const backendLabel = backend === 'windows-task-scheduler'
+        ? 'Windows Task Scheduler task'
+        : 'system cron';
       return {
         subscriptionId: subscription.subscriptionId,
         targetAgentId: subscription.agentId,
         cronName: subscription.cronName,
         cronExpression: subscription.cronExpression,
         selfCheck: subscription.selfCheck,
-        backend: 'system',
+        backend,
         created: cronResult.created,
         modelSummary:
           `AgentGuard threat-feed subscription ${state} for this DSH session. ` +
-          `The system cron runs every ${subscription.cronExpression} ${selfCheckState}.`,
+          `The ${backendLabel} runs every ${subscription.cronExpression} ${selfCheckState}.`,
       };
     },
   };
@@ -431,13 +438,14 @@ export function createAgentGuardDshSubscriptionStatusTool(
   return {
     name: 'agentguard_dsh_subscription_status',
     description:
-      'Report the current DSH threat-feed subscription, system cron state, target session, and queued notification count without exposing notification contents.',
+      'Report the current DSH threat-feed subscription, local scheduler state, target session, and queued notification count without exposing notification contents.',
     parameters: emptyToolParameters(),
     output: {
       schema: {
         type: 'object',
         properties: {
           subscribed: { type: 'boolean' },
+          backend: { type: 'string', enum: ['system', 'windows-task-scheduler'] },
           subscriptionId: { type: 'string' },
           targetAgentId: { type: 'string' },
           currentAgentIsTarget: { type: 'boolean' },
@@ -451,6 +459,7 @@ export function createAgentGuardDshSubscriptionStatusTool(
         },
         required: [
           'subscribed',
+          'backend',
           'currentAgentIsTarget',
           'cronInstalled',
           'pendingNotifications',
@@ -466,16 +475,23 @@ export function createAgentGuardDshSubscriptionStatusTool(
       const home = (dependencies.agentGuardHome ?? (() => getAgentGuardPaths().home))();
       const loadSubscription = dependencies.loadSubscription ?? loadDshThreatFeedSubscription;
       const subscription = await loadSubscription(home);
-      const inspectCron = dependencies.inspectCron ?? inspectSystemThreatFeedCron;
+      const inspectCron = dependencies.inspectCron ?? inspectThreatFeedCron;
       const cronStatus = await inspectCron({
         name: subscription?.cronName ?? DSH_THREAT_FEED_CRON_NAME,
+        backend: 'auto',
+        agentHost: 'dsh',
+        agentGuardHome: home,
       });
+      const cronLabel = cronStatus.backend === 'windows-task-scheduler'
+        ? 'Windows Task Scheduler task'
+        : 'system cron';
       if (cronStatus.error) {
-        throw new Error(`Could not inspect the AgentGuard system cron: ${cronStatus.error}`);
+        throw new Error(`Could not inspect the AgentGuard ${cronLabel}: ${cronStatus.error}`);
       }
       if (!subscription) {
         return {
           subscribed: false,
+          backend: cronStatus.backend,
           currentAgentIsTarget: false,
           cronInstalled: cronStatus.installed,
           pendingNotifications: 0,
@@ -497,6 +513,7 @@ export function createAgentGuardDshSubscriptionStatusTool(
       const queueSummary = queued.length === 1 ? '1 queued notification' : `${queued.length} queued notifications`;
       return {
         subscribed: true,
+        backend: cronStatus.backend,
         subscriptionId: subscription.subscriptionId,
         targetAgentId: subscription.agentId,
         currentAgentIsTarget,
@@ -508,7 +525,7 @@ export function createAgentGuardDshSubscriptionStatusTool(
         ...(latestQueuedAt ? { latestQueuedAt } : {}),
         modelSummary:
           `AgentGuard threat-feed subscription is saved for ${currentAgentIsTarget ? 'this' : 'another'} DSH session; `
-          + `system cron is ${cronStatus.installed ? 'installed' : 'absent'} with ${queueSummary}.`,
+          + `${cronLabel} is ${cronStatus.installed ? 'installed' : 'absent'} with ${queueSummary}.`,
       };
     },
   };
@@ -520,7 +537,7 @@ export function createAgentGuardDshUnsubscribeTool(
   return {
     name: 'agentguard_dsh_unsubscribe',
     description:
-      'Remove the current DSH session threat-feed subscription transactionally: system cron first, then exact queued notifications, then saved subscription state.',
+      'Remove the current DSH session threat-feed subscription transactionally: local scheduled task first, then exact queued notifications, then saved subscription state.',
     parameters: emptyToolParameters(),
     output: {
       schema: {
@@ -557,16 +574,20 @@ export function createAgentGuardDshUnsubscribeTool(
       const removeCron = dependencies.removeCron ?? removeThreatFeedCron;
       const cronResults = await removeCron({
         name: subscription.cronName,
-        backend: 'system',
+        backend: 'auto',
         agentHost: 'dsh',
         agentGuardHome: home,
       });
-      const cronResult = cronResults.find(result => result.backend === 'system');
+      const cronResult = cronResults.find(result =>
+        result.backend === 'system' || result.backend === 'windows-task-scheduler');
+      const cronLabel = cronResult?.backend === 'windows-task-scheduler'
+        ? 'Windows Task Scheduler task'
+        : 'system cron';
       if (!cronResult) {
-        throw new Error('Could not remove the AgentGuard system cron: removal result was unavailable.');
+        throw new Error(`Could not remove the AgentGuard ${cronLabel}: removal result was unavailable.`);
       }
       if (cronResult.error) {
-        throw new Error(`Could not remove the AgentGuard system cron: ${cronResult.error}`);
+        throw new Error(`Could not remove the AgentGuard ${cronLabel}: ${cronResult.error}`);
       }
 
       const listNotifications = dependencies.listNotifications ?? listDshThreatFeedNotifications;
@@ -587,7 +608,7 @@ export function createAgentGuardDshUnsubscribeTool(
         pendingNotificationsRemoved: noticeIds.length,
         modelSummary:
           `AgentGuard threat-feed subscription removed for this DSH session. `
-          + `${cronResult.removed ? 'Removed the system cron' : 'The system cron was already absent'} and ${queueSummary}.`,
+          + `${cronResult.removed ? `Removed the ${cronLabel}` : `The ${cronLabel} was already absent`} and ${queueSummary}.`,
       };
     },
   };

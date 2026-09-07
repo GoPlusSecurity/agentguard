@@ -3,11 +3,13 @@
 ## Unreleased
 
 ### Added
+- Added native Windows Task Scheduler support for AgentGuard scheduled jobs.
 - Added native DSH threat-feed subscription management, advisory self-check discovery, and queued delivery of cron notifications to active DSH sessions.
 - Added HTTPS GitHub repository support to `agentguard scan`, including `--ref` selection for branches, tags, fully qualified refs, and full commit SHAs, with bounded non-interactive Git acquisition.
 - Added direct DSH profile plugin discovery and DSH-specific risk scanning to the standard `agentguard checkup` workflow.
 
 ### Fixed
+- Fixed Windows and system-cron patrols to run the existing eight-check `agentguard checkup --json` flow while keeping SessionStart lightweight.
 - Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.
 - Fixed `checkup` to recursively scan plugins referenced by DSH bundles, wait for all DSH scans before report generation, and include per-plugin results in JSON and HTML reports.
 
