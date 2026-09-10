@@ -495,6 +495,14 @@ describe('AgentGuard DSH runtime plugin', () => {
     const result = await tool.execute({}, { agent: { id: 'dsh-agent-1' } });
 
     assert.equal(result.backend, 'windows-task-scheduler');
+    const outputSchema = tool.output.schema as {
+      properties: { backend: { enum?: string[] } };
+    };
+    assert.equal(
+      outputSchema.properties.backend.enum?.includes(result.backend),
+      true,
+      'subscribe output schema must accept the backend returned on Windows',
+    );
     assert.match(result.modelSummary, /Windows Task Scheduler/);
     assert.doesNotMatch(result.modelSummary, /system cron/i);
   });

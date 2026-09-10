@@ -304,7 +304,7 @@ export function createAgentGuardDshSubscribeTool(
           cronName: { type: 'string' },
           cronExpression: { type: 'string' },
           selfCheck: { type: 'boolean' },
-          backend: { type: 'string', enum: ['system'] },
+          backend: { type: 'string', enum: ['system', 'windows-task-scheduler'] },
           created: { type: 'boolean' },
           modelSummary: { type: 'string' },
         },
