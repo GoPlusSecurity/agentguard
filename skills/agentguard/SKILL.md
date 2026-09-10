@@ -10,10 +10,10 @@ metadata:
 filesystem-access:
   - path: "~/.ssh/"
     access: read-only
-    reason: "Credential safety audit — check directory permissions (stat only, no key content read)"
+    reason: "Credential safety patrol — check permissions and bounded security-relevant file contents for exposed secrets"
   - path: "~/.gnupg/"
     access: read-only
-    reason: "Credential safety audit — check directory permissions (stat only)"
+    reason: "Credential safety patrol — check permissions and bounded security-relevant file contents for exposed secrets"
   - path: "~/.claude/"
     access: read-only
     reason: "Discover installed skills and read security hook configuration"
@@ -30,7 +30,7 @@ filesystem-access:
     access: read-write
     reason: "Read/write audit log (audit.jsonl) and protection level config (config.json)"
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(*checkup-report.js) Bash(*checkup-score.js) Bash(*scan-to-sarif.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(agentguard *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+allowed-tools: Read, Write, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(*checkup-report.js) Bash(*checkup-score.js) Bash(*scan-to-sarif.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(agentguard *) Bash(command -v agentguard) Bash(command -v node) Bash(openclaw *) Bash(schtasks *) Bash(schtasks.exe *) Bash(where *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
 argument-hint: "[scan|action|patrol|subscribe|trust|report|config|checkup|cli] [args...] [--format sarif|json] [--output <file>]"
 ---
 
@@ -74,7 +74,7 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`connect [args...]`** — Run `agentguard connect` to connect optional Cloud policy, audit, and approvals. AgentGuard supports either API-key auth or Agent JWT auth; only one Cloud auth method is required.
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
-- **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
+- **`patrol [run|setup|status]`** — Daily security patrol for supported agent and local-scheduler environments
 - **`trust <lookup|attest|revoke|list|seed> [args]`** — Manage skill trust levels
 - **`subscribe [args...]`** — Pull AgentGuard Cloud threat-feed advisories, self-check local skills, and optionally install the OpenClaw 15-minute conditional notification cron
 - **`report`** — View recent security events from the audit log
@@ -89,7 +89,7 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 
 This skill is allowed to run `agentguard *`, so CLI commands and flags are available even when the skill has a higher-level workflow for the same area.
 
-The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`.
+The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`. The sole internal exception is the patrol workflow's canonical collector: `patrol run` and locally scheduled patrols execute the existing `agentguard checkup --json` command as specified below.
 
 Use CLI passthrough for the CLI-only commands below, for `init` and `connect`, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.
 
@@ -107,7 +107,7 @@ Supported CLI commands and options:
 | `agentguard approvals list` | `--json` | Lists unexpired pending runtime approvals |
 | `agentguard doctor` | none | Checks local setup and Cloud reachability when connected |
 | `agentguard protect` | `--agent <agent>`, `--action-type <type>`, `--tool-name <name>`, `--session-id <id>`, `--decision-mode <local-first|cloud>`, `--json` | Evaluates one runtime action from stdin or hook environment |
-| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system>`, `--cron-name <name>`, `--force`, `--cron-run`, `--cron-notify-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
+| `agentguard subscribe` | `--since <iso>`, `--json`, `--quiet`, `--no-report`, `--cron <expr>`, `--cron-target <auto|openclaw|qclaw|hermes|system|windows>`, `--cron-name <name>`, `--force`, `--cron-run`, `--cron-notify-run` | Pulls Cloud threat advisories and optionally self-checks local skills |
 | `agentguard checkup` | `--json` | Runs the local agent health checkup |
 | `agentguard checkup --against-advisory <id>` | `--json` | CLI threat-feed self-check for one advisory; this is a targeted mode, not the default health-check workflow |
 
@@ -121,7 +121,7 @@ If the user writes `/agentguard cli <args...>`, execute `agentguard <args...>` d
 
 When AgentGuard returns `confirm` or a block reason that includes `Approve once ... agentguard approve --action-id ... --once`, do not retry the protected action until the user explicitly approves. Show the exact approval command to the user before running it. Never run an approval command proactively, and never infer approval from context or from the agent's own plan. Treat user replies such as "yes", "approve", "approved", "confirm", "confirmed", "continue", "go ahead", "execute", "run it", "同意", "确认", "批准", "继续", or "执行" as explicit approval for the most recent protected action only after the user has seen the command and understands which action is being approved. After approval, run exactly the provided `agentguard approve --action-id ... --once` command, then retry the original action once. If the action id is unavailable, use `agentguard approvals list --json`; only use `agentguard approve --last --once` when there is exactly one relevant unexpired pending approval. If multiple pending approvals exist, ask the user to choose a specific action id.
 
-Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. Only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.
+Do **not** route plain `/agentguard scan`, `/agentguard action`, `/agentguard patrol`, `/agentguard trust`, `/agentguard report`, `/agentguard config`, `/agentguard checkup`, `/agentguard checkup --json`, or natural-language requests like "run agentguard checkup" through the packaged CLI. Those are this skill's higher-level workflows. The patrol workflow may internally execute `agentguard checkup --json` as its canonical 8-check collector. Outside that internal patrol step, only use the packaged CLI checkup path when the user includes `--against-advisory <id>` or explicitly writes `/agentguard cli checkup ...`.
 
 If the user writes `/agentguard checkup --against-advisory <id>`, use the CLI command `agentguard checkup --against-advisory <id>` instead of the comprehensive HTML health-report workflow.
 
@@ -229,6 +229,7 @@ agentguard subscribe --cron "0 * * * *" --cron-target system
 agentguard subscribe --cron "0 * * * *" --cron-target openclaw
 agentguard subscribe --cron "0 * * * *" --cron-target qclaw
 agentguard subscribe --cron "0 * * * *" --cron-target hermes
+agentguard subscribe --cron "0 * * * *" --cron-target windows
 agentguard subscribe --cron "0 * * * *" --quiet
 agentguard subscribe --cron "0 * * * *" --cron-name agentguard-threat-feed
 agentguard subscribe --cron "0 * * * *" --force
@@ -236,9 +237,9 @@ agentguard subscribe --cron "0 * * * *" --force
 
 Without `--quiet`, `agentguard subscribe` pulls new threat-feed advisories and notifies the user to review them manually. With `--quiet`, it runs the full automated flow: pull new advisories, self-check local skills, report local matches back to Cloud, and notify only when local matches are found.
 
-When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field crontab expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code` and `codex` install a user crontab entry. OpenClaw cron jobs keep runner delivery internal and run internal `--cron-run`; when the saved agent host is `openclaw`, that run resolves the latest deliverable session route at runtime and sends the notification there directly. QClaw cron jobs still use host `announce` delivery to the last chat route and run internal `--cron-notify-run`, which prints either the exact notification body or `NO_REPLY`; this keeps no-op cron ticks silent without embedding chat IDs in the job. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw>` first or pass `--cron-target openclaw`, `--cron-target qclaw`, `--cron-target hermes`, or `--cron-target system` explicitly. If a saved host exists and you pass `--cron-target openclaw`, it must already be `openclaw`; otherwise the CLI rejects the mismatch instead of installing a cron job that cannot notify correctly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
+When `--cron <expr>` is used, the CLI first runs the subscribe flow once, then installs a recurring job using a standard five-field cron expression such as `"0 * * * *"`. `--cron-target auto` is the default and uses the agent host saved by `agentguard init --agent`: `openclaw` uses the native `openclaw cron add` command and falls back to the OpenClaw Gateway at `127.0.0.1:18789`, `qclaw` uses the QClaw Gateway at `127.0.0.1:28789`, `hermes` uses native `hermes cron create` with a no-agent script under `~/.hermes/scripts/`, while `claude-code`, `codex`, and `dsh` use user crontab on Unix-like hosts and the native Windows Task Scheduler on Windows. The Windows task runs only while the creating user is logged on, at least privilege, and invokes a lightweight runner every minute to preserve the full five-field expression and configured timezone. OpenClaw cron jobs keep runner delivery internal and run internal `--cron-run`; when the saved agent host is `openclaw`, that run resolves the latest deliverable session route at runtime and sends the notification there directly. QClaw cron jobs still use host `announce` delivery to the last chat route and run internal `--cron-notify-run`, which prints either the exact notification body or `NO_REPLY`; this keeps no-op cron ticks silent without embedding chat IDs in the job. If no agent host is saved, auto asks the user to run `agentguard init --agent <claude-code|codex|openclaw|hermes|qclaw|dsh>` first or pass a target explicitly. `--cron-target windows` forces Task Scheduler and `--cron-target system` forces crontab. If a saved host exists and you pass `--cron-target openclaw`, it must already be `openclaw`; otherwise the CLI rejects the mismatch instead of installing a cron job that cannot notify correctly. Pass `--cron-name <name>` to choose the job name. If a job with the same name already exists, the CLI leaves it untouched unless `--force` is passed.
 
-System cron writes output to `~/.agentguard/feed-cron.log`; it does not send OpenClaw agent-channel notifications.
+System cron and Windows Task Scheduler write output to `~/.agentguard/feed-cron.log`; they do not send OpenClaw agent-channel notifications.
 
 `agentguard subscribe --json` always includes a stable `cron` object with `requested`, `installed`, and optional `result` fields. If cron installation fails, the command exits non-zero instead of printing a misleading success summary.
 
@@ -521,14 +522,14 @@ Always combine script results with the policy-based checks (webhook domains, sec
 
 ## Subcommand: patrol
 
-**Daily security patrol.** Runs 8 automated checks that leverage AgentGuard's scan engine, trust registry, and audit log to assess the security posture of your agent deployment. Works on OpenClaw and standard cron environments.
+**Daily security patrol.** Runs 8 automated checks that leverage AgentGuard's scan engine, trust registry, and audit log to assess the security posture of your agent deployment. Works on OpenClaw, Windows Task Scheduler, and standard cron environments.
 
 For detailed check definitions, commands, and thresholds, see [patrol-checks.md](patrol-checks.md).
 
 ### Sub-subcommands
 
 - **`patrol`** or **`patrol run`** — Execute all 8 checks and output a patrol report
-- **`patrol setup`** — Configure as a daily cron job (OpenClaw or system crontab)
+- **`patrol setup`** — Configure as a daily scheduled job (OpenClaw, Windows Task Scheduler, or system crontab)
 - **`patrol status`** — Show last patrol results and cron schedule
 
 ### Platform Detection
@@ -536,12 +537,23 @@ For detailed check definitions, commands, and thresholds, see [patrol-checks.md]
 Before running `patrol setup` or `patrol status`, detect the available scheduling platform:
 
 1. **OpenClaw**: Check for `$OPENCLAW_STATE_DIR` env var (fall back to `~/.openclaw/`), verify the directory exists and contains `openclaw.json`, and check if `openclaw` CLI is in PATH. If all three pass → use OpenClaw path.
-2. **System crontab**: Check if `crontab` command is available in PATH → use crontab path.
-3. **Neither available**: Inform the user and output the manual cron entry for them to add themselves.
+2. **Windows Task Scheduler**: Run `node -p "process.platform"`. If it prints `win32`, verify `schtasks.exe` with `where schtasks.exe` → use the Windows path even if a Unix-like shell also exposes `crontab`.
+3. **System crontab**: On non-Windows hosts, check if `crontab` is available in PATH → use the crontab path.
+4. **No scheduler available**: Inform the user and provide the appropriate manual setup guidance.
 
 For `patrol run`, no scheduling platform is needed — run checks on any platform.
 
-Set `$OC` to the resolved OpenClaw state directory for all subsequent checks.
+Run `agentguard checkup --json`. This existing non-interactive command is the
+canonical data collector for all 8 patrol checks; do not independently repeat
+the commands in the check definitions below. Group findings whose text starts
+with `[Patrol N]` into the corresponding report rows. Do not substitute
+`scripts/auto-scan.js`: that script is only the fast SessionStart scan and does
+not produce a completed patrol.
+
+The definitions below describe the required CLI collector coverage. Agent roots
+include the detected Claude Code, Codex, OpenClaw, QClaw, Hermes, and DSH
+installation/profile directories; OpenClaw-specific files are checked only when
+an OpenClaw root exists.
 
 ### The 8 Patrol Checks
 
@@ -550,7 +562,7 @@ Set `$OC` to the resolved OpenClaw state directory for all subsequent checks.
 Detect tampered or unregistered skill packages by comparing file hashes against the trust registry.
 
 **Steps**:
-1. Discover skill directories under `$OC/skills/` (look for dirs containing `SKILL.md`)
+1. Discover skill directories under all detected agent roots (look for dirs containing `SKILL.md`)
 2. For each skill, compute hash: `node scripts/trust-cli.js hash --path <skill_dir>`
 3. Look up the attested hash: `node scripts/trust-cli.js lookup --source <skill_dir>`
 4. If hash differs from attested → **INTEGRITY_DRIFT** (HIGH)
@@ -562,12 +574,12 @@ Detect tampered or unregistered skill packages by comparing file hashes against 
 Scan workspace files for leaked secrets using AgentGuard's own detection patterns.
 
 **Steps**:
-1. Use Grep to scan `$OC/workspace/` **recursively, covering all agent subdirectories** (e.g. all `workspace-agent-*/` directories, not just the current agent's workspace) with patterns from:
+1. Scan detected agent workspaces **recursively, covering all agent subdirectories** (e.g. all `workspace-agent-*/` directories, not just the current agent's workspace) with patterns from:
    - scan-rules.md Rule 7 (PRIVATE_KEY_PATTERN): `0x[a-fA-F0-9]{64}` in quotes
    - scan-rules.md Rule 8 (MNEMONIC_PATTERN): BIP-39 word sequences, `seed_phrase`, `mnemonic`
    - scan-rules.md Rule 5 (READ_SSH_KEYS): SSH key file references in workspace
    - action-policies.md secret patterns: AWS keys (`AKIA...`), GitHub tokens (`gh[pousr]_...`), DB connection strings
-2. Scan any `.env*` files under `$OC/` for plaintext credentials
+2. Scan any `.env*` files under detected agent roots for plaintext credentials
 3. Check `~/.ssh/` and `~/.gnupg/` directory permissions (should be 700)
 
 #### [3] Network Exposure
@@ -586,23 +598,23 @@ Audit all cron jobs for download-and-execute patterns.
 
 **Steps**:
 1. List OpenClaw cron jobs: `openclaw cron list`
-2. List system crontab: `crontab -l` and contents of `/etc/cron.d/`
-3. List systemd timers: `systemctl list-timers --all`
-4. Scan all cron command bodies using scan-rules.md Rule 2 (AUTO_UPDATE) patterns: `curl|bash`, `wget|sh`, `eval "$(curl`, `base64 -d | bash`
-5. Flag unknown cron jobs that touch `$OC/` directories
+2. On Windows, list scheduled tasks with `schtasks.exe /Query /FO CSV /V`. For AgentGuard tasks and any suspicious task, also run `schtasks.exe /Query /TN "<task-name>" /XML` and inspect `UserId`, `LogonType`, `RunLevel`, `Command`, and `Arguments`; verbose CSV alone is not sufficient to determine privilege level reliably.
+3. On Unix-like hosts, list system crontab with `crontab -l`, contents of `/etc/cron.d/`, and `systemctl list-timers --all`
+4. Scan all scheduled command bodies using scan-rules.md Rule 2 (AUTO_UPDATE) patterns: `curl|bash`, `wget|sh`, `eval "$(curl`, `base64 -d | bash`
+5. Flag unknown scheduled jobs that touch detected agent roots
 
 #### [5] File System Changes (24h)
 
 Detect suspicious file modifications in the last 24 hours.
 
 **Steps**:
-1. Find recently modified files: use Glob with patterns `$OC/**/*`, `~/.ssh/**/*`, `~/.gnupg/**/*` and filter results by mtime within 24h using `stat -f '%m %N' <file>` (macOS) or `stat -c '%Y %n' <file>` (Linux) — do NOT use the `find` binary as it may be unavailable in hardened environments
+1. Find recently modified files under detected agent roots, `~/.ssh/`, and `~/.gnupg/`, then filter by mtime within 24h
 2. For modified files with scannable extensions (.js/.ts/.py/.sh/.md/.json), run the full scan rule set
 3. Check permissions on critical files:
-   - `$OC/openclaw.json` → should be 600
-   - `$OC/devices/paired.json` → should be 600
+   - `<openclaw-root>/openclaw.json` → should be 600
+   - `<openclaw-root>/devices/paired.json` → should be 600
    - `~/.ssh/authorized_keys` → should be 600
-4. Detect new executable files in workspace: use Glob `$OC/workspace/**/*` and check each file's executable bit with `stat` — do NOT use `find` with `-perm`
+4. Detect new executable files in detected workspaces and check each file's executable bit with `stat`
 
 #### [6] Audit Log Analysis (24h)
 
@@ -626,7 +638,7 @@ Verify security configuration is production-appropriate.
 1. List environment variables matching sensitive names (values masked): `API_KEY`, `SECRET`, `PASSWORD`, `TOKEN`, `PRIVATE`, `CREDENTIAL`
 2. Check if `GOPLUS_API_KEY`/`GOPLUS_API_SECRET` are configured (if Web3 features are in use)
 3. Read `~/.agentguard/config.json` — flag `permissive` protection level in production
-4. If `$OC/.config-baseline.sha256` exists, verify: `sha256sum -c $OC/.config-baseline.sha256`
+4. If `<openclaw-root>/.config-baseline.sha256` exists, verify it with `sha256sum -c`
 
 #### [8] Trust Registry Health
 
@@ -647,7 +659,7 @@ Check for expired, stale, or over-privileged trust records.
 ## GoPlus AgentGuard Patrol Report
 
 **Timestamp**: <ISO datetime>
-**OpenClaw Home**: <$OC path>
+**Agent Roots**: <detected agent roots>
 **Protection Level**: <current level>
 **Overall Status**: PASS | WARN | FAIL
 
@@ -679,21 +691,22 @@ Check for expired, stale, or over-privileged trust records.
 
 **Overall status**: Any CRITICAL → **FAIL**, any HIGH → **WARN**, else **PASS**
 
-After outputting the report, append a summary entry to `~/.agentguard/audit.jsonl`:
+The `checkup` command appends the completed patrol summary to
+`~/.agentguard/audit.jsonl` using its existing checkup event:
 ```json
-{"timestamp":"...","event":"patrol","overall_status":"PASS|WARN|FAIL","checks":8,"findings":<count>,"critical":<count>,"high":<count>}
+{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":8,"findings":<count>,"skills_scanned":<count>,"dsh_plugins_scanned":<count>}
 ```
 
 ### patrol setup
 
-Configure the patrol as a daily cron job. Detects the available platform and uses the appropriate method.
+Configure the patrol as a daily scheduled job. Detects the available platform and uses the appropriate method.
 
 **Steps**:
 
 1. Run platform detection (see above).
 2. Ask the user for:
    - **Schedule** (default: `0 3 * * *` — daily at 03:00)
-   - **Timezone** (default: UTC). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`
+   - **Timezone** (default: UTC for OpenClaw; the machine's local timezone for Windows Task Scheduler and system crontab). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`. Windows Task Scheduler and portable system-crontab entries use local wall-clock time. If the user requests a different timezone for either local scheduler, explain that the generated daily trigger cannot preserve that timezone across daylight-saving changes and ask for a local `HH:mm` time instead.
    - **Notification channel** (optional, OpenClaw only): `telegram`, `discord`, `signal`
    - **Chat ID / webhook** (required if channel is set)
 
@@ -722,36 +735,67 @@ After execution, verify with `openclaw cron list`.
 
 > **Note**: `--timeout-seconds 300` is required because isolated sessions need cold-start time.
 
-#### Path B — System crontab available (OpenClaw not available)
+#### Path B — Windows Task Scheduler available (OpenClaw not available)
 
-Resolve the absolute path to this skill's directory (parent of this SKILL.md file) as `<SKILL_DIR>`.
+Windows patrol setup supports the daily patrol form `<minute> <hour> * * *`. For a different five-field expression, explain that this patrol workflow cannot map it losslessly and recommend the daily form; never silently change the requested schedule.
+
+Resolve and validate:
+- `<AGENTGUARD_CLI>`: run `where agentguard`, inspect each returned line, and select one existing absolute `.cmd` or `.exe` file (prefer `.cmd` for an npm installation). Do not select the extensionless POSIX shim. Reject quotes, `%`, null bytes, or newlines in the selected path. If no safe candidate exists, stop instead of guessing.
+- `<WRAPPER>`: `%USERPROFILE%\.agentguard\scripts\agentguard-patrol.cmd`.
+- `<LOCAL_TIME>`: `HH:mm` in the Windows machine's local timezone. Do not guess a conversion from a different requested timezone.
+
+Show the exact wrapper content and registration command, and wait for explicit user confirmation before writing or registering anything:
+
+```bat
+@echo off
+setlocal
+call "<AGENTGUARD_CLI>" checkup --json >> "%USERPROFILE%\.agentguard\patrol.log" 2>&1
+```
+
+```bat
+schtasks.exe /Create /TN "AgentGuard-agentguard-patrol" /SC DAILY /ST "<LOCAL_TIME>" /TR "\"<WRAPPER>\"" /IT /F
+```
+
+After confirmation, ensure `%USERPROFILE%\.agentguard\scripts` exists, use `Write` to create the wrapper, then execute the shown `schtasks.exe` command. `/IT` intentionally makes this a current-user, logged-on-only task; do not add stored credentials, `/RP`, `/RU SYSTEM`, or highest-privilege execution. Verify with:
+
+```bat
+schtasks.exe /Query /TN "AgentGuard-agentguard-patrol" /FO LIST /V
+```
+
+#### Path C — System crontab available (OpenClaw and Windows Task Scheduler not available)
+
+Resolve the absolute paths returned by `command -v node` and
+`command -v agentguard` as `<NODE_EXE>` and `<AGENTGUARD_CLI>`. The explicit
+Node path is required because cron commonly has a reduced `PATH` and an
+AgentGuard installation managed by NVM otherwise may not start.
 
 Validate before generating the entry:
-- `<schedule>` must be a standard five-field cron expression. Reject values that contain newlines.
-- `<SKILL_DIR>` must be an absolute path. Reject paths containing single quotes, double quotes, null bytes, or newlines.
+- `<schedule>` must be exactly five fields containing only portable cron characters (`A-Z`, `a-z`, digits, `*`, `/`, `,`, and `-`). Reject quotes, shell metacharacters, null bytes, or newlines.
+- `<NODE_EXE>` must be an absolute path. Reject paths containing single quotes, null bytes, or newlines.
+- `<AGENTGUARD_CLI>` must be an absolute path. Reject paths containing single quotes, null bytes, or newlines.
 - Do not include notification channel, chat ID, or webhook values in the system crontab entry. System cron writes only to the local patrol log.
 
-Generate the crontab entry using a single-quoted skill directory. If `<SKILL_DIR>` contains spaces, keep it inside the quotes exactly as shown:
+Generate the crontab entry using the resolved existing CLI path. If it contains spaces, keep it inside the single quotes exactly as shown:
 ```
-<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> "$HOME/.agentguard/patrol.log" 2>&1
+<schedule> '<NODE_EXE>' '<AGENTGUARD_CLI>' checkup --json >> "$HOME/.agentguard/patrol.log" 2>&1
 ```
 
 **Show the exact entry and wait for explicit user confirmation before writing.**
 
 After confirmation, add the entry to the user's crontab:
 ```bash
-(crontab -l 2>/dev/null; printf '%s\n' "<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> \"\$HOME/.agentguard/patrol.log\" 2>&1") | crontab -
+(crontab -l 2>/dev/null; printf "%s '%s' '%s' checkup --json >> \"\$HOME/.agentguard/patrol.log\" 2>&1\n" '<schedule>' '<NODE_EXE>' '<AGENTGUARD_CLI>') | crontab -
 ```
 
 Verify with `crontab -l | grep agentguard`.
 
-#### Path C — Neither available
+#### Path D — No scheduler available
 
 Output the crontab entry for the user to add manually:
 ```
-<schedule> cd '<SKILL_DIR>' && AGENTGUARD_AUTO_SCAN=1 node scripts/auto-scan.js >> "$HOME/.agentguard/patrol.log" 2>&1
+<schedule> '<NODE_EXE>' '<AGENTGUARD_CLI>' checkup --json >> "$HOME/.agentguard/patrol.log" 2>&1
 ```
-Explain that neither `openclaw` nor `crontab` was found in PATH, so the entry must be added manually.
+On Unix-like hosts, explain that neither `openclaw` nor `crontab` was found in PATH, so the entry must be added manually. On Windows, explain that `schtasks.exe` was not available and direct the user to enable the Task Scheduler service or create a daily task in the Task Scheduler GUI using the same wrapper command.
 
 ### patrol status
 
@@ -759,10 +803,11 @@ Show the current patrol state.
 
 **Steps**:
 
-1. Read `~/.agentguard/audit.jsonl`, find the most recent `event: "patrol"` or `event: "auto_scan"` entry. If found, display: timestamp, overall status, finding counts.
+1. Read `~/.agentguard/audit.jsonl` and find the most recent `event: "checkup"` entry whose `checks` value is `8`. If found, display its `timestamp`, `tier`, `composite_score`, and `findings` values. Never report `event: "auto_scan"` as a completed patrol.
 2. **OpenClaw available**: run `openclaw cron list` and look for `agentguard-patrol`. Show schedule, timezone, last/next run time if found.
-3. **System crontab available**: run `crontab -l 2>/dev/null | grep agentguard`. Show the matching entry if found.
-4. If no cron is configured on any platform, suggest: `/agentguard patrol setup`.
+3. **Windows Task Scheduler available**: run `schtasks.exe /Query /TN "AgentGuard-agentguard-patrol" /FO LIST /V`. Show status, schedule, last run, next run, and last result when present. Do not fall back to `crontab` on Windows.
+4. **System crontab available**: run `crontab -l 2>/dev/null | grep agentguard`. Show the matching entry if found.
+5. If no scheduled patrol is configured on any platform, suggest: `/agentguard patrol setup`.
 
 ---
 
@@ -1314,8 +1359,12 @@ Regardless of channel, always end with:
 
 Append a summary entry to `~/.agentguard/audit.jsonl`:
 ```json
-{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>,"dsh_plugins_scanned":<count>}
+{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":7,"findings":<count>,"skills_scanned":<count>,"dsh_plugins_scanned":<count>}
 ```
+
+This 7-check interactive health-report event is not a completed patrol. Only
+the packaged CLI collector used by `patrol run` and local schedulers writes
+`checks: 8`, which is why `patrol status` filters on that value.
 
 ---
 

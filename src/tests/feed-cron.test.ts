@@ -1,14 +1,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as cronModule from '../feed/cron.js';
 import {
   installThreatFeedCron,
   installOpenClawThreatFeedCron,
+  inspectThreatFeedCron,
+  inspectWindowsThreatFeedTask,
   inspectSystemThreatFeedCron,
   removeThreatFeedCron,
   openClawGatewayRequest,
@@ -90,6 +93,20 @@ function fakeGateway(jobs: Array<{ id: string; name: string }> = []): {
   };
 }
 
+function managedWindowsTaskXml(configPath: string, enabled = true): string {
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+    nodeExecutable: string;
+    cliEntrypoint: string;
+  };
+  return [
+    '<Task>',
+    '<Principals><Principal><UserId>S-1-5-21-100-200-300-1001</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>',
+    `<Settings><Enabled>${enabled}</Enabled></Settings>`,
+    `<Actions><Exec><Command>${config.nodeExecutable.replaceAll('&', '&amp;')}</Command><Arguments>&quot;${config.cliEntrypoint.replaceAll('&', '&amp;')}&quot; windows-cron-run --config &quot;${configPath.replaceAll('&', '&amp;')}&quot;</Arguments></Exec></Actions>`,
+    '</Task>',
+  ].join('');
+}
+
 function base64UrlEncode(value: Buffer): string {
   return value.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
 }
@@ -130,11 +147,213 @@ function writeOpenClawIdentity(stateDir: string): { deviceId: string; publicKeyP
 }
 
 describe('feed/cron', () => {
+  it('auto-inspects Windows Task Scheduler for a DSH subscription on Windows', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-inspect-auto-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(join(scriptsDir, 'agentguard-threat-feed.windows-cron.json'), JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '*/20 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\agentguard\\cli.js',
+    }));
+    const commands: string[] = [];
+
+    const status = await inspectThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'auto', agentHost: 'dsh', agentGuardHome: home },
+      {
+        platform: 'win32',
+        async runCommand(command: string) {
+          commands.push(command);
+          if (command === 'whoami.exe') {
+            return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+          }
+          return { stdout: managedWindowsTaskXml(join(scriptsDir, 'agentguard-threat-feed.windows-cron.json')), stderr: '' };
+        },
+      },
+    );
+
+    assert.deepEqual(status, {
+      name: 'agentguard-threat-feed',
+      installed: true,
+      cronExpression: '*/20 * * * *',
+      backend: 'windows-task-scheduler',
+    });
+    assert.deepEqual(commands, ['schtasks.exe', 'whoami.exe']);
+  });
+
+  it('matches five-field cron expressions at minute precision in the requested timezone', () => {
+    const cronMatchesAt = (cronModule as Record<string, unknown>).cronMatchesAt;
+    assert.equal(typeof cronMatchesAt, 'function');
+    const matches = cronMatchesAt as (expression: string, timezone: string, at: Date) => boolean;
+
+    assert.equal(matches('*/15 * * * *', 'UTC', new Date('2026-09-07T10:30:45Z')), true);
+    assert.equal(matches('*/15 * * * *', 'UTC', new Date('2026-09-07T10:31:00Z')), false);
+    assert.equal(matches('0 3 * * *', 'Asia/Shanghai', new Date('2026-09-06T19:00:20Z')), true);
+  });
+
+  it('runs a due Windows cron tick once with the configured AgentGuard home', async () => {
+    const runWindowsCronTick = (cronModule as Record<string, unknown>).runWindowsCronTick;
+    assert.equal(typeof runWindowsCronTick, 'function');
+    const runTick = runWindowsCronTick as (
+      configPath: string,
+      adapters: Record<string, unknown>,
+    ) => Promise<{ ran: boolean; reason: string }>;
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-tick-'));
+    const configPath = join(home, 'task.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '*/15 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
+      cliEntrypoint: 'C:\\AgentGuard\\dist\\cli.js',
+    }));
+    const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const adapters = {
+      now: () => new Date('2026-09-07T10:30:45Z'),
+      runCommand: async (command: string, args: string[], _input?: string, options?: { env?: NodeJS.ProcessEnv }) => {
+        calls.push({ command, args, env: options?.env });
+        return { stdout: '{"supported":true}\n', stderr: '' };
+      },
+    };
+
+    const first = await runTick(configPath, adapters);
+    const second = await runTick(configPath, adapters);
+
+    assert.deepEqual(first, { ran: true, reason: 'executed' });
+    assert.deepEqual(second, { ran: false, reason: 'already-checked' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.command, 'C:\\Program Files\\nodejs\\node.exe');
+    assert.deepEqual(calls[0]?.args, [
+      'C:\\AgentGuard\\dist\\cli.js', 'subscribe', '--quiet', '--json', '--cron-run',
+    ]);
+    assert.equal(calls[0]?.env?.AGENTGUARD_HOME, home);
+  });
+
+  it('catches up one missed Windows cron occurrence after a delayed scheduler tick', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-catchup-'));
+    const configPath = join(home, 'task.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '15 * * * *',
+      timezone: 'UTC',
+      quiet: false,
+      agentGuardHome: home,
+      nodeExecutable: 'node.exe',
+      cliEntrypoint: 'cli.js',
+    }));
+    writeFileSync(`${configPath}.state.json`, JSON.stringify({
+      version: 1,
+      lastCheckedMinute: '2026-09-07T10:00:00.000Z',
+    }));
+    let executions = 0;
+
+    const result = await cronModule.runWindowsCronTick(configPath, {
+      now: () => new Date('2026-09-07T10:31:20Z'),
+      async runCommand() {
+        executions += 1;
+        return { stdout: '', stderr: '' };
+      },
+    });
+
+    assert.deepEqual(result, { ran: true, reason: 'executed' });
+    assert.equal(executions, 1);
+  });
+
+  it('recovers a stale Windows cron runner lock after an interrupted process', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-stale-lock-'));
+    const configPath = join(home, 'task.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '* * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'node.exe',
+      cliEntrypoint: 'cli.js',
+    }));
+    const lockPath = `${configPath}.lock`;
+    writeFileSync(lockPath, 'interrupted');
+    const stale = new Date('2026-09-07T10:00:00Z');
+    utimesSync(lockPath, stale, stale);
+
+    const result = await cronModule.runWindowsCronTick(configPath, {
+      now: () => new Date('2026-09-07T10:30:00Z'),
+      async runCommand() { return { stdout: '', stderr: '' }; },
+    });
+
+    assert.deepEqual(result, { ran: true, reason: 'executed' });
+    assert.equal(existsSync(lockPath), false);
+  });
+
+  it('quarantines malformed Windows cron state instead of disabling future ticks', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-corrupt-state-'));
+    const configPath = join(home, 'task.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '* * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'node.exe',
+      cliEntrypoint: 'cli.js',
+    }));
+    writeFileSync(`${configPath}.state.json`, '{truncated');
+
+    const result = await cronModule.runWindowsCronTick(configPath, {
+      now: () => new Date('2026-09-07T10:30:00Z'),
+      async runCommand() { return { stdout: '', stderr: '' }; },
+    });
+
+    assert.deepEqual(result, { ran: true, reason: 'executed' });
+    assert.equal(
+      readdirSync(home).some((name) => name.startsWith('task.json.state.json.corrupt-')),
+      true,
+    );
+    assert.doesNotThrow(() => JSON.parse(readFileSync(`${configPath}.state.json`, 'utf8')));
+  });
+
   it('validateCronExpression rejects non-five-field values', () => {
     assert.equal(validateCronExpression('0 * * * *'), '0 * * * *');
     assert.equal(validateCronExpression('  */5   * * * *  '), '*/5 * * * *');
     assert.throws(() => validateCronExpression('0 * * *'), /Invalid --cron/);
     assert.throws(() => validateCronExpression('0 * * * * *'), /Invalid --cron/);
+  });
+
+  it('preserves command exit codes for locale-independent scheduler errors', async () => {
+    const execCommand = (cronModule as Record<string, unknown>).execCommand;
+    assert.equal(typeof execCommand, 'function');
+    const execute = execCommand as CommandRunner;
+
+    await assert.rejects(
+      execute(process.execPath, ['-e', 'process.exit(2)']),
+      (error: unknown) => (error as { exitCode?: unknown }).exitCode === 2,
+    );
+  });
+
+  it('decodes UTF-16LE command output used by native Windows tools', async () => {
+    const expected = '<?xml version="1.0" encoding="UTF-16"?><Task>测试</Task>';
+    const script = `process.stdout.write(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(${JSON.stringify(expected)}, 'utf16le')]))`;
+    const result = await cronModule.execCommand(process.execPath, ['-e', script]);
+
+    assert.equal(result.stdout, expected);
+  });
+
+  it('reports the configured command timeout', async () => {
+    await assert.rejects(
+      cronModule.execCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], undefined, { timeoutMs: 25 }),
+      /timed out after 25ms/,
+    );
   });
 
   it('adds an OpenClaw cron job with no-delivery fallback and cron schedule', async () => {
@@ -202,6 +421,668 @@ describe('feed/cron', () => {
       assert.match(script, new RegExp(`export AGENTGUARD_HOME='${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
       assert.match(script, /exec agentguard subscribe --quiet --json --cron-run/);
     }
+  });
+
+  it('auto-installs Windows Task Scheduler jobs for local agent hosts on Windows', async () => {
+    for (const agentHost of ['claude-code', 'codex', 'dsh'] as const) {
+      const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+      const home = mkdtempSync(join(tmpdir(), `agentguard-windows-${agentHost}-`));
+      const runner: CommandRunner = async (command, args, input) => {
+        calls.push({ command, args, input });
+        if (command === 'schtasks.exe' && args[0] === '/Query') {
+          throw Object.assign(new Error('localized task-not-found message'), { exitCode: 0x80070002 });
+        }
+        if (command === 'whoami.exe') {
+          return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      };
+
+      const result = await installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '*/15 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'auto',
+          agentHost,
+          agentGuardHome: home,
+          timezone: 'Asia/Shanghai',
+        },
+        { runCommand: runner, platform: 'win32' } as Parameters<typeof installThreatFeedCron>[1]
+      );
+
+      assert.equal(result.backend, 'windows-task-scheduler');
+      assert.equal(result.created, true);
+      assert.equal(calls[0]?.command, 'schtasks.exe');
+      assert.equal(calls[0]?.args[0], '/Query');
+      assert.equal(calls[1]?.command, 'whoami.exe');
+      assert.equal(calls[2]?.command, 'schtasks.exe');
+      assert.equal(calls[2]?.args[0], '/Create');
+    }
+  });
+
+  it('rejects invalid Windows cron syntax before querying or creating a task', async () => {
+    let calls = 0;
+    await assert.rejects(
+      installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: 'invalid * * * *',
+          quiet: true,
+          force: false,
+          backend: 'windows',
+        },
+        {
+          platform: 'win32',
+          async runCommand() {
+            calls += 1;
+            return { stdout: '', stderr: '' };
+          },
+        },
+      ),
+      /cron/i,
+    );
+    assert.equal(calls, 0);
+  });
+
+  it('registers a current-user Windows task from XML with a minute cron runner', async () => {
+    const calls: Array<{ command: string; args: string[]; input?: string }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-xml-'));
+    const runner: CommandRunner = async (command, args, input) => {
+      calls.push({ command, args, input });
+      if (command === 'schtasks.exe' && args[0] === '/Query') {
+        throw Object.assign(new Error('task not found'), { exitCode: 0x80070002 });
+      }
+      if (command === 'whoami.exe') {
+        return { stdout: '"DESKTOP\\jeff","S-1-5-21-100-200-300-1001"\r\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        cronExpression: '30 3 * * *',
+        quiet: false,
+        force: false,
+        backend: 'windows',
+        agentGuardHome: home,
+        timezone: 'Asia/Shanghai',
+      },
+      {
+        runCommand: runner,
+        platform: 'win32',
+        nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
+        cliEntrypoint: 'C:\\Program Files\\AgentGuard & Tools\\dist\\cli.js',
+        now: () => new Date('2026-09-07T10:30:20Z'),
+      } as Parameters<typeof installThreatFeedCron>[1]
+    );
+
+    const xmlPath = join(home, 'scripts', 'agentguard-threat-feed.task.xml');
+    const configPath = join(home, 'scripts', 'agentguard-threat-feed.windows-cron.json');
+    const create = calls.find((call) => call.command === 'schtasks.exe' && call.args[0] === '/Create');
+    assert.deepEqual(create?.args, [
+      '/Create', '/TN', 'AgentGuard-agentguard-threat-feed', '/XML', xmlPath, '/F', '/HRESULT',
+    ]);
+    assert.equal(result.script, configPath);
+
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.deepEqual(config, {
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '30 3 * * *',
+      timezone: 'Asia/Shanghai',
+      quiet: false,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
+      cliEntrypoint: 'C:\\Program Files\\AgentGuard & Tools\\dist\\cli.js',
+    });
+
+    const xmlBytes = readFileSync(xmlPath);
+    assert.deepEqual([...xmlBytes.subarray(0, 2)], [0xff, 0xfe]);
+    const xml = xmlBytes.subarray(2).toString('utf16le');
+    assert.match(xml, /^<\?xml version="1\.0" encoding="UTF-16"\?>/);
+    assert.match(xml, /<UserId>S-1-5-21-100-200-300-1001<\/UserId>/);
+    assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
+    assert.match(xml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
+    assert.match(xml, /<Interval>PT1M<\/Interval>/);
+    assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
+    assert.match(xml, /<ExecutionTimeLimit>PT10M<\/ExecutionTimeLimit>/);
+    assert.match(xml, /<Command>C:\\Program Files\\nodejs\\node\.exe<\/Command>/);
+    assert.match(xml, /AgentGuard &amp; Tools/);
+    assert.match(xml, /windows-cron-run/);
+  });
+
+  it('does not overwrite a Windows task when Task Scheduler query is denied', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      throw Object.assign(new Error('access denied'), { exitCode: 0x80070005 });
+    };
+
+    await assert.rejects(
+      installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'windows',
+        },
+        { runCommand: runner, platform: 'win32' } as Parameters<typeof installThreatFeedCron>[1],
+      ),
+      /Could not query Windows scheduled task.*access denied/i,
+    );
+    assert.deepEqual(calls.map((call) => call.args[0]), ['/Query']);
+  });
+
+  it('does not trust an unrelated task that collides with the managed Windows task name', async () => {
+    let calls = 0;
+    await assert.rejects(
+      installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'windows',
+        },
+        {
+          platform: 'win32',
+          async runCommand() {
+            calls += 1;
+            return { stdout: '<Task><Actions><Exec><Command>unrelated.exe</Command></Exec></Actions></Task>', stderr: '' };
+          },
+        },
+      ),
+      /not a managed AgentGuard task/i,
+    );
+    assert.equal(calls, 1);
+  });
+
+  it('rejects Windows action paths containing environment expansion syntax', async () => {
+    let calls = 0;
+    await assert.rejects(
+      installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '0 * * * *',
+          quiet: true,
+          force: false,
+          backend: 'windows',
+          agentGuardHome: 'C:\\Users\\%USERNAME%\\.agentguard',
+        },
+        {
+          platform: 'win32',
+          async runCommand() {
+            calls += 1;
+            return { stdout: '', stderr: '' };
+          },
+        },
+      ),
+      /must not contain.*%/i,
+    );
+    assert.equal(calls, 0);
+  });
+
+  it('restores Windows runner files when forced task registration fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-create-rollback-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    const xmlPath = join(scriptsDir, 'agentguard-threat-feed.task.xml');
+    const previousConfig = `${JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    })}\n`;
+    writeFileSync(configPath, previousConfig);
+    writeFileSync(xmlPath, 'previous xml\n');
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (command === 'schtasks.exe' && args[0] === '/Create') {
+        throw Object.assign(new Error('registration denied'), { exitCode: 0x80070005 });
+      }
+      return { stdout: managedWindowsTaskXml(configPath, false), stderr: '' };
+    };
+
+    await assert.rejects(
+      installThreatFeedCron(
+        {
+          name: 'agentguard-threat-feed',
+          cronExpression: '*/30 * * * *',
+          quiet: true,
+          force: true,
+          backend: 'windows',
+          agentGuardHome: home,
+        },
+        { platform: 'win32', runCommand: runner },
+      ),
+      /registration denied/,
+    );
+
+    assert.equal(readFileSync(configPath, 'utf8'), previousConfig);
+    assert.equal(readFileSync(xmlPath, 'utf8'), 'previous xml\n');
+    assert.equal(calls.some((call) => call.args.includes('/Enable')), false);
+  });
+
+  it('repairs a corrupt Windows runner config when force is set', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-force-repair-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+    const existingXml = managedWindowsTaskXml(configPath);
+    writeFileSync(configPath, '{not valid JSON');
+    const runner: CommandRunner = async (command, args) => {
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (args[0] === '/Query') return { stdout: existingXml, stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installThreatFeedCron({
+      name: 'agentguard-threat-feed',
+      cronExpression: '15 * * * *',
+      quiet: true,
+      force: true,
+      backend: 'windows',
+      agentGuardHome: home,
+    }, {
+      platform: 'win32',
+      runCommand: runner,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(JSON.parse(readFileSync(configPath, 'utf8')).cronExpression, '15 * * * *');
+  });
+
+  it('restores the registered Windows task when post-registration cleanup fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-task-rollback-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    const xmlPath = join(scriptsDir, 'agentguard-threat-feed.task.xml');
+    const previousConfig = JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    });
+    writeFileSync(configPath, previousConfig);
+    writeFileSync(xmlPath, 'previous generated xml');
+    const existingXml = managedWindowsTaskXml(configPath, false);
+    mkdirSync(`${configPath}.state.json`);
+    const registeredXml: string[] = [];
+    const runner: CommandRunner = async (command, args) => {
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (args[0] === '/Query') return { stdout: existingXml, stderr: '' };
+      if (args[0] === '/Create') {
+        const bytes = readFileSync(args[4]!);
+        assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xfe]);
+        registeredXml.push(bytes.subarray(2).toString('utf16le'));
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    await assert.rejects(
+      installThreatFeedCron({
+        name: 'agentguard-threat-feed',
+        cronExpression: '30 * * * *',
+        quiet: true,
+        force: true,
+        backend: 'windows',
+        agentGuardHome: home,
+      }, { platform: 'win32', runCommand: runner }),
+      /directory|EISDIR/i,
+    );
+
+    assert.equal(registeredXml.length, 2);
+    assert.equal(registeredXml[1], existingXml);
+    assert.equal(readFileSync(configPath, 'utf8'), previousConfig);
+    assert.equal(readFileSync(xmlPath, 'utf8'), 'previous generated xml');
+  });
+
+  it('resets Windows cron runner state after a successful forced reschedule', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-force-state-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    const statePath = `${configPath}.state.json`;
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+    writeFileSync(statePath, JSON.stringify({ version: 1, lastCheckedMinute: '2026-09-07T10:00:00.000Z' }));
+    const runner: CommandRunner = async (command) => {
+      if (command === 'schtasks.exe') {
+        return { stdout: managedWindowsTaskXml(configPath), stderr: '' };
+      }
+      return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+    };
+
+    await installThreatFeedCron({
+      name: 'agentguard-threat-feed',
+      cronExpression: '30 * * * *',
+      quiet: true,
+      force: true,
+      backend: 'windows',
+      agentGuardHome: home,
+    }, { platform: 'win32', runCommand: runner });
+
+    assert.equal(existsSync(statePath), false);
+  });
+
+  it('deletes the managed Windows task and its runner files', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-remove-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    const xmlPath = join(scriptsDir, 'agentguard-threat-feed.task.xml');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+    writeFileSync(xmlPath, '<Task/>');
+    const lockStartedAtMs = Date.now();
+    writeFileSync(`${configPath}.lock`, JSON.stringify({ version: 1, pid: 4242, startedAtMs: lockStartedAtMs }));
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (command === 'powershell.exe') {
+        return { stdout: JSON.stringify({
+          pid: 4242,
+          executablePath: 'C:\\node.exe',
+          commandLine: `"C:\\node.exe" "C:\\cli.js" windows-cron-run --config "${configPath}"`,
+          creationTimeMs: lockStartedAtMs,
+        }), stderr: '' };
+      }
+      return { stdout: managedWindowsTaskXml(configPath), stderr: '' };
+    };
+
+    const result = await removeThreatFeedCron(
+      {
+        name: 'agentguard-threat-feed',
+        backend: 'windows',
+        agentGuardHome: home,
+      },
+      { runCommand: runner, platform: 'win32' } as Parameters<typeof removeThreatFeedCron>[1]
+    );
+
+    assert.deepEqual(result, [{
+      name: 'agentguard-threat-feed',
+      backend: 'windows-task-scheduler',
+      removed: true,
+    }]);
+    assert.deepEqual(calls.map((call) => [call.command, call.args[0]]), [
+      ['schtasks.exe', '/Query'],
+      ['whoami.exe', '/User'],
+      ['schtasks.exe', '/Change'],
+      ['powershell.exe', '-NoProfile'],
+      ['taskkill.exe', '/PID'],
+      ['schtasks.exe', '/End'],
+      ['schtasks.exe', '/Delete'],
+    ]);
+    assert.deepEqual(calls[2]?.args, [
+      '/Change', '/TN', 'AgentGuard-agentguard-threat-feed', '/Disable',
+    ]);
+    assert.deepEqual(calls[4]?.args, [
+      '/PID', '4242', '/T', '/F',
+    ]);
+    assert.deepEqual(calls[5]?.args, [
+      '/End', '/TN', 'AgentGuard-agentguard-threat-feed',
+    ]);
+    assert.deepEqual(calls[6]?.args, [
+      '/Delete', '/TN', 'AgentGuard-agentguard-threat-feed', '/F',
+    ]);
+    assert.equal(existsSync(configPath), false);
+    assert.equal(existsSync(xmlPath), false);
+  });
+
+  it('does not delete a Windows task when its active runner cannot be stopped', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-remove-active-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+    writeFileSync(`${configPath}.lock`, 'active');
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (args[0] === '/End') throw new Error('access denied');
+      return { stdout: managedWindowsTaskXml(configPath), stderr: '' };
+    };
+
+    const [result] = await removeThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'windows', agentGuardHome: home },
+      { runCommand: runner, platform: 'win32' },
+    );
+
+    assert.equal(result?.removed, false);
+    assert.match(result?.error ?? '', /could not stop active Windows scheduled task/i);
+    assert.equal(calls.some((call) => call.args[0] === '/Delete'), false);
+    assert.equal(existsSync(configPath), true);
+    assert.equal(existsSync(`${configPath}.lock`), true);
+  });
+
+  it('refuses to kill a reused PID that is not the expected Windows runner', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-reused-pid-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+    writeFileSync(`${configPath}.lock`, JSON.stringify({ version: 1, pid: 4242, startedAtMs: Date.now() }));
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'whoami.exe') {
+        return { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' };
+      }
+      if (command === 'powershell.exe') {
+        return { stdout: JSON.stringify({
+          pid: 4242,
+          executablePath: 'C:\\Windows\\System32\\notepad.exe',
+          commandLine: 'notepad.exe',
+          creationTimeMs: Date.now(),
+        }), stderr: '' };
+      }
+      return { stdout: managedWindowsTaskXml(configPath), stderr: '' };
+    };
+
+    const [result] = await removeThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'windows', agentGuardHome: home },
+      { runCommand: runner, platform: 'win32' },
+    );
+
+    assert.equal(result?.removed, false);
+    assert.match(result?.error ?? '', /does not match the managed Windows runner/i);
+    assert.equal(calls.some((call) => call.command === 'taskkill.exe'), false);
+    assert.equal(calls.some((call) => call.args[0] === '/Delete'), false);
+  });
+
+  it('rejects a managed-looking Windows task owned by a different user SID', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-wrong-owner-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const configPath = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '0 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\cli.js',
+    }));
+
+    const status = await inspectWindowsThreatFeedTask(
+      { name: 'agentguard-threat-feed', agentGuardHome: home },
+      { runCommand: async (command) => command === 'whoami.exe'
+        ? { stdout: 'user,S-1-5-21-999-888-777-1001\n', stderr: '' }
+        : { stdout: managedWindowsTaskXml(configPath), stderr: '' } },
+    );
+
+    assert.equal(status.installed, false);
+    assert.match(status.error ?? '', /not a managed AgentGuard task/i);
+  });
+
+  it('inspects the exact managed Windows task and cron expression', async () => {
+    const inspectWindowsThreatFeedTask = (cronModule as Record<string, unknown>).inspectWindowsThreatFeedTask;
+    assert.equal(typeof inspectWindowsThreatFeedTask, 'function');
+    const inspectTask = inspectWindowsThreatFeedTask as (
+      options: { name: string; agentGuardHome: string },
+      adapters: { runCommand: CommandRunner },
+    ) => Promise<{ name: string; installed: boolean; cronExpression?: string }>;
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-inspect-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(join(scriptsDir, 'agentguard-threat-feed.windows-cron.json'), JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '*/15 * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: 'C:\\node.exe',
+      cliEntrypoint: 'C:\\agentguard\\cli.js',
+    }));
+
+    const status = await inspectTask(
+      { name: 'agentguard-threat-feed', agentGuardHome: home },
+      { runCommand: async (command) => command === 'whoami.exe'
+        ? { stdout: 'user,S-1-5-21-100-200-300-1001\n', stderr: '' }
+        : {
+            stdout: managedWindowsTaskXml(join(scriptsDir, 'agentguard-threat-feed.windows-cron.json')),
+            stderr: '',
+          } },
+    );
+
+    assert.deepEqual(status, {
+      name: 'agentguard-threat-feed',
+      installed: true,
+      cronExpression: '*/15 * * * *',
+    });
+  });
+
+  it('treats a missing Windows scheduled task as confirmed absent', async () => {
+    const inspectWindowsThreatFeedTask = (cronModule as Record<string, unknown>).inspectWindowsThreatFeedTask as (
+      options: { name: string; agentGuardHome?: string },
+      adapters: { runCommand: CommandRunner },
+    ) => Promise<{ name: string; installed: boolean; error?: string }>;
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-windows-absent-cleanup-'));
+    const scriptsDir = join(home, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const staleConfig = join(scriptsDir, 'agentguard-threat-feed.windows-cron.json');
+    const staleState = `${staleConfig}.state.json`;
+    writeFileSync(staleConfig, '{}');
+    writeFileSync(staleState, '{}');
+    const runner: CommandRunner = async () => {
+      throw Object.assign(new Error('localized task-not-found message'), { exitCode: 0x80070002 });
+    };
+
+    const status = await inspectWindowsThreatFeedTask(
+      { name: 'agentguard-threat-feed', agentGuardHome: home },
+      { runCommand: runner },
+    );
+    const removal = await removeThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'windows', agentGuardHome: home },
+      { runCommand: runner, platform: 'win32' } as Parameters<typeof removeThreatFeedCron>[1],
+    );
+
+    assert.deepEqual(status, { name: 'agentguard-threat-feed', installed: false });
+    assert.deepEqual(removal, [{
+      name: 'agentguard-threat-feed',
+      backend: 'windows-task-scheduler',
+      removed: false,
+    }]);
+    assert.equal(existsSync(staleConfig), false);
+    assert.equal(existsSync(staleState), false);
+  });
+
+  it('uses Task Scheduler instead of crontab when removing all backends on Windows', async () => {
+    const commands: string[] = [];
+    const runner: CommandRunner = async (command) => {
+      commands.push(command);
+      if (command === 'schtasks.exe') {
+        throw Object.assign(new Error('missing'), { exitCode: 2 });
+      }
+      return { stdout: '{"jobs":[]}', stderr: '' };
+    };
+    const gateway = { async request() { return { jobs: [] }; } };
+
+    const results = await removeThreatFeedCron(
+      { name: 'agentguard-threat-feed', backend: 'all' },
+      { platform: 'win32', runCommand: runner, gateway },
+    );
+
+    assert.equal(results.some((item) => item.backend === 'windows-task-scheduler'), true);
+    assert.equal(results.some((item) => item.backend === 'system'), false);
+    assert.equal(commands.includes('crontab'), false);
   });
 
   it('removes the managed system crontab block without touching other entries', async () => {

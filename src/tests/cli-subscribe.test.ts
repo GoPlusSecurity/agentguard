@@ -214,6 +214,31 @@ const advisory: Advisory = {
 };
 
 describe('CLI subscribe command modes', () => {
+  it('runs the internal Windows cron runner command', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-cli-windows-cron-run-'));
+    const configPath = join(home, 'windows-cron.json');
+    const minute = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      name: 'agentguard-threat-feed',
+      cronExpression: '* * * * *',
+      timezone: 'UTC',
+      quiet: true,
+      agentGuardHome: home,
+      nodeExecutable: process.execPath,
+      cliEntrypoint: CLI_PATH,
+    }));
+    writeFileSync(`${configPath}.state.json`, JSON.stringify({
+      version: 1,
+      lastCheckedMinute: minute,
+    }));
+
+    const result = await runCliNoConfigWrite(['windows-cron-run', '--config', configPath], home);
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.stderr, '');
+  });
+
   it('subscribes before pulling advisories during interactive subscribe runs', async () => {
     const requests: string[] = [];
     const server = http.createServer((req, res) => {
@@ -476,6 +501,31 @@ describe('CLI subscribe command modes', () => {
         assert.match(result.stdout, /Installed openclaw-gateway cron job "agentguard-threat-feed"/);
         assert.deepEqual(calls.map((call) => call.method), ['cron.list', 'cron.add']);
       });
+    });
+  });
+
+  it('accepts --cron-target windows and registers a native Task Scheduler job', async () => {
+    await withFeedServer([], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-windows-cron-'));
+      const bin = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-windows-bin-'));
+      const fakeSchtasks = join(bin, 'schtasks.exe');
+      const fakeWhoami = join(bin, 'whoami.exe');
+      writeFileSync(fakeSchtasks, '#!/usr/bin/env sh\nif [ "$1" = "/Query" ]; then exit 2; fi\nexit 0\n');
+      writeFileSync(fakeWhoami, '#!/usr/bin/env sh\nprintf "user,S-1-5-21-1000-2000-3000-1001\\n"\n');
+      chmodSync(fakeSchtasks, 0o755);
+      chmodSync(fakeWhoami, 0o755);
+
+      const result = await runCli(
+        ['subscribe', '--cron', '*/5 * * * *', '--quiet', '--cron-target', 'windows'],
+        home,
+        cloudUrl,
+        { PATH: `${bin}:${process.env.PATH || ''}` },
+      );
+
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /Installed windows-task-scheduler cron job/);
+      assert.equal(existsSync(join(home, 'scripts', 'agentguard-threat-feed.windows-cron.json')), true);
+      assert.equal(existsSync(join(home, 'scripts', 'agentguard-threat-feed.task.xml')), true);
     });
   });
 

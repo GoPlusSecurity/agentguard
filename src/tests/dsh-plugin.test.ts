@@ -147,6 +147,7 @@ describe('AgentGuard DSH runtime plugin', () => {
           name: 'agentguard-threat-feed',
           installed: true,
           cronExpression: '0 * * * *',
+          backend: 'system',
         };
       },
       async listNotifications() {
@@ -178,6 +179,7 @@ describe('AgentGuard DSH runtime plugin', () => {
     const result = await tool.execute({}, { agent: { id: 'dsh-agent-1' } });
 
     assert.equal(result.subscribed, true);
+    assert.equal(result.backend, 'system');
     assert.equal(result.subscriptionId, 'sub-existing');
     assert.equal(result.targetAgentId, 'dsh-agent-1');
     assert.equal(result.currentAgentIsTarget, true);
@@ -199,7 +201,7 @@ describe('AgentGuard DSH runtime plugin', () => {
     const tool = createAgentGuardDshSubscriptionStatusTool({
       agentGuardHome: () => '/tmp/agentguard-status-empty',
       async loadSubscription() { return null; },
-      async inspectCron() { return { name: 'agentguard-threat-feed', installed: false }; },
+      async inspectCron() { return { name: 'agentguard-threat-feed', installed: false, backend: 'system' }; },
       async listNotifications() { throw new Error('queue should not be read without subscription state'); },
     });
 
@@ -207,6 +209,7 @@ describe('AgentGuard DSH runtime plugin', () => {
 
     assert.deepEqual(result, {
       subscribed: false,
+      backend: 'system',
       currentAgentIsTarget: false,
       cronInstalled: false,
       pendingNotifications: 0,
@@ -214,15 +217,48 @@ describe('AgentGuard DSH runtime plugin', () => {
     });
   });
 
+  it('uses the platform-aware cron inspector and reports Task Scheduler status', async () => {
+    const subscription = existingSubscription();
+    let inspectOptions: Record<string, unknown> | undefined;
+    const tool = createAgentGuardDshSubscriptionStatusTool({
+      agentGuardHome: () => 'C:\\Users\\alice\\.agentguard',
+      async loadSubscription() { return subscription; },
+      async inspectCron(options) {
+        inspectOptions = options;
+        return {
+          name: subscription.cronName,
+          installed: true,
+          cronExpression: subscription.cronExpression,
+          backend: 'windows-task-scheduler',
+        };
+      },
+      async listNotifications() { return []; },
+    });
+
+    const result = await tool.execute({}, { agent: { id: subscription.agentId } });
+
+    assert.equal(result.backend, 'windows-task-scheduler');
+    assert.deepEqual(inspectOptions, {
+      name: subscription.cronName,
+      backend: 'auto',
+      agentHost: 'dsh',
+      agentGuardHome: 'C:\\Users\\alice\\.agentguard',
+    });
+    assert.match(result.modelSummary, /Windows Task Scheduler/);
+    assert.doesNotMatch(result.modelSummary, /system cron/i);
+  });
+
   it('unsubscribes in cron, queue, then state order', async () => {
     const order: string[] = [];
     const removedIds: string[][] = [];
+    let cronBackend: string | undefined;
     const subscription = existingSubscription();
     const tool = createAgentGuardDshUnsubscribeTool({
       agentGuardHome: () => '/tmp/agentguard-unsubscribe',
       async loadSubscription() { return subscription; },
-      async removeCron() {
+      async removeCron(options) {
         order.push('cron');
+        cronBackend = options.backend;
         return [{ name: subscription.cronName, backend: 'system', removed: true }];
       },
       async listNotifications() {
@@ -242,6 +278,7 @@ describe('AgentGuard DSH runtime plugin', () => {
     const result = await tool.execute({}, { agent: { id: 'dsh-agent-1' } });
 
     assert.deepEqual(order, ['cron', 'list-queue', 'remove-queue', 'remove-state']);
+    assert.equal(cronBackend, 'auto');
     assert.deepEqual(removedIds, [['a'.repeat(64), 'b'.repeat(64)]]);
     assert.deepEqual(result, {
       unsubscribed: true,
@@ -250,6 +287,29 @@ describe('AgentGuard DSH runtime plugin', () => {
       modelSummary: 'AgentGuard threat-feed subscription removed for this DSH session. Removed the system cron and 2 queued notifications.',
     });
     assert.doesNotMatch(JSON.stringify(result), /sensitive/);
+  });
+
+  it('reports Windows Task Scheduler when removing a DSH subscription', async () => {
+    const subscription = existingSubscription();
+    const tool = createAgentGuardDshUnsubscribeTool({
+      async loadSubscription() { return subscription; },
+      async removeCron() {
+        return [{
+          name: subscription.cronName,
+          backend: 'windows-task-scheduler',
+          removed: true,
+        }];
+      },
+      async listNotifications() { return []; },
+      async removeNotifications() {},
+      async removeSubscription() {},
+    });
+
+    const result = await tool.execute({}, { agent: { id: subscription.agentId } });
+
+    assert.equal(result.cronRemoved, true);
+    assert.match(result.modelSummary, /Windows Task Scheduler/);
+    assert.doesNotMatch(result.modelSummary, /system cron/i);
   });
 
   it('allows confirmed-absent cron cleanup and makes no-state unsubscribe idempotent', async () => {
@@ -339,7 +399,7 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.deepEqual(order, ['cron', 'list-queue', 'remove-queue']);
   });
 
-  it('subscribes the calling DSH agent and installs a persistent system cron', async () => {
+  it('subscribes the calling DSH agent with the platform-selected persistent cron backend', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-subscribe-tool-'));
     roots.push(home);
     const order: string[] = [];
@@ -382,7 +442,7 @@ describe('AgentGuard DSH runtime plugin', () => {
       cronExpression: '*/15 * * * *',
       quiet: true,
       force: false,
-      backend: 'system',
+      backend: 'auto',
       agentHost: 'dsh',
       agentGuardHome: home,
     }]);
@@ -409,6 +469,42 @@ describe('AgentGuard DSH runtime plugin', () => {
       modelSummary: 'AgentGuard threat-feed subscription created for this DSH session. The system cron runs every */15 * * * * with automatic self-check enabled.',
     });
     assert.deepEqual(tool.output.render({}, result), [{ type: 'text', text: result.modelSummary }]);
+  });
+
+  it('reports Windows Task Scheduler when DSH subscription auto-selects it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-subscribe-windows-'));
+    roots.push(home);
+    const tool = createAgentGuardDshSubscribeTool({
+      agentGuardHome: () => home,
+      loadAgentGuardConfig: () => dshCloudConfig(),
+      saveAgentGuardConfig() {},
+      async subscribeCloudFeed() {},
+      async installCron(options) {
+        return {
+          name: options.name,
+          schedule: options.cronExpression,
+          timezone: 'UTC',
+          created: true,
+          backend: 'windows-task-scheduler' as const,
+        };
+      },
+      createSubscriptionId: () => 'sub-dsh-windows',
+      now: () => '2026-08-25T01:02:03.000Z',
+    });
+
+    const result = await tool.execute({}, { agent: { id: 'dsh-agent-1' } });
+
+    assert.equal(result.backend, 'windows-task-scheduler');
+    const outputSchema = tool.output.schema as {
+      properties: { backend: { enum?: string[] } };
+    };
+    assert.equal(
+      outputSchema.properties.backend.enum?.includes(result.backend),
+      true,
+      'subscribe output schema must accept the backend returned on Windows',
+    );
+    assert.match(result.modelSummary, /Windows Task Scheduler/);
+    assert.doesNotMatch(result.modelSummary, /system cron/i);
   });
 
   it('rejects subscribe calls without a verified DSH agent or connected DSH host', async () => {

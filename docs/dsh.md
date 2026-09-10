@@ -39,8 +39,9 @@ The three static AgentGuard DSH tools preserve the Phase 1 boundary: they do not
 
 The native `agentguard_dsh_subscribe` tool binds a threat-feed subscription to
 the exact DSH agent that invokes it. It subscribes the currently connected
-AgentGuard Cloud identity, installs a system crontab poller, and stores the
-binding in `~/.agentguard/dsh-threat-feed-subscription.json`.
+AgentGuard Cloud identity, installs a local scheduled poller, and stores the
+binding in `~/.agentguard/dsh-threat-feed-subscription.json`. The poller uses
+system crontab on Unix-like hosts and native Windows Task Scheduler on Windows.
 
 Before invoking the tool, initialize the DSH integration and connect Cloud:
 
@@ -61,9 +62,11 @@ The tool accepts these optional arguments:
 - `selfCheck`: defaults to `false`; set it to `true` only when scheduled local self-checks are intended;
 - `force`: replace a subscription bound to another DSH agent or schedule.
 
-Polling continues while DSH is stopped because the job is owned by system
-crontab. The cron runner must be able to find the `agentguard` executable on
-its saved `PATH`, and writes output to `~/.agentguard/feed-cron.log`.
+Polling continues while DSH is stopped because the job is owned by the local
+scheduler. On Windows, the task runs at least privilege as the current user and
+only while that user is logged on; AgentGuard does not store the user's password
+or register the task as SYSTEM. The runner writes output to
+`~/.agentguard/feed-cron.log`.
 
 When a pull finds new advisories, or a `selfCheck: true` pull finds local
 matches, the cron process first writes a bounded notice under
@@ -79,13 +82,13 @@ notice id after restart.
 Use `agentguard_dsh_subscription_status` with no arguments to inspect the
 subscription safely. It reports whether state is saved, the subscription and
 target agent ids, whether the caller is that target, the configured cron and
-self-check mode, whether the exact system cron block is installed, the queued
+self-check mode, the selected scheduler backend, whether the exact local scheduled task is installed, the queued
 notice count, and the latest enqueue time. It never returns notification
 bodies, matched local paths, credentials, or Cloud remediation text.
 
 Use `agentguard_dsh_unsubscribe` with no arguments from the exact subscribed
 DSH session to remove the subscription. Cleanup is ordered transactionally:
-the managed system cron is removed or confirmed absent first, then only queue
+the managed local scheduled task is removed or confirmed absent first, then only queue
 files for that subscription and agent are deleted, and subscription state is
 deleted last. A cron read/removal error or queue cleanup error leaves the saved
 state in place so the operation can be retried. Calling it when no subscription
@@ -130,12 +133,19 @@ grep -F '"@goplus/agentguard"' "$HOME/.dsh/profiles/web/package.json"
 The first command must resolve under the active Node/npm installation, not the
 checkout in a macOS protected user folder. Restart DSH after the plugin add.
 Invoke `agentguard_dsh_subscribe` from the DSH conversation, then trigger one
-poll without waiting for cron:
+poll without waiting for the scheduler. On Unix-like hosts:
 
 ```bash
 "$HOME/.agentguard/scripts/agentguard-threat-feed.sh"
 tail -n 50 "$HOME/.agentguard/feed-cron.log"
 find "$HOME/.agentguard/dsh-feed-notifications" -maxdepth 1 -type f -name '*.json' -print
+```
+
+On Windows, start the registered task and inspect its log instead:
+
+```bat
+schtasks.exe /Run /TN "AgentGuard-agentguard-threat-feed"
+powershell.exe -NoProfile -Command "Get-Content -Tail 50 $env:USERPROFILE\.agentguard\feed-cron.log"
 ```
 
 An immediate DSH follow-up requires an unseen advisory (or a new self-check
