@@ -14,6 +14,29 @@
       "description": "AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets.",
       "source": "./",
       "strict": true
+    },
+    {
+      "name": "agentguard-toolkit",
+      "displayName": "AgentGuard Toolkit",
+      "description": "Skill supply-chain security for Claude Code, powered by the GoPlus AgentGuard MCP server. Scan any skill or plugin for malicious code before you install it, gate skill execution against a local trust registry with capability-based permissions, pre-check risky shell commands, network calls and secret access against a policy engine, and simulate Web3 transactions for scam, phishing and approval risk before you sign. Complements the agentguard plugin; safe to install both.",
+      "author": {
+        "name": "GoPlus Security",
+        "url": "https://github.com/GoPlusSecurity"
+      },
+      "category": "security",
+      "homepage": "https://github.com/GoPlusSecurity/agentguard/tree/main/plugins/agentguard-toolkit",
+      "license": "MIT",
+      "keywords": [
+        "security",
+        "mcp",
+        "skill-scanner",
+        "trust-registry",
+        "web3",
+        "supply-chain",
+        "agent-security"
+      ],
+      "source": "./plugins/agentguard-toolkit",
+      "strict": true
     }
   ]
 }
