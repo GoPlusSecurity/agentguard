@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { CapabilityModel } from '../types/skill.js';
+import { loadSkillCapabilityManifest } from './capabilities.js';
 import type { EffectiveRuntimePolicy } from './types.js';
 
 export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
@@ -65,7 +67,7 @@ export async function resolveRuntimePolicy(options: {
       const cloudPolicy = await options.fetchPolicy();
       if (cloudPolicy) {
         saveCachedPolicy(options.cachePath, cloudPolicy);
-        return { policy: cloudPolicy, source: 'cloud' };
+        return { policy: withLocalCapabilityManifest(cloudPolicy), source: 'cloud' };
       }
     } catch {
       // Fall through to cache/default.
@@ -73,6 +75,22 @@ export async function resolveRuntimePolicy(options: {
   }
 
   const cached = loadCachedPolicy(options.cachePath);
-  if (cached) return { policy: cached, source: 'cache' };
-  return { policy: getDefaultEffectiveRuntimePolicy(), source: 'default' };
+  if (cached) return { policy: withLocalCapabilityManifest(cached), source: 'cache' };
+  return { policy: withLocalCapabilityManifest(getDefaultEffectiveRuntimePolicy()), source: 'default' };
+}
+
+/**
+ * Overlay the local capability manifest (`capabilities.json`) onto the resolved
+ * policy. Local entries take precedence over any cloud-supplied scope so an
+ * operator can confine a skill without a cloud round-trip. Returns the policy
+ * unchanged when no local manifest entries exist.
+ */
+function withLocalCapabilityManifest(policy: EffectiveRuntimePolicy): EffectiveRuntimePolicy {
+  const local = loadSkillCapabilityManifest();
+  if (Object.keys(local).length === 0) return policy;
+  const merged: Record<string, Partial<CapabilityModel>> = {
+    ...(policy.skillCapabilities || {}),
+    ...local,
+  };
+  return { ...policy, skillCapabilities: merged };
 }
