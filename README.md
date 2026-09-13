@@ -14,6 +14,8 @@
 [![CI](https://github.com/GoPlusSecurity/agentguard/actions/workflows/ci.yml/badge.svg)](https://github.com/GoPlusSecurity/agentguard/actions/workflows/ci.yml)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
+Languages: **English** | [简体中文](docs/i18n/README.zh-Hans.md) | [繁體中文](docs/i18n/README.zh-Hant.md) | [日本語](docs/i18n/README.ja.md)
+
 ## Why AgentGuard?
 
 AI coding agents can execute any command, read any file, and install any skill — with zero security review. The risks are real:
