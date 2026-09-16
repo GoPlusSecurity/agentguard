@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { globMatch, runSelfCheckForAdvisory, safeRegexTest } from '../feed/selfcheck.js';
+import { expandHomeDir, globMatch, runSelfCheckForAdvisory, safeRegexTest } from '../feed/selfcheck.js';
 import type { Advisory } from '../feed/types.js';
 
 function makeSkillDir(parent: string, name: string, body: string): string {
@@ -38,6 +38,13 @@ function makeAdvisory(partial: Partial<Advisory>): Advisory {
 }
 
 describe('feed/selfcheck', () => {
+  it('normalizes Windows home-directory separators in glob patterns', () => {
+    assert.equal(
+      expandHomeDir('~/.codex/skills/*', 'C:\\Users\\alice'),
+      'C:/Users/alice/.codex/skills/*',
+    );
+  });
+
   it('globMatch handles literal names', () => {
     assert.equal(globMatch('slack-webhook', 'slack-webhook'), true);
     assert.equal(globMatch('slack-webhook', 'discord-webhook'), false);

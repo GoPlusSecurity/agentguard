@@ -407,10 +407,10 @@ function firstExisting(paths: string[]): string | null {
   return null;
 }
 
-function expandHomeDir(path: string): string {
+export function expandHomeDir(path: string, homeDir = homedir()): string {
   if (!path.startsWith('~')) return path;
-  if (path === '~') return homedir();
-  if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+  if (path === '~') return homeDir;
+  if (path.startsWith('~/')) return join(homeDir, path.slice(2)).replace(/\\/g, '/');
   return path;
 }
 
