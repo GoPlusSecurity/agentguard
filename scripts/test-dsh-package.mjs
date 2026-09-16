@@ -57,6 +57,8 @@ try {
     'package/dist/dsh/plugin.d.ts',
     'package/dist/dsh/runtime.js',
     'package/dist/dsh/runtime.d.ts',
+    'package/dist/dsh/llm-privacy.js',
+    'package/dist/dsh/llm-privacy.d.ts',
     'package/dist/runtime/decision.js',
     'package/dist/runtime/decision.d.ts',
     'package/dist/dsh/scan.js',
@@ -91,7 +93,11 @@ try {
     tools: { register(tool) { registeredTools.push(tool); } },
     on(event, listener) { runtimeEvents.push({ event, listener }); },
   });
-  assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute', 'tools/post-execute']);
+  assert.deepEqual(runtimeEvents.map(entry => entry.event), [
+    'tools/pre-execute',
+    'tools/post-execute',
+    'llm/stream',
+  ]);
   const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
   const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
   const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -112,6 +118,17 @@ try {
   const batchResult = await registeredBatch.execute({ targets: [{ target: safeFixture }], format: 'json' });
   assert.equal(batchResult.succeeded, 1);
 
+  const { stdout: e2eOutput } = await run(process.execPath, ['scripts/test-dsh-plugin-e2e.mjs'], {
+    env: {
+      ...env,
+      DSH_E2E_BIN: dshBin,
+      DSH_E2E_HOME: dshHome,
+    },
+    timeout: 240_000,
+  });
+  const e2eResult = JSON.parse(e2eOutput.trim().split('\n').at(-1));
+  assert.equal(e2eResult.llmLifecycleObserved, true);
+
   await dsh(['plugin', '--profile', 'web', 'update', tarball]);
   const updatedManifest = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'));
   assert.ok(updatedManifest.dependencies?.['@goplus/agentguard']);
@@ -131,8 +148,10 @@ try {
     compiledTestsExcluded: true,
     installComposed: true,
     scanExecuted: true,
+    e2eExecuted: true,
     runtimeObserverRegistered: true,
     runtimePostObserverRegistered: true,
+    llmLifecycleRegistered: true,
     runtimeSummaryRegistered: true,
     subscribeRegistered: true,
     subscriptionStatusRegistered: true,

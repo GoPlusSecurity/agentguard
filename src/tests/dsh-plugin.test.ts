@@ -56,6 +56,26 @@ function existingSubscription() {
 }
 
 describe('AgentGuard DSH runtime plugin', () => {
+  it('registers the blocking DSH model lifecycle listener', () => {
+    const events: Array<{ event: string; listener: unknown }> = [];
+
+    apply({
+      tools: { register() {} },
+      agents: { get() { return undefined; }, list() { return []; } },
+      on(event: string, listener: unknown) {
+        events.push({ event, listener });
+      },
+    });
+
+    assert.deepEqual(inject, ['tools', 'agents']);
+    assert.deepEqual(events.map(entry => entry.event), [
+      'tools/pre-execute',
+      'tools/post-execute',
+      'llm/stream',
+    ]);
+    assert.equal(typeof events.at(-1)?.listener, 'function');
+  });
+
   it('injects the agent registry and installs threat-feed delivery lifecycle hooks', async () => {
     assert.deepEqual(inject, ['tools', 'agents']);
     const home = await mkdtemp(join(tmpdir(), 'agentguard-dsh-plugin-delivery-'));
@@ -90,13 +110,17 @@ describe('AgentGuard DSH runtime plugin', () => {
       dsh: { bundle: { patch: string } };
     };
     const bundlePatch = parse(readFileSync(resolve(manifest.dsh.bundle.patch), 'utf8')) as Array<{
-      insert?: Array<{ id?: string; config?: Parameters<typeof apply>[1] }>;
+      insert?: Array<{
+        id?: string;
+        config?: Parameters<typeof apply>[1] & { llmPrivacy?: { enabled?: boolean } };
+      }>;
     }>;
     const config = bundlePatch
       .flatMap(operation => operation.insert ?? [])
       .find(entry => entry.id === 'agentguard-dsh-plugin')
       ?.config;
     assert.ok(config, 'packaged DSH plugin config is missing');
+    assert.equal(config.llmPrivacy?.enabled, true);
 
     const logs: string[] = [];
     apply({
@@ -688,11 +712,11 @@ describe('AgentGuard DSH runtime plugin', () => {
     const logs: string[] = [];
     const context = {
       tools: { register() {} },
-      on(event: 'tools/pre-execute' | 'tools/post-execute') { events.push(event); },
+      on(event: 'tools/pre-execute' | 'tools/post-execute' | 'llm/stream') { events.push(event); },
       logger: { info(message: string) { logs.push(message); }, warn() {} },
     };
     apply(context);
-    assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
+    assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute', 'llm/stream']);
     assert.match(logs.at(-1) ?? '', /mode: observe.*enforcement inactive/i);
 
     events.length = 0;
@@ -700,12 +724,20 @@ describe('AgentGuard DSH runtime plugin', () => {
     assert.deepEqual(events, []);
     assert.match(logs.at(-1) ?? '', /mode: off.*listeners disabled/i);
 
-    apply(context, { runtime: { mode: 'protect' } });
+    apply(context, { llmPrivacy: { enabled: false } });
     assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute']);
+    events.length = 0;
+
+    apply(context, { runtime: { mode: 'protect' } });
+    assert.deepEqual(events, ['tools/pre-execute', 'tools/post-execute', 'llm/stream']);
     assert.match(logs.at(-1) ?? '', /mode: protect.*enforcement active/i);
     assert.throws(
       () => apply(context, { runtime: { mode: 'invalid' as 'observe' } }),
       /unsupported AgentGuard DSH runtime mode/
+    );
+    assert.throws(
+      () => apply(context, { llmPrivacy: { enabled: 'false' as unknown as boolean } }),
+      /unsupported AgentGuard DSH LLM privacy enabled value/
     );
     assert.throws(
       () => apply(context, { runtime: { failureMode: 'invalid' as 'deny' } }),

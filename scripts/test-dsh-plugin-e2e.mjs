@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -40,13 +41,182 @@ assert.match(dumped.stdout, /runtime:\s*\n\s+mode:\s*(?:observe|protect)/);
 
 const plugin = await import(`${pathToFileURL(installedPlugin).href}?e2e=${Date.now()}`);
 const enforcementAdapter = await import(`${pathToFileURL(join(dirname(installedPlugin), 'enforcement-adapter.js')).href}?e2e=${Date.now()}`);
+const llmPrivacyModule = await import(`${pathToFileURL(join(dirname(installedPlugin), 'llm-privacy.js')).href}?e2e=${Date.now()}`);
+const dshRequire = createRequire(await realpath(dshBin));
+const { Context } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/cordis')).href);
+const { default: LlmRuntime, LlmAdapter } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-llm')).href);
+const { default: SessionStore } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-session')).href);
+const { default: AgentRegistry } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-agent')).href);
+const { default: ApprovalService } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-user-approval')).href);
+const { default: BasicCompactionEngine } = await import(
+  pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-compaction-basic')).href
+);
+const { generateSessionTitleWithLlm, resolveSessionTitleLlmConfig } = await import(
+  pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-session-title-llm')).href
+);
 const registeredTools = [];
 const runtimeEvents = [];
 plugin.apply({
   tools: { register(tool) { registeredTools.push(tool); } },
   on(event, listener) { runtimeEvents.push({ event, listener }); },
 });
-assert.deepEqual(runtimeEvents.map(entry => entry.event), ['tools/pre-execute', 'tools/post-execute']);
+assert.deepEqual(runtimeEvents.map(entry => entry.event), [
+  'tools/pre-execute',
+  'tools/post-execute',
+  'llm/stream',
+]);
+const llmStreamListener = runtimeEvents.find(entry => entry.event === 'llm/stream')?.listener;
+assert.equal(typeof llmStreamListener, 'function');
+
+const llmLifecycleAuditHome = await mkdtemp(join(tmpdir(), 'agentguard-dsh-llm-e2e-'));
+const previousAgentGuardHome = process.env.AGENTGUARD_HOME;
+const llmCtx = new Context();
+const approvalCtx = new Context();
+try {
+  process.env.AGENTGUARD_HOME = llmLifecycleAuditHome;
+  await llmCtx.plugin(LlmRuntime);
+  class FixtureAdapter extends LlmAdapter {
+    requests = [];
+    async *stream(options) {
+      this.requests.push(options);
+      yield { type: 'block-start', index: 0, blockType: 'text' };
+      yield { type: 'text-delta', index: 0, text: 'Safe lifecycle output' };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Safe lifecycle output' } };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    }
+  }
+  const fixtureAdapter = new FixtureAdapter();
+  llmCtx.llm.registerAdapter(['e2e-provider'], fixtureAdapter);
+  llmCtx.on('llm/stream', llmStreamListener);
+
+  const conversationChunks = [];
+  for await (const chunk of llmCtx.llm.stream({
+    provider: 'e2e-provider',
+    model: 'e2e-model',
+    messages: [],
+    sessionId: 'conversation-session',
+  })) conversationChunks.push(chunk);
+  assert.equal(conversationChunks.at(-1)?.type, 'finish');
+
+  const compaction = new BasicCompactionEngine(llmCtx, {
+    auto: false,
+    summarizationProvider: 'e2e-provider',
+    summarizationModel: 'e2e-model',
+  });
+  const compacted = await compaction.summarize({ messages: [] }, {
+    options: { provider: 'e2e-provider', model: 'e2e-model' },
+    session: {
+      id: 'compaction-session',
+      requestHeader() { return undefined; },
+    },
+  });
+  assert.equal(compacted.llmStreamCall, true);
+
+  const titleEvents = [];
+  const title = await generateSessionTitleWithLlm(
+    llmCtx,
+    resolveSessionTitleLlmConfig({
+      targetWords: 6,
+      targetCjkCharacters: 12,
+      maxInputBytes: 4096,
+      maxOutputTokens: 64,
+      timeoutMs: 5000,
+      provider: 'e2e-provider',
+      model: 'e2e-model',
+    }),
+    {
+      signal: new AbortController().signal,
+      session: {
+        id: 'title-session',
+        append(type, payload) { titleEvents.push({ type, payload }); },
+      },
+    },
+    [{ seq: 1, text: 'Name this session' }],
+    'e2e-title-provider',
+  );
+  assert.equal(title.title, 'Safe lifecycle output');
+  assert.equal(titleEvents[0]?.type, 'session/title-llm-request');
+  assert.deepEqual(fixtureAdapter.requests.map(request => request.purpose), [
+    undefined,
+    'compaction',
+    'session-title',
+  ]);
+
+  const llmLifecycleEvents = (await readFile(join(llmLifecycleAuditHome, 'audit.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  assert.equal(llmLifecycleEvents.length, 6);
+  assert.deepEqual(
+    llmLifecycleEvents.filter(event => event.actionType === 'llm_request').map(event => event.llm?.purpose),
+    ['unknown', 'compaction', 'title'],
+  );
+  assert.ok(llmLifecycleEvents.every(event => event.metadata?.unifiedLlmService === true));
+
+  await approvalCtx.plugin(LlmRuntime);
+  await approvalCtx.plugin(SessionStore);
+  await approvalCtx.plugin(AgentRegistry);
+  await approvalCtx.plugin(ApprovalService);
+  const approvalAdapter = new FixtureAdapter();
+  approvalCtx.llm.registerAdapter(['approval-provider'], approvalAdapter);
+  const approvalSession = approvalCtx.sessions.create();
+  approvalSession.append('turn/start', { turn: 1 });
+  const approvalAgent = {
+    id: approvalSession.id,
+    options: {},
+    session: approvalSession,
+    inbox: {},
+    status: 'running',
+    ctx: approvalCtx,
+    send() {},
+    followup() {},
+    steer() { return { outcome: Promise.resolve({ status: 'rejected' }) }; },
+    inject() {},
+    cancel() {},
+    runMaintenance(task) { return task(new AbortController().signal); },
+    whenIdle() { return Promise.resolve(); },
+  };
+  approvalCtx.agents.register(approvalAgent);
+  approvalCtx.on('approval/request', () => Promise.resolve('allowed-once'));
+  approvalCtx.on('llm/stream', llmPrivacyModule.createDshLlmPrivacyListener({
+    runtimeMode: 'protect',
+    agents: approvalCtx.agents,
+    approval: approvalCtx.approval,
+    evaluate: async action => ({
+      policySource: 'default',
+      decision: {
+        actionId: `e2e-${action.actionType}`,
+        decision: action.actionType === 'llm_request' ? 'require_approval' : 'allow',
+        riskScore: action.actionType === 'llm_request' ? 70 : 0,
+        riskLevel: action.actionType === 'llm_request' ? 'high' : 'safe',
+        reasons: action.actionType === 'llm_request'
+          ? [{ code: 'PII_EGRESS', severity: 'high', title: 'approval e2e', description: 'approval e2e' }]
+          : [],
+        policyVersion: 'e2e',
+      },
+    }),
+    writeAudit() {},
+  }));
+  const approvedChunks = [];
+  for await (const chunk of approvalCtx.llm.stream({
+    provider: 'approval-provider',
+    model: 'e2e-model',
+    messages: [],
+    sessionId: approvalSession.id,
+  })) approvedChunks.push(chunk);
+  assert.equal(approvedChunks.at(-1)?.reason?.kind, 'stop');
+  assert.equal(approvalAdapter.requests.length, 1);
+  assert.deepEqual(
+    approvalSession.events.filter(event => event.type.startsWith('approval/')).map(event => event.type),
+    ['approval/asked', 'approval/decided'],
+  );
+} finally {
+  await llmCtx.fiber.dispose();
+  await approvalCtx.fiber.dispose();
+  if (previousAgentGuardHome === undefined) delete process.env.AGENTGUARD_HOME;
+  else process.env.AGENTGUARD_HOME = previousAgentGuardHome;
+  await rm(llmLifecycleAuditHome, { recursive: true, force: true });
+}
 const registered = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan');
 const registeredBatch = registeredTools.find(tool => tool.name === 'agentguard_dsh_scan_batch');
 const registeredCompare = registeredTools.find(tool => tool.name === 'agentguard_dsh_compare');
@@ -95,9 +265,8 @@ const comparison = await registeredCompare.execute({ before: { target: safeFixtu
 assert.equal(comparison.assessment, 'review-required');
 assert.equal(comparison.runtimeSurfaceRiskDirection, 'increased');
 
-const { Context } = await import(pathToFileURL(join(repoRoot, '.dsh-runtime/node_modules/@deepseek-ai/cordis/lib/index.js')).href);
-const { default: SystemPrompt } = await import(pathToFileURL(join(repoRoot, '.dsh-runtime/node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js')).href);
-const { default: ToolRuntime } = await import(pathToFileURL(join(repoRoot, '.dsh-runtime/node_modules/@deepseek-ai/dsh-tools/lib/index.js')).href);
+const { default: SystemPrompt } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-system-prompt')).href);
+const { default: ToolRuntime } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-tools')).href);
 const runtimeCtx = new Context();
 let probeBodyCalls = 0;
 try {
@@ -356,6 +525,8 @@ try {
     postExecuteObserved: true,
     runtimeSummaryRedacted: true,
     nativeApprovalFailClosed: true,
+    nativeLlmApprovalVerified: true,
+    llmLifecycleObserved: true,
   }));
 } finally {
   child.kill('SIGTERM');

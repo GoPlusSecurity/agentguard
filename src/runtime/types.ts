@@ -41,6 +41,7 @@ export type RuntimeLifecycleStage =
   | 'stop';
 
 export type LlmRequestPurpose =
+  | 'unknown'
   | 'conversation'
   | 'compaction'
   | 'title'

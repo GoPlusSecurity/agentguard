@@ -397,13 +397,13 @@ pre-tool hook 对危险执行动作提供最后一道阻断
 
 DSH 源码只作为生命周期契约的只读评估依据，不产生任何修改、patch 或发布要求。
 
-- [ ] 在 AgentGuard DSH 插件中注册 `llm/stream` waterfall listener。
-- [ ] 声明 DSH capability：`modelRequest=blocking`；最终 destination、credential facts、精确 payload bytes 为不可用；辅助调用是否覆盖取决于是否经过 `ctx.llm.stream()`。
-- [ ] 从 `GenerateOptions` 读取实际可用的 system、messages、tools、images、provider 和 model，构造本地 `llm_request`；不存在的 purpose、attempt、endpoint 字段保持 `unknown`。
-- [ ] 在调用 `next()` 前执行 AgentGuard；`block` 返回规范错误 stream，`require_approval` 走 DSH 原生 `approval/request`。
-- [ ] 包装下游 stream，检测可见的 tool call、命令和包名；只有 wrapper 能在 DSH 消费前可靠短路时才将 response capability 标为 `blocking`，否则标为 `observe_only`。
-- [ ] 用集成测试验证 conversation、compaction、session title 等已知消费者是否经过 `ctx.llm.stream()`；未经过者记录为 adapter capability 缺口，而不是修改 DSH。
-- [ ] 对规则 14、18、19 输出缺失的 transport facts；禁止根据 provider 名称猜测实际 endpoint 或 key 是否存在。
+- [x] 在 AgentGuard DSH 插件中注册 `llm/stream` waterfall listener。
+- [x] 声明 DSH capability：`modelRequest=blocking`；最终 destination、credential facts、精确 payload bytes 为不可用；辅助调用是否覆盖取决于是否经过 `ctx.llm.stream()`。
+- [x] 从 `GenerateOptions` 读取实际可用的 system、messages、tools、images、provider 和 model，构造本地 `llm_request`；不存在的 purpose、attempt、endpoint 字段保持 `unknown`。
+- [x] 在调用 `next()` 前执行 AgentGuard；`block` 返回规范错误 stream，`require_approval` 走 DSH 原生 `approval/request`。
+- [x] 包装下游 stream，检测可见的 tool call、命令和包名；只有 wrapper 能在 DSH 消费前可靠短路时才将 response capability 标为 `blocking`，否则标为 `observe_only`。
+- [x] 用集成测试验证 conversation、compaction、session title 等已知消费者是否经过 `ctx.llm.stream()`；未经过者记录为 adapter capability 缺口，而不是修改 DSH。
+- [x] 对规则 14、18、19 输出缺失的 transport facts；禁止根据 provider 名称猜测实际 endpoint 或 key 是否存在。
 
 **Acceptance:** 所有经过现有 `llm/stream` 的调用都能在语义请求阶段得到一致决策；最终 URL、认证事实、精确字节数、adapter 内 retry/fallback 和任何直接 SDK 调用明确标为 `unsupported`，不宣称 DSH 已完整覆盖规则 14–19。
 

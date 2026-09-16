@@ -359,7 +359,7 @@ const MISSING_LLM_FACTS: MissingLlmFact[] = [
   'auxiliary_model_calls', 'response_source',
 ];
 const LLM_PURPOSES: LlmRequestPurpose[] = [
-  'conversation', 'compaction', 'title', 'vision', 'embedding', 'file_upload', 'plugin', 'other',
+  'unknown', 'conversation', 'compaction', 'title', 'vision', 'embedding', 'file_upload', 'plugin', 'other',
 ];
 const CREDENTIAL_KINDS: CredentialKind[] = ['api_key', 'oauth', 'aws', 'ambient', 'none', 'unknown'];
 const ENDPOINT_TIERS: LlmEndpointTier[] = ['T0', 'T1', 'T2', 'T3', 'T4', 'unknown'];
@@ -390,7 +390,7 @@ function pickLlmMetadata(raw: Record<string, unknown> | null): LlmEgressRequestM
     requestId,
     parentRequestId: firstString(value.parentRequestId, value.parent_request_id) || undefined,
     sessionId,
-    purpose: pickEnum(value.purpose, LLM_PURPOSES) ?? 'other',
+    purpose: pickEnum(value.purpose, LLM_PURPOSES) ?? 'unknown',
     lifecycleStage,
     canBlockCurrentAction: pickBoolean(value.canBlockCurrentAction ?? value.can_block_current_action) ?? false,
     provider: optionalString(value.provider),

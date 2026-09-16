@@ -47,6 +47,7 @@ import {
   installDshThreatFeedNotificationDelivery,
   type DshNotificationAgent,
 } from './notification-delivery.js';
+import { createDshLlmPrivacyListener } from './llm-privacy.js';
 
 export const name = 'agentguard-dsh-plugin';
 export const inject = ['tools', 'agents'];
@@ -84,10 +85,13 @@ type DshPluginContext = {
     get(id: string): DshNotificationAgent | undefined;
     list(): DshNotificationAgent[];
   };
+  approval?: {
+    request(request: Record<string, unknown>): Promise<string>;
+  };
   effect?: (setup: () => unknown, label?: string) => unknown;
   on?: (
-    event: 'tools/pre-execute' | 'tools/post-execute',
-    listener: (...args: any[]) => Promise<unknown>
+    event: 'tools/pre-execute' | 'tools/post-execute' | 'llm/stream',
+    listener: (...args: any[]) => unknown
   ) => unknown;
   logger?: {
     info?: (message: string) => void;
@@ -97,6 +101,9 @@ type DshPluginContext = {
 
 export interface AgentGuardDshPluginConfig {
   runtime?: DshRuntimeConfig;
+  llmPrivacy?: {
+    enabled?: boolean;
+  };
 }
 
 export type AgentGuardDshToolArgs = {
@@ -1027,6 +1034,14 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
   if (!['off', 'observe', 'protect'].includes(runtimeMode)) {
     throw new Error(`unsupported AgentGuard DSH runtime mode: ${String(runtimeMode)}`);
   }
+  if (
+    config.llmPrivacy?.enabled !== undefined
+    && typeof config.llmPrivacy.enabled !== 'boolean'
+  ) {
+    throw new Error(
+      `unsupported AgentGuard DSH LLM privacy enabled value: ${String(config.llmPrivacy.enabled)}`,
+    );
+  }
   const failureMode = config.runtime?.failureMode ?? 'deny';
   if (!['allow', 'deny'].includes(failureMode)) {
     throw new Error(`unsupported AgentGuard DSH runtime failure mode: ${String(failureMode)}`);
@@ -1096,5 +1111,23 @@ export function apply(ctx: DshPluginContext, config: AgentGuardDshPluginConfig =
         ? createDshPostExecuteProtector(dependencies)
         : createDshPostExecuteObserver(dependencies)
     );
+    if (config.llmPrivacy?.enabled !== false) {
+      ctx.on('llm/stream', createDshLlmPrivacyListener({
+        runtimeMode,
+        failureMode,
+        agents: ctx.agents,
+        approval: {
+          async request(request) {
+            if (!ctx.approval) throw new Error('DSH approval service is unavailable');
+            return ctx.approval.request(request);
+          },
+        },
+        onError(error, action) {
+          ctx.logger?.warn(
+            `AgentGuard DSH ${action.actionType} ${runtimeMode} failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        },
+      }));
+    }
   }
 }
