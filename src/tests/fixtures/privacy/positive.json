@@ -1,0 +1,20 @@
+{
+  "national_id": "11010519491231002X",
+  "card_number": "5284917302468138",
+  "fingerprint_template": "4f9a12bc83de77aa1099cc55ee661234",
+  "age": 12,
+  "diagnosis": "hypertension stage two",
+  "location_trace": [[31.230416, 121.473701], [31.231000, 121.474100], [31.232000, 121.475200]],
+  "phone_number": "+8613812345678",
+  "personal_email": "private.person@corp.invalid",
+  "contacts": [
+    "person01@corp.invalid", "person02@corp.invalid", "person03@corp.invalid", "person04@corp.invalid",
+    "person05@corp.invalid", "person06@corp.invalid", "person07@corp.invalid", "person08@corp.invalid",
+    "person09@corp.invalid", "person10@corp.invalid", "person11@corp.invalid", "person12@corp.invalid",
+    "person13@corp.invalid", "person14@corp.invalid", "person15@corp.invalid", "person16@corp.invalid",
+    "person17@corp.invalid", "person18@corp.invalid", "person19@corp.invalid", "person20@corp.invalid"
+  ],
+  "records": [
+    { "name": "private person", "phone": "+8613912345678", "email": "record.person@corp.invalid", "diagnosis": "asthma" }
+  ]
+}

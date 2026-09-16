@@ -6,7 +6,21 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
-import type { RuntimeAction, RuntimeAgentHost, RuntimeAuditEvent, RuntimeActionType, RuntimeDecision } from './types.js';
+import type {
+  CoverageLevel,
+  CredentialKind,
+  EnforcementStatus,
+  LlmEgressRequestMetadata,
+  LlmEndpointTier,
+  LlmRequestPurpose,
+  MissingLlmFact,
+  RuntimeAction,
+  RuntimeAgentHost,
+  RuntimeAuditEvent,
+  RuntimeActionType,
+  RuntimeDecision,
+  RuntimeLifecycleStage,
+} from './types.js';
 
 export interface ProtectOptions {
   config: AgentGuardConfig;
@@ -43,6 +57,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   let decision: RuntimeDecision;
   let policySource: ProtectResult['policySource'];
   const postToolCall = options.phase === 'post';
+  const canEnforce = action.canBlockCurrentAction !== false;
   if (options.decisionMode === 'cloud' && client.connected) {
     decision = normalizeRuntimeDecision(await client.evaluateAction(action));
     policySource = 'cloud-decision';
@@ -56,7 +71,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(evaluation.decision);
     policySource = evaluation.policySource;
   }
-  const approvedGrant = !postToolCall && decision.decision === 'require_approval'
+  const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
   if (approvedGrant) {
@@ -68,14 +83,19 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     ...action,
     actionId: decision.actionId,
     decision: decision.decision,
+    policyDecision: decision.policyDecision ?? decision.decision,
     riskScore: decision.riskScore,
     riskLevel: decision.riskLevel,
     reasons: decision.reasons,
     policyVersion: decision.policyVersion,
+    coverageLevel: mergeCoverage(action.coverageLevel, decision.coverageLevel),
+    enforcementStatus: action.enforcementStatus ?? enforcementStatusFor(action, decision),
+    missingFacts: uniqueMissingFacts([...(action.missingFacts ?? []), ...(decision.missingFacts ?? [])]),
     metadata: {
       ...(action.metadata || {}),
       evaluation: policySource === 'cloud-decision' ? 'cloud' : 'local-oss',
       policySource,
+      ...(decision.ruleEvaluations?.length ? { privacyRules: decision.ruleEvaluations } : {}),
       ...(approvedGrant
         ? {
             approvedByLocalGrant: true,
@@ -97,10 +117,10 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (client.connected && policySource !== 'cloud-decision') {
     await client.ingestEvents([event]).catch(() => spoolEvent(options.config.eventSpoolPath, event));
   }
-  if (!postToolCall && decision.decision === 'require_approval') {
+  if (canEnforce && !postToolCall && decision.decision === 'require_approval') {
     approvalChannel = 'agent';
   }
-  const pendingApproval = !postToolCall && decision.decision === 'require_approval' && !approvedGrant
+  const pendingApproval = canEnforce && !postToolCall && decision.decision === 'require_approval' && !approvedGrant
     ? writePendingApproval(approvalStorePath, action, decision)
     : undefined;
 
@@ -135,7 +155,8 @@ export function formatProtectResult(result: ProtectResult, json = false): string
 
   if (json) {
     return JSON.stringify({
-      decision: publicDecision(result.decision.decision),
+      decision: publicEnforcedDecision(result),
+      policyDecision: result.decision.policyDecision ?? result.decision.decision,
       cloudDecision: result.decision.decision,
       actionId: result.decision.actionId,
       riskScore: result.decision.riskScore,
@@ -146,10 +167,21 @@ export function formatProtectResult(result: ProtectResult, json = false): string
       approvalInstruction: result.pendingApproval ? approvalInstruction(result.pendingApproval) : undefined,
       approvalExpiresAt: result.pendingApproval?.expiresAt,
       policySource: result.policySource,
+      coverageLevel: result.event.coverageLevel,
+      enforcementStatus: result.event.enforcementStatus,
+      canBlockCurrentAction: result.event.canBlockCurrentAction,
+      missingFacts: result.event.missingFacts,
     }, null, 2);
   }
 
   const reasonCount = result.decision.reasons.length;
+  if (isNonEnforcingObservation(result)) {
+    return (
+      `OBSERVED by AgentGuard (policy decision: ${result.decision.policyDecision ?? result.decision.decision}, ` +
+      `enforcement: ${result.event.enforcementStatus}, action: ${result.decision.actionId}, ` +
+      `risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`
+    );
+  }
   if (result.decision.decision === 'block') {
     return `BLOCKED by AgentGuard (action: ${result.decision.actionId}, risk: ${result.decision.riskScore}/100, level: ${result.decision.riskLevel}, reasons: ${reasonCount}).`;
   }
@@ -162,13 +194,64 @@ export function formatProtectResult(result: ProtectResult, json = false): string
   return 'ALLOW by AgentGuard.';
 }
 
-export function exitCodeForDecision(decision: RuntimeDecision, result?: Pick<ProtectResult, 'approvalChannel'>): number {
-  if (decision.decision === 'require_approval' && result?.approvalChannel === 'agent') return 0;
+export function exitCodeForDecision(
+  decision: RuntimeDecision,
+  result?: Pick<ProtectResult, 'approvalChannel' | 'event'>
+): number {
+  if (result?.event.canBlockCurrentAction === false) return 0;
+  if (
+    decision.decision === 'require_approval' &&
+    result?.approvalChannel === 'agent' &&
+    result.event.agentHost === 'claude-code'
+  ) return 0;
   return decision.decision === 'block' || decision.decision === 'require_approval' ? 2 : 0;
+}
+
+function enforcementStatusFor(action: RuntimeAction, decision: RuntimeDecision) {
+  if (mergeCoverage(action.coverageLevel, decision.coverageLevel) === 'unsupported') return 'unsupported' as const;
+  const policyDecision = decision.policyDecision ?? decision.decision;
+  if (action.canBlockCurrentAction === false) {
+    return policyDecision === 'block' || policyDecision === 'require_approval'
+      ? 'would_block' as const
+      : 'observed' as const;
+  }
+  if (policyDecision !== decision.decision && (policyDecision === 'block' || policyDecision === 'require_approval')) {
+    return 'would_block' as const;
+  }
+  return 'enforced' as const;
+}
+
+function mergeCoverage(
+  actionCoverage: RuntimeAuditEvent['coverageLevel'],
+  decisionCoverage: RuntimeDecision['coverageLevel'],
+): RuntimeAuditEvent['coverageLevel'] {
+  const levels = [actionCoverage, decisionCoverage].filter(Boolean);
+  if (levels.includes('unsupported')) return 'unsupported';
+  if (levels.includes('observe_only')) return 'observe_only';
+  if (levels.includes('partial')) return 'partial';
+  return levels.includes('full') ? 'full' : undefined;
+}
+
+function uniqueMissingFacts(
+  values: NonNullable<RuntimeAuditEvent['missingFacts']>,
+): NonNullable<RuntimeAuditEvent['missingFacts']> {
+  return [...new Set(values)];
 }
 
 function publicDecision(decision: RuntimeDecision['decision']): 'allow' | 'warn' | 'confirm' | 'block' {
   return decision === 'require_approval' ? 'confirm' : decision;
+}
+
+function publicEnforcedDecision(result: ProtectResult): 'allow' | 'warn' | 'confirm' | 'block' {
+  if (isNonEnforcingObservation(result)) return 'warn';
+  return publicDecision(result.decision.decision);
+}
+
+function isNonEnforcingObservation(result: ProtectResult): boolean {
+  return result.event.enforcementStatus === 'would_block'
+    || result.event.enforcementStatus === 'observed'
+    || result.event.enforcementStatus === 'unsupported'
+    || result.event.canBlockCurrentAction === false;
 }
 
 function formatAgentApproval(result: ProtectResult): string | null {
@@ -249,12 +332,109 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     input: process.env.TOOL_INPUT || pickInput(raw, actionType, toolInput),
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
+    lifecycleStage: pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
+    canBlockCurrentAction: pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
+    coverageLevel: pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
+    enforcementStatus: pickEnum(raw?.enforcementStatus ?? raw?.enforcement_status, ENFORCEMENT_STATUSES),
+    missingFacts: pickEnumArray(raw?.missingFacts ?? raw?.missing_facts, MISSING_LLM_FACTS),
+    llm: pickLlmMetadata(raw),
     metadata: {
       rawProtocol: raw ? 'stdin-json' : 'env',
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
       ...pickNetworkMetadata(raw, toolInput),
+      ...pickFilePathMetadata(raw),
     },
   };
+}
+
+const LIFECYCLE_STAGES: RuntimeLifecycleStage[] = [
+  'user_prompt', 'prompt_expansion', 'run_start', 'model_request', 'model_response', 'pre_tool',
+  'post_tool', 'post_tool_batch', 'config_change', 'model_switch', 'assistant_display', 'stop',
+];
+const COVERAGE_LEVELS: CoverageLevel[] = ['full', 'partial', 'observe_only', 'unsupported'];
+const ENFORCEMENT_STATUSES: EnforcementStatus[] = ['enforced', 'would_block', 'observed', 'unsupported'];
+const MISSING_LLM_FACTS: MissingLlmFact[] = [
+  'complete_payload', 'complete_response', 'final_destination', 'credential_kind', 'credential_presence',
+  'exact_payload_bytes', 'attachment_bytes', 'file_path_count', 'retry_and_fallback',
+  'auxiliary_model_calls', 'response_source',
+];
+const LLM_PURPOSES: LlmRequestPurpose[] = [
+  'conversation', 'compaction', 'title', 'vision', 'embedding', 'file_upload', 'plugin', 'other',
+];
+const CREDENTIAL_KINDS: CredentialKind[] = ['api_key', 'oauth', 'aws', 'ambient', 'none', 'unknown'];
+const ENDPOINT_TIERS: LlmEndpointTier[] = ['T0', 'T1', 'T2', 'T3', 'T4', 'unknown'];
+
+function pickLlmMetadata(raw: Record<string, unknown> | null): LlmEgressRequestMetadata | undefined {
+  const value = firstRecord(raw?.llm, raw?.llm_metadata, raw?.llmMetadata);
+  if (!value) return undefined;
+  const requestId = firstString(value.requestId, value.request_id);
+  const sessionId = firstString(value.sessionId, value.session_id, raw?.sessionId, raw?.session_id);
+  const lifecycleStage = pickEnum(value.lifecycleStage ?? value.lifecycle_stage, LIFECYCLE_STAGES);
+  if (!requestId || !sessionId || !lifecycleStage) return undefined;
+  const destinationValue = firstRecord(value.destination);
+  const destination = destinationValue ? {
+    scheme: optionalString(destinationValue.scheme),
+    host: optionalString(destinationValue.host),
+    port: nonNegativeInteger(destinationValue.port),
+    path: optionalString(destinationValue.path),
+    service: optionalString(destinationValue.service),
+    region: optionalString(destinationValue.region),
+    tier: pickEnum(destinationValue.tier, ENDPOINT_TIERS),
+  } : undefined;
+  const rawCredentialPresent = value.credentialPresent ?? value.credential_present;
+  const credentialPresent = typeof rawCredentialPresent === 'boolean'
+    ? rawCredentialPresent
+    : 'unknown';
+  return {
+    schemaVersion: 1,
+    requestId,
+    parentRequestId: firstString(value.parentRequestId, value.parent_request_id) || undefined,
+    sessionId,
+    purpose: pickEnum(value.purpose, LLM_PURPOSES) ?? 'other',
+    lifecycleStage,
+    canBlockCurrentAction: pickBoolean(value.canBlockCurrentAction ?? value.can_block_current_action) ?? false,
+    provider: optionalString(value.provider),
+    model: optionalString(value.model),
+    apiMode: optionalString(value.apiMode ?? value.api_mode),
+    attempt: nonNegativeInteger(value.attempt),
+    isRetry: pickBoolean(value.isRetry ?? value.is_retry),
+    isFallback: pickBoolean(value.isFallback ?? value.is_fallback),
+    destination,
+    credentialKind: pickEnum(value.credentialKind ?? value.credential_kind, CREDENTIAL_KINDS) ?? 'unknown',
+    credentialPresent,
+    payloadBytes: nonNegativeInteger(value.payloadBytes ?? value.payload_bytes),
+    attachmentBytes: nonNegativeInteger(value.attachmentBytes ?? value.attachment_bytes),
+    messageCount: nonNegativeInteger(value.messageCount ?? value.message_count),
+    filePathCount: nonNegativeInteger(value.filePathCount ?? value.file_path_count),
+  };
+}
+
+function pickFilePathMetadata(raw: Record<string, unknown> | null): Record<string, unknown> {
+  const metadata = firstRecord(raw?.metadata);
+  const paths = metadata?.filePaths ?? metadata?.file_paths;
+  if (!Array.isArray(paths)) return {};
+  return { filePaths: paths.filter((item): item is string => typeof item === 'string').slice(0, 10_000) };
+}
+
+function pickEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && allowed.includes(value as T) ? value as T : undefined;
+}
+
+function pickEnumArray<T extends string>(value: unknown, allowed: readonly T[]): T[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is T => typeof item === 'string' && allowed.includes(item as T));
+}
+
+function pickBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function parseRawInput(rawInput: unknown, stdinText?: string): Record<string, unknown> | null {

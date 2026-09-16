@@ -1,0 +1,14 @@
+{
+  "note": "11010519491231002X is a naked documentation sample",
+  "national_id": "110105194912310021",
+  "card_number": "4111111111111111",
+  "iban": "DE001234",
+  "fingerprint_template": "test-fixture",
+  "age": 14,
+  "diagnosis": "none",
+  "location_trace": "example",
+  "phone_number": "+12025550123",
+  "personal_email": "noreply@example.com",
+  "contacts": ["one@example.com", "two@example.com"],
+  "records": [{ "email": "faker@example.com", "phone": "+12025550123" }]
+}

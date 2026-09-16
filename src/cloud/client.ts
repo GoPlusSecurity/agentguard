@@ -6,7 +6,7 @@ import type {
   RuntimeAuditEvent,
   RuntimeDecision,
 } from '../runtime/types.js';
-import { redactMetadata, redactPreview } from '../runtime/redaction.js';
+import { redactLlmMetadata, redactMetadata, redactPreview } from '../runtime/redaction.js';
 import { buildAuditEvent } from '../runtime/audit.js';
 import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
@@ -280,9 +280,17 @@ function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
     agentHost: action.agentHost,
     actionType: action.actionType,
     toolName: redactPreview(action.toolName, 160),
-    input: redactPreview(action.input, 64_000),
+    input: action.actionType === 'llm_request' || action.actionType === 'llm_response'
+      ? '[LOCAL_ONLY_LLM_CONTENT]'
+      : redactPreview(action.input, 64_000),
     cwd: action.cwd ? redactPreview(action.cwd, 500) : undefined,
     sourceSkill: action.sourceSkill ? redactPreview(action.sourceSkill, 240) : undefined,
+    lifecycleStage: action.lifecycleStage,
+    canBlockCurrentAction: action.canBlockCurrentAction,
+    coverageLevel: action.coverageLevel,
+    enforcementStatus: action.enforcementStatus,
+    missingFacts: action.missingFacts ? [...action.missingFacts] : undefined,
+    llm: action.llm ? redactLlmMetadata(action.llm) : undefined,
     metadata: redactMetadata(action.metadata),
   };
 }

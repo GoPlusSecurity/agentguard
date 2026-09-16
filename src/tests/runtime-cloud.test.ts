@@ -4,20 +4,152 @@ import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from '
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { __resetNetworkBehaviorForTests, evaluateLocalAction } from '../runtime/evaluator.js';
-import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
+import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, resolveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
-import { flushEventSpool, spoolEvent } from '../runtime/audit.js';
+import { buildAuditEvent, flushEventSpool, spoolEvent } from '../runtime/audit.js';
 import { actionFingerprint, approvePendingApproval, cleanupExpiredApprovals, listPendingApprovals } from '../runtime/approvals.js';
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { ProtectResult } from '../runtime/protect.js';
 import { connectAgentJwt, connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
-import type { RuntimeAuditEvent } from '../runtime/types.js';
+import type { RuntimeAction, RuntimeAuditEvent } from '../runtime/types.js';
 
 process.env.AGENTGUARD_BEHAVIOR_STATE_PATH = join(tmpdir(), `agentguard-runtime-behavior-${process.pid}.json`);
 
 describe('Runtime Cloud bridge', () => {
+  it('provides offline privacy defaults for LLM traffic enforcement', () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+
+    assert.equal(policy.network.untrustedLlmEndpoint, 'require_approval');
+    assert.deepEqual(policy.network.trustedLlmEndpoints, []);
+    assert.equal(policy.privacy.piiEgressTrusted, 'warn');
+    assert.equal(policy.privacy.piiEgressUntrusted, 'require_approval');
+    assert.equal(policy.privacy.bulkEgressBytes, 1024 * 1024);
+    assert.equal(policy.privacy.bulkAttachmentBytes, 5 * 1024 * 1024);
+    assert.equal(policy.privacy.bulkFilePathCount, 20);
+    assert.ok(policy.privacy.enabledCategories.includes('national_id'));
+  });
+
+  it('fills privacy defaults when loading a legacy cached policy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-legacy-policy-'));
+    const cachePath = join(dir, 'policy.json');
+    const legacyPolicy = getDefaultEffectiveRuntimePolicy() as unknown as Record<string, unknown>;
+    const legacyNetwork = { ...(legacyPolicy.network as Record<string, unknown>) };
+    delete legacyNetwork.untrustedLlmEndpoint;
+    delete legacyNetwork.trustedLlmEndpoints;
+    delete legacyPolicy.privacy;
+    legacyPolicy.network = legacyNetwork;
+    legacyPolicy.policyVersion = 'runtime-cloud-v0.1';
+    writeFileSync(cachePath, JSON.stringify(legacyPolicy));
+
+    const loaded = loadCachedPolicy(cachePath);
+    assert.ok(loaded);
+    assert.equal(loaded.policyVersion, 'runtime-cloud-v0.1');
+    assert.equal(loaded.network.defaultOutbound, 'warn');
+    assert.equal(loaded.network.untrustedLlmEndpoint, 'require_approval');
+    assert.deepEqual(loaded.network.trustedLlmEndpoints, []);
+    assert.equal(loaded.privacy.piiEgressTrusted, 'warn');
+    assert.equal(loaded.privacy.piiEgressUntrusted, 'require_approval');
+
+    const resolved = await resolveRuntimePolicy({ cachePath });
+    assert.equal(resolved.source, 'cache');
+    assert.deepEqual(resolved.policy.privacy, loaded.privacy);
+  });
+
+  it('fails closed when a host cannot present an AgentGuard approval', () => {
+    const decision = {
+      actionId: 'act_noninteractive',
+      decision: 'require_approval' as const,
+      riskScore: 55,
+      riskLevel: 'high' as const,
+      reasons: [],
+      policyVersion: 'runtime-local-v0.2',
+    };
+
+    assert.equal(exitCodeForDecision(decision, {
+      approvalChannel: 'agent',
+      event: { ...sampleEvent(), agentHost: 'codex' },
+    }), 2);
+    assert.equal(exitCodeForDecision(decision, {
+      approvalChannel: 'agent',
+      event: { ...sampleEvent(), agentHost: 'claude-code' },
+    }), 0);
+  });
+
+  it('keeps LLM content local while preserving non-secret coverage facts', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const rawPii = 'patient_email=private.person@invalid.test';
+    const action: RuntimeAction = {
+      sessionId: 'sess_llm_local_only',
+      agentHost: 'dsh',
+      actionType: 'llm_request',
+      toolName: 'llm/stream',
+      input: rawPii,
+      lifecycleStage: 'model_request',
+      canBlockCurrentAction: true,
+      coverageLevel: 'partial',
+      enforcementStatus: 'observed',
+      missingFacts: ['final_destination', 'credential_presence'],
+      llm: {
+        schemaVersion: 1,
+        requestId: 'req_1',
+        sessionId: 'sess_llm_local_only',
+        purpose: 'conversation',
+        lifecycleStage: 'model_request',
+        canBlockCurrentAction: true,
+        credentialKind: 'unknown',
+        credentialPresent: 'unknown',
+        messageCount: 2,
+      },
+    };
+
+    const event = buildAuditEvent({
+      ...action,
+      actionId: 'act_llm_1',
+      decision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      reasons: [],
+      policyVersion: 'runtime-local-v0.2',
+    });
+    assert.equal(event.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(event.lifecycleStage, 'model_request');
+    assert.deepEqual(event.missingFacts, ['final_destination', 'credential_presence']);
+    assert.equal(event.llm?.credentialPresent, 'unknown');
+    assert.ok(!JSON.stringify(event).includes(rawPii));
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(String(init?.body ?? ''));
+      return jsonResponse({
+        success: true,
+        data: {
+          actionId: 'act_cloud_llm',
+          decision: 'warn',
+          riskScore: 20,
+          riskLevel: 'medium',
+          reasons: [],
+          policyVersion: 'runtime-cloud-v0.2',
+        },
+      });
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.evaluateAction(action);
+      assert.equal(requests.length, 1);
+      assert.ok(!requests[0].includes(rawPii));
+      assert.match(requests[0], /LOCAL_ONLY_LLM_CONTENT/);
+      assert.match(requests[0], /final_destination/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('requires approval for DSH skill installation and MCP tool actions', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     for (const actionType of ['skill_install', 'mcp_tool'] as const) {

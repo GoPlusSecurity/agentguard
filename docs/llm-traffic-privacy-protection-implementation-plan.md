@@ -308,13 +308,13 @@ pre-tool hook 对危险执行动作提供最后一道阻断
 
 **Produces:** 版本化的本地请求/响应事件、宿主 capability、endpoint tier、审批和 Cloud 脱敏契约。
 
-- [ ] 将 `llm_request`、`llm_response` 加入 `RuntimeActionType`，检查所有 action type switch 和序列化路径。
-- [ ] 增加 `AgentLifecycleCapabilities`、`CoverageLevel`、`EnforcementStatus`、`canBlockCurrentAction` 和 `missingFacts`，由每个 adapter 显式声明。
-- [ ] 给 `EffectiveRuntimePolicy.network` 增加 `untrustedLlmEndpoint`、`trustedLlmEndpoints`，增加 `privacy.piiEgressTrusted`、`privacy.piiEgressUntrusted`、`privacy.enabledCategories`、`privacy.bulkEgressBytes`、`privacy.bulkAttachmentBytes`、`privacy.bulkFilePathCount`。
-- [ ] 规定 credential metadata 只包含类型和存在性，禁止 key、Authorization 值和可逆摘要。
-- [ ] 规定 `payloadBytes` 是 UTF-8 序列化请求体字节数；无法取得时使用 `undefined`，不得用字符数伪装成精确字节数。
-- [ ] 规定审批超时、非交互宿主和安全 gate 异常的 fail-closed 行为。
-- [ ] 为旧 Cloud policy 缺少新字段时的默认值写兼容性测试。
+- [x] 将 `llm_request`、`llm_response` 加入 `RuntimeActionType`，检查所有 action type switch 和序列化路径。
+- [x] 增加 `AgentLifecycleCapabilities`、`CoverageLevel`、`EnforcementStatus`、`canBlockCurrentAction` 和 `missingFacts`，由每个 adapter 显式声明。
+- [x] 给 `EffectiveRuntimePolicy.network` 增加 `untrustedLlmEndpoint`、`trustedLlmEndpoints`，增加 `privacy.piiEgressTrusted`、`privacy.piiEgressUntrusted`、`privacy.enabledCategories`、`privacy.bulkEgressBytes`、`privacy.bulkAttachmentBytes`、`privacy.bulkFilePathCount`。
+- [x] 规定 credential metadata 只包含类型和存在性，禁止 key、Authorization 值和可逆摘要。
+- [x] 规定 `payloadBytes` 是 UTF-8 序列化请求体字节数；无法取得时使用 `undefined`，不得用字符数伪装成精确字节数。
+- [x] 规定审批超时、非交互宿主和安全 gate 异常的 fail-closed 行为。
+- [x] 为旧 Cloud policy 缺少新字段时的默认值写兼容性测试。
 
 **Acceptance:** 老 policy cache 可继续加载；本地默认 policy 在无 Cloud 时能对规则 14–19 给出确定决策或明确的 `partial/observe_only/unsupported`，不会因字段缺失输出误导性的 `allow`。
 
@@ -329,14 +329,14 @@ pre-tool hook 对危险执行动作提供最后一道阻断
 - Test: `src/tests/scanner.test.ts`
 - Test fixtures: `src/tests/fixtures/privacy/`
 
-- [ ] 增加 10 个 `PII_*` RiskTag，并为每个 tag 注册规则。
-- [ ] 实现中国身份证 mod-11-2、银行卡 Luhn、IBAN mod-97 等 validator。
-- [ ] 所有普通 PII 使用“字段名 + 值”双要素；裸数字不得命中。
-- [ ] 实现测试卡、`example.com`、faker/test/noreply 特征排除。
-- [ ] 对 `test`、`fixtures`、`examples`、`mock` 路径降一级，而不是完全忽略。
-- [ ] `PII_CONTACT_DUMP` 至少 20 条手机号或 email 才命中。
-- [ ] `PII_HARDCODED_DATASET` 至少三类 PII 在同一结构共现才命中。
-- [ ] 更新 scanner summary，使隐私命中不再落入通用安全描述。
+- [x] 增加 10 个 `PII_*` RiskTag，并为每个 tag 注册规则。
+- [x] 实现中国身份证 mod-11-2、银行卡 Luhn、IBAN mod-97 等 validator。
+- [x] 所有普通 PII 使用“字段名 + 值”双要素；裸数字不得命中。
+- [x] 实现测试卡、`example.com`、faker/test/noreply 特征排除。
+- [x] 对 `test`、`fixtures`、`examples`、`mock` 路径降一级，而不是完全忽略。
+- [x] `PII_CONTACT_DUMP` 至少 20 条手机号或 email 才命中。
+- [x] `PII_HARDCODED_DATASET` 至少三类 PII 在同一结构共现才命中。
+- [x] 更新 scanner summary，使隐私命中不再落入通用安全描述。
 
 **Acceptance:** 每条规则至少有真阳性、误报抑制和路径降级测试；测试证据不包含完整 PII 原值。
 
@@ -351,13 +351,13 @@ pre-tool hook 对危险执行动作提供最后一道阻断
 - Test: `src/tests/llm-endpoints.test.ts`
 - Test: `src/tests/scanner.test.ts`
 
-- [ ] 实现 URL 规范化：大小写、默认端口、IPv4/IPv6、punycode、尾点、userinfo、重定向目标。
-- [ ] 固定分级优先级：先识别 loopback/T0，再判断普通 IP 字面量为 T4，避免 `127.0.0.1` 和 `::1` 被误封。
-- [ ] 建立 T0–T4 官方默认列表，并允许 policy 添加私有可信端点。
-- [ ] 实现 `LLM_ENDPOINT_OVERRIDE`，覆盖 OpenAI、Anthropic、Gemini 等常见 base URL 变量和 agent 配置格式。
-- [ ] 实现 `RELAY_KEY_FORWARDING`，要求 credential 读取与第三方网络目标在局部窗口内共现。
-- [ ] 实现 `RELAY_INSTALL_SCRIPT`，覆盖 shell rc 和 OpenClaw、DSH、Hermes、Codex、Claude Code 的模型配置文件。
-- [ ] 对 host suffix 做标签边界匹配，防止 `api.openai.com.attacker.test` 被误判为官方域名。
+- [x] 实现 URL 规范化：大小写、默认端口、IPv4/IPv6、punycode、尾点、userinfo、重定向目标。
+- [x] 固定分级优先级：先识别 loopback/T0，再判断普通 IP 字面量为 T4，避免 `127.0.0.1` 和 `::1` 被误封。
+- [x] 建立 T0–T4 官方默认列表，并允许 policy 添加私有可信端点。
+- [x] 实现 `LLM_ENDPOINT_OVERRIDE`，覆盖 OpenAI、Anthropic、Gemini 等常见 base URL 变量和 agent 配置格式。
+- [x] 实现 `RELAY_KEY_FORWARDING`，要求 credential 读取与第三方网络目标在局部窗口内共现。
+- [x] 实现 `RELAY_INSTALL_SCRIPT`，覆盖 shell rc 和 OpenClaw、DSH、Hermes、Codex、Claude Code 的模型配置文件。
+- [x] 对 host suffix 做标签边界匹配，防止 `api.openai.com.attacker.test` 被误判为官方域名。
 
 **Acceptance:** T0–T4 表驱动测试通过；伪造官方后缀、IP、短链和自定义端口均有负向或高危测试。
 
@@ -373,14 +373,14 @@ pre-tool hook 对危险执行动作提供最后一道阻断
 - Test: `src/tests/runtime-cloud.test.ts`
 - Create: `src/tests/runtime-privacy.test.ts`
 
-- [ ] 在 `customPolicyReasons` 中生成规则 14–19 的 reason。
-- [ ] 在 `policyDecisionFor` 中显式映射所有新 reason，禁止依赖 fallback `warn`。
-- [ ] 确保 PII reason severity 至少为 `medium`，避免被低于 20 分的 auto-allow 静默放行。
-- [ ] 将 PII 检测拆成可复用的纯本地函数，静态 scanner 和运行时 body scanner 共用 validator。
-- [ ] evidence 只输出 PII 类型、计数和掩码；禁止保留完整命中值。
-- [ ] 扩展 `REDACTION_PATTERNS`，覆盖所有新增 PII 类型并保留 credential 兜底脱敏。
-- [ ] 对 body、附件和文件路径分别计数，避免单纯依赖 `bodyPreview` 截断结果。
-- [ ] 对 request/response 用同一 `requestId` 关联审计，但不把原始 payload 写盘。
+- [x] 在 `customPolicyReasons` 中生成规则 14–19 的 reason。
+- [x] 在 `policyDecisionFor` 中显式映射所有新 reason，禁止依赖 fallback `warn`。
+- [x] 确保 PII reason severity 至少为 `medium`，避免被低于 20 分的 auto-allow 静默放行。
+- [x] 将 PII 检测拆成可复用的纯本地函数，静态 scanner 和运行时 body scanner 共用 validator。
+- [x] evidence 只输出 PII 类型、计数和掩码；禁止保留完整命中值。
+- [x] 扩展 `REDACTION_PATTERNS`，覆盖所有新增 PII 类型并保留 credential 兜底脱敏。
+- [x] 对 body、附件和文件路径分别计数，避免单纯依赖 `bodyPreview` 截断结果。
+- [x] 对 request/response 用同一 `requestId` 关联审计，但不把原始 payload 写盘。
 
 **Acceptance:** 六条运行时规则均有事实齐全和事实缺失测试，覆盖 allow/warn/approval/block 以及 `partial/observe_only/unsupported`；本地 audit 和模拟 Cloud payload 中搜索不到测试 PII/API key 原值。
 

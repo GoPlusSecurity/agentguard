@@ -1,5 +1,6 @@
 import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import type { AgentLifecycleCapabilities } from '../runtime/types.js';
 
 /**
  * Tool name -> action type mapping for Hermes Agent.
@@ -53,6 +54,24 @@ function eventTypeFromName(name: string): 'pre' | 'post' {
  */
 export class HermesAdapter implements HookAdapter {
   readonly name = 'hermes';
+  readonly capabilities: AgentLifecycleCapabilities = {
+    userPrompt: 'none',
+    promptExpansion: 'none',
+    modelRequest: 'none',
+    modelResponse: 'none',
+    preTool: 'blocking',
+    postTool: 'observe_only',
+    toolOutputRewrite: false,
+    postToolBatch: 'none',
+    configChange: 'none',
+    modelSwitch: 'none',
+    assistantDisplay: 'none',
+    finalDestination: false,
+    credentialFacts: false,
+    exactPayloadBytes: false,
+    retryAndFallback: false,
+    auxiliaryModelCalls: false,
+  };
 
   parseInput(raw: unknown): HookInput {
     const data = raw as Record<string, unknown>;

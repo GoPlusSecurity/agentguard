@@ -1,4 +1,5 @@
-import type { PolicyReason } from './types.js';
+import type { LlmEgressRequestMetadata, PolicyReason } from './types.js';
+import { redactPiiText } from '../scanner/rules/privacy.js';
 
 const REDACTED = '[REDACTED]';
 
@@ -26,7 +27,7 @@ const REDACTION_PATTERNS: Array<[RegExp, (match: string) => string]> = [
 ];
 
 export function redactText(value: unknown): string {
-  let redacted = String(value ?? '');
+  let redacted = redactPiiText(String(value ?? ''));
   for (const [pattern, replacement] of REDACTION_PATTERNS) {
     redacted = redacted.replace(pattern, replacement);
   }
@@ -60,6 +61,47 @@ export function redactMetadata(
       : redactUnknown(item, 0);
   }
   return result;
+}
+
+/** Keep only the bounded, non-secret facts defined by the LLM egress contract. */
+export function redactLlmMetadata(value: LlmEgressRequestMetadata): LlmEgressRequestMetadata {
+  return {
+    schemaVersion: 1,
+    requestId: redactPreview(value.requestId, 160),
+    parentRequestId: value.parentRequestId ? redactPreview(value.parentRequestId, 160) : undefined,
+    sessionId: redactPreview(value.sessionId, 160),
+    purpose: value.purpose,
+    lifecycleStage: value.lifecycleStage,
+    canBlockCurrentAction: value.canBlockCurrentAction,
+    provider: value.provider ? redactPreview(value.provider, 160) : undefined,
+    model: value.model ? redactPreview(value.model, 160) : undefined,
+    apiMode: value.apiMode ? redactPreview(value.apiMode, 120) : undefined,
+    attempt: boundedInteger(value.attempt),
+    isRetry: value.isRetry,
+    isFallback: value.isFallback,
+    destination: value.destination
+      ? {
+          scheme: value.destination.scheme ? redactPreview(value.destination.scheme, 24) : undefined,
+          host: value.destination.host ? redactPreview(value.destination.host, 253) : undefined,
+          port: boundedInteger(value.destination.port),
+          path: value.destination.path ? redactPreview(value.destination.path, 500) : undefined,
+          service: value.destination.service ? redactPreview(value.destination.service, 120) : undefined,
+          region: value.destination.region ? redactPreview(value.destination.region, 120) : undefined,
+          tier: value.destination.tier,
+        }
+      : undefined,
+    credentialKind: value.credentialKind,
+    credentialPresent: value.credentialPresent,
+    payloadBytes: boundedInteger(value.payloadBytes),
+    attachmentBytes: boundedInteger(value.attachmentBytes),
+    messageCount: boundedInteger(value.messageCount),
+    filePathCount: boundedInteger(value.filePathCount),
+  };
+}
+
+function boundedInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
 }
 
 function redactUnknown(value: unknown, depth: number): unknown {

@@ -10,6 +10,22 @@ import {
   isActionAllowedByCapabilities,
 } from '../adapters/common.js';
 
+describe('Adapter lifecycle capabilities', () => {
+  for (const adapter of [new ClaudeCodeAdapter(), new OpenClawAdapter(), new HermesAdapter()]) {
+    it(`${adapter.name} does not claim model transport visibility`, () => {
+      assert.equal(adapter.capabilities.preTool, 'blocking');
+      assert.equal(adapter.capabilities.postTool, 'observe_only');
+      assert.equal(adapter.capabilities.modelRequest, 'none');
+      assert.equal(adapter.capabilities.modelResponse, 'none');
+      assert.equal(adapter.capabilities.finalDestination, false);
+      assert.equal(adapter.capabilities.credentialFacts, false);
+      assert.equal(adapter.capabilities.exactPayloadBytes, false);
+      assert.equal(adapter.capabilities.retryAndFallback, false);
+      assert.equal(adapter.capabilities.auxiliaryModelCalls, false);
+    });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ClaudeCodeAdapter
 // ─────────────────────────────────────────────────────────────────────────────

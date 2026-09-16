@@ -1,4 +1,5 @@
 import type { ActionEnvelope, PolicyDecision } from '../types/action.js';
+import type { AgentLifecycleCapabilities } from '../runtime/types.js';
 
 /**
  * Standardized hook input — platform-agnostic representation
@@ -43,6 +44,9 @@ export interface HookOutput {
 export interface HookAdapter {
   /** Platform identifier */
   readonly name: string;
+
+  /** Lifecycle visibility actually wired by this adapter version. */
+  readonly capabilities: AgentLifecycleCapabilities;
 
   /** Parse raw platform input into standardized HookInput */
   parseInput(raw: unknown): HookInput;

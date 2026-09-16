@@ -53,7 +53,22 @@ export type RiskTag =
   | 'DSH_RUNTIME_MUTATION'
   | 'DSH_SESSION_STORAGE_ACCESS'
   | 'DSH_SCAN_INCOMPLETE'
-  | 'DSH_THEME_ELEVATED_CAPABILITY';
+  | 'DSH_THEME_ELEVATED_CAPABILITY'
+  // Personal data embedded in source, configuration, or data files
+  | 'PII_NATIONAL_ID'
+  | 'PII_BANK_ACCOUNT'
+  | 'PII_BIOMETRIC'
+  | 'PII_MINOR_DATA'
+  | 'PII_HEALTH_RECORD'
+  | 'PII_LOCATION_TRACE'
+  | 'PII_CONTACT_DUMP'
+  | 'PII_PHONE_NUMBER'
+  | 'PII_EMAIL_ADDRESS'
+  | 'PII_HARDCODED_DATASET'
+  // LLM relay and endpoint configuration risks
+  | 'LLM_ENDPOINT_OVERRIDE'
+  | 'RELAY_KEY_FORWARDING'
+  | 'RELAY_INSTALL_SCRIPT';
 
 /**
  * Evidence of a detected risk
@@ -67,6 +82,8 @@ export interface ScanEvidence {
   line: number;
   /** Matched content (truncated if too long) */
   match: string;
+  /** Effective severity after path-aware confidence adjustment. */
+  severity?: RiskLevel;
   /** Additional context */
   context?: string;
 }

@@ -1,6 +1,7 @@
 import { openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import type { AgentLifecycleCapabilities } from '../runtime/types.js';
 
 /**
  * Tool name → action type mapping for Claude Code
@@ -21,6 +22,24 @@ const TOOL_ACTION_MAP: Record<string, string> = {
  */
 export class ClaudeCodeAdapter implements HookAdapter {
   readonly name = 'claude-code';
+  readonly capabilities: AgentLifecycleCapabilities = {
+    userPrompt: 'none',
+    promptExpansion: 'none',
+    modelRequest: 'none',
+    modelResponse: 'none',
+    preTool: 'blocking',
+    postTool: 'observe_only',
+    toolOutputRewrite: false,
+    postToolBatch: 'none',
+    configChange: 'none',
+    modelSwitch: 'none',
+    assistantDisplay: 'none',
+    finalDestination: false,
+    credentialFacts: false,
+    exactPayloadBytes: false,
+    retryAndFallback: false,
+    auxiliaryModelCalls: false,
+  };
 
   parseInput(raw: unknown): HookInput {
     const data = raw as Record<string, unknown>;

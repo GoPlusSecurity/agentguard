@@ -271,7 +271,10 @@ export class SkillScanner {
               tag: rule.id,
               file: filePath,
               line: i + 1,
-              match: match[0].slice(0, 100),
+              match: isPrivacyTag(rule.id)
+                ? `[REDACTED:${rule.id}]`
+                : match[0].slice(0, 100),
+              severity: effectiveFindingSeverity(rule, filePath),
             };
             if (context) {
               ev.context = context;
@@ -322,7 +325,7 @@ export class SkillScanner {
       }
     }
 
-    const riskLevel = this.calculateRiskLevel(Array.from(riskTags));
+    const riskLevel = this.calculateRiskLevel(Array.from(riskTags), evidence);
 
     return {
       risk_level: riskLevel,
@@ -341,8 +344,16 @@ export class SkillScanner {
   /**
    * Calculate risk level from tags
    */
-  private calculateRiskLevel(tags: RiskTag[]): RiskLevel {
+  private calculateRiskLevel(tags: RiskTag[], evidence: ScanEvidence[] = []): RiskLevel {
     const allRules = [...ALL_RULES, ...(this.options.additionalRules || [])];
+
+    const effectiveSeverities = evidence
+      .map((item) => item.severity)
+      .filter((severity): severity is RiskLevel => Boolean(severity));
+    if (effectiveSeverities.includes('critical')) return 'critical';
+    if (effectiveSeverities.includes('high')) return 'high';
+    if (effectiveSeverities.includes('medium')) return 'medium';
+    if (effectiveSeverities.length > 0) return 'low';
 
     for (const tag of tags) {
       const rule = allRules.find((r) => r.id === tag);
@@ -387,6 +398,12 @@ export class SkillScanner {
     }
     if (tags.has('WEBHOOK_EXFIL') || tags.has('NET_EXFIL_UNRESTRICTED')) {
       parts.push('data exfiltration risks');
+    }
+    if ([...tags].some(isPrivacyTag)) {
+      parts.push('embedded personal data');
+    }
+    if (tags.has('LLM_ENDPOINT_OVERRIDE') || tags.has('RELAY_KEY_FORWARDING') || tags.has('RELAY_INSTALL_SCRIPT')) {
+      parts.push('LLM relay or endpoint risks');
     }
 
     return `Found ${evidence.length} findings: ${parts.join(', ') || 'various security concerns'}`;
@@ -484,3 +501,20 @@ export class SkillScanner {
 
 // Export singleton instance
 export const scanner = new SkillScanner();
+
+function isPrivacyTag(tag: RiskTag): boolean {
+  return tag.startsWith('PII_');
+}
+
+function effectiveFindingSeverity(rule: ScanRule, filePath: string): RiskLevel {
+  if (!isPrivacyTag(rule.id) || !isTestLikePath(filePath)) return rule.severity;
+  if (rule.severity === 'critical') return 'high';
+  if (rule.severity === 'high') return 'medium';
+  if (rule.severity === 'medium') return 'low';
+  return 'low';
+}
+
+function isTestLikePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return /(?:^|\/)(?:tests?|fixtures?|examples?|mocks?)(?:\/|$)|\.(?:test|spec)\./i.test(normalized);
+}

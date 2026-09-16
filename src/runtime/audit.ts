@@ -1,7 +1,7 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { RuntimeAuditEvent } from './types.js';
-import { redactMetadata, redactPreview, redactReasons } from './redaction.js';
+import { redactLlmMetadata, redactMetadata, redactPreview, redactReasons } from './redaction.js';
 
 export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
   return {
@@ -10,19 +10,30 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     agentHost: event.agentHost,
     actionType: event.actionType,
     toolName: redactPreview(event.toolName, 160),
-    input: redactPreview(event.input),
+    input: isLlmTrafficEvent(event) ? '[LOCAL_ONLY_LLM_CONTENT]' : redactPreview(event.input),
     decision: event.decision,
+    policyDecision: event.policyDecision,
     riskScore: clampRiskScore(event.riskScore),
     riskLevel: event.riskLevel,
     reasons: redactReasons(event.reasons),
     policyVersion: redactPreview(event.policyVersion, 160),
     cwd: event.cwd ? redactPreview(event.cwd, 500) : event.cwd,
     sourceSkill: event.sourceSkill ? redactPreview(event.sourceSkill, 240) : event.sourceSkill,
+    lifecycleStage: event.lifecycleStage,
+    canBlockCurrentAction: event.canBlockCurrentAction,
+    coverageLevel: event.coverageLevel,
+    enforcementStatus: event.enforcementStatus,
+    missingFacts: event.missingFacts ? [...event.missingFacts] : undefined,
+    llm: event.llm ? redactLlmMetadata(event.llm) : undefined,
     metadata: {
       ...redactMetadata(event.metadata),
       evaluation: redactPreview(event.metadata?.evaluation || 'local-oss', 120),
     },
   };
+}
+
+function isLlmTrafficEvent(event: RuntimeAuditEvent): boolean {
+  return event.actionType === 'llm_request' || event.actionType === 'llm_response';
 }
 
 export function writeAuditLog(auditPath: string, event: RuntimeAuditEvent): void {
