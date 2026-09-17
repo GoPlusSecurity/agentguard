@@ -114,7 +114,8 @@ export async function evaluateHook(
     }
 
     return { decision: 'allow', initiatingSkill };
-  } catch {
+  } catch (error) {
+    if (options.failClosedOnEngineError) throw error;
     // Engine error → fail open
     writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill);
     return { decision: 'allow' };

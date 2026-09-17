@@ -425,11 +425,77 @@ export function registerOpenClawPlugin(
     });
   }
 
-  // before_tool_call → evaluate and optionally block
+  // before_agent_run is a run-level gate over the initial prompt, loaded
+  // history, and system prompt. It is not a per-model-call gate.
+  api.on('before_agent_run', async (event: unknown, ctx?: unknown) => {
+    if (!runtimeProtectionEnabled) return { outcome: 'pass' };
+    try {
+      const [normalized] = adapter.normalizeLifecycleEvent('before_agent_run', event, ctx);
+      const runtimeResult = await runProtectAction({
+        config,
+        agentHost: 'openclaw',
+        decisionMode: options.decisionMode ?? 'local-first',
+        ...normalized,
+      });
+      const decision = runtimeResult
+        ? normalizeRuntimePolicyDecision(runtimeResult.decision.decision)
+        : 'allow';
+      if (runtimeResult && (decision === 'block' || decision === 'require_approval')) {
+        return {
+          outcome: 'block',
+          reason: runGateReason(runtimeResult),
+          message: 'AgentGuard blocked the initial OpenClaw run input.',
+        };
+      }
+      return { outcome: 'pass' };
+    } catch {
+      if (options.runtimeFailureMode === 'fallback') return { outcome: 'pass' };
+      return {
+        outcome: 'block',
+        reason: 'AgentGuard runtime protection failed. Blocking by default.',
+        message: 'AgentGuard could not evaluate the initial OpenClaw run input.',
+      };
+    }
+  });
+
+  // Public model hooks are observers. A block-class policy result is recorded
+  // as would_block by protectAction because normalization fixes canBlock=false.
+  for (const hook of [
+    'llm_input',
+    'llm_output',
+    'model_call_started',
+    'model_call_ended',
+  ] as const) {
+    api.on(hook, async (event: unknown, ctx?: unknown) => {
+      if (!runtimeProtectionEnabled) return undefined;
+      try {
+        const observations = adapter.normalizeLifecycleEvent(hook, event, ctx);
+        for (const normalized of observations) {
+          try {
+            await runProtectAction({
+              config,
+              agentHost: 'openclaw',
+              decisionMode: options.decisionMode ?? 'local-first',
+              auditSafe: true,
+              ...normalized,
+            });
+          } catch {
+            // Observer failures must never change the current OpenClaw action.
+          }
+        }
+      } catch {
+        // Malformed observer payloads are non-enforcing.
+      }
+      return undefined;
+    });
+  }
+
+  // before_tool_call → evaluate and optionally block/require native approval
   api.on('before_tool_call', async (event: unknown, ctx?: unknown) => {
     try {
+      const [normalized] = adapter.normalizeLifecycleEvent('before_tool_call', event, ctx);
       // Try to infer plugin from tool name
-      const toolName = readOpenClawToolName(event);
+      const toolName = normalized.toolName;
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
 
       // Check if plugin is untrusted
@@ -444,17 +510,14 @@ export function registerOpenClawPlugin(
       }
 
       if (runtimeProtectionEnabled) {
-        const runtimeActionType = mapOpenClawToolToRuntimeAction(toolName, event);
+        const runtimeActionType = normalized.actionType;
         try {
           const runtimeResult = await runProtectAction({
             config,
-            rawInput: event,
             agentHost: 'openclaw',
-            actionType: runtimeActionType,
-            toolName,
-            sessionId: readOpenClawSessionId(event, ctx),
             decisionMode: options.decisionMode ?? 'local-first',
             filesystemAllowlist: options.workspacePaths,
+            ...normalized,
           });
           const hookDecision = runtimeResultToBeforeToolCallResult(runtimeResult);
           if (hookDecision) {
@@ -463,7 +526,7 @@ export function registerOpenClawPlugin(
           if (isApprovedLocalRuntimeRetry(runtimeResult)) {
             return undefined;
           }
-          if (isRuntimeAuthoritativeAllow(runtimeResult, runtimeActionType, event)) {
+          if (isRuntimeAuthoritativeAllow(runtimeResult, runtimeActionType, event, adapter)) {
             return undefined;
           }
         } catch (err) {
@@ -473,9 +536,7 @@ export function registerOpenClawPlugin(
           ) {
             return {
               block: true,
-              blockReason:
-                `GoPlus AgentGuard: runtime protection failed for this OpenClaw tool call` +
-                ` (${String(err)}). Blocking by default.`,
+              blockReason: 'GoPlus AgentGuard: runtime protection failed for this OpenClaw tool call. Blocking by default.',
             };
           }
           logger(`[AgentGuard] Runtime protection failed; falling back to local hook policy: ${String(err)}`);
@@ -485,6 +546,7 @@ export function registerOpenClawPlugin(
       const result = await evaluateHook(adapter, event, {
         config,
         agentguard: getAgentGuard(),
+        failClosedOnEngineError: options.runtimeFailureMode !== 'fallback',
       });
 
       if (result.decision === 'deny') {
@@ -494,38 +556,44 @@ export function registerOpenClawPlugin(
         };
       }
 
-      // OpenClaw has no 'ask' mode — block with explanation in strict/balanced
+      // Preserve OpenClaw's native approval flow for local scanner asks too.
       if (result.decision === 'ask') {
         return {
-          block: true,
-          blockReason: result.reason || 'Requires confirmation (GoPlus AgentGuard)',
+          requireApproval: {
+            title: 'AgentGuard approval required',
+            description: boundedApprovalDescription(
+              result.reason || 'This OpenClaw tool call requires confirmation.',
+            ),
+            severity: result.riskLevel === 'critical' ? 'critical' : 'warning',
+            allowedDecisions: ['allow-once', 'deny'],
+          },
         };
       }
 
       return undefined; // allow
     } catch {
-      // Fail open
-      return undefined;
+      if (options.runtimeFailureMode === 'fallback') return undefined;
+      return {
+        block: true,
+        blockReason: 'GoPlus AgentGuard: failed to evaluate this OpenClaw tool call. Blocking by default.',
+      };
     }
   });
 
   // after_tool_call → audit log
-  api.on('after_tool_call', async (event: unknown) => {
+  api.on('after_tool_call', async (event: unknown, ctx?: unknown) => {
     try {
       const input = adapter.parseInput(event);
-      const toolName = readOpenClawToolName(event);
+      const [normalized] = adapter.normalizeLifecycleEvent('after_tool_call', event, ctx);
+      const toolName = normalized.toolName;
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
       if (runtimeProtectionEnabled) {
         const runtimeResult = await runProtectAction({
           config,
-          rawInput: event,
           agentHost: 'openclaw',
-          actionType: mapOpenClawToolToRuntimeAction(toolName, event),
-          toolName,
-          sessionId: readOpenClawSessionId(event, undefined),
           decisionMode: options.decisionMode ?? 'local-first',
-          phase: 'post',
           filesystemAllowlist: options.workspacePaths,
+          ...normalized,
         });
         if (runtimeResult) return;
       }
@@ -550,133 +618,8 @@ export interface OpenClawPluginEntry {
   register(api: OpenClawPluginApi): void;
 }
 
-function mapOpenClawToolToRuntimeAction(
-  toolName: string | undefined,
-  event?: unknown
-): RuntimeActionType {
-  const normalized = (toolName || '').toLowerCase();
-  if (
-    normalized === 'web_search' ||
-    normalized === 'websearch' ||
-    normalized.includes('web_search') ||
-    normalized.includes('web search') ||
-    normalized.includes('search_query')
-  ) {
-    return 'web_search';
-  }
-  if (
-    normalized === 'exec' ||
-    normalized === 'bash' ||
-    normalized === 'cmd' ||
-    normalized === 'command' ||
-    normalized === 'terminal' ||
-    normalized === 'run' ||
-    normalized.includes('exec') ||
-    normalized.includes('execute') ||
-    normalized.includes('shell') ||
-    normalized.includes('terminal') ||
-    normalized.includes('command') ||
-    normalized.includes('process') ||
-    normalized.includes('spawn')
-  ) {
-    return 'shell';
-  }
-  if (normalized === 'read' || normalized.includes('read') || normalized.includes('fetch_file')) {
-    return 'file_read';
-  }
-  if (
-    normalized === 'write' ||
-    normalized === 'edit' ||
-    normalized === 'apply_patch' ||
-    normalized === 'patch' ||
-    normalized === 'create' ||
-    normalized === 'save' ||
-    normalized === 'delete' ||
-    normalized === 'remove' ||
-    normalized === 'rename' ||
-    normalized === 'scaffold' ||
-    normalized.includes('write') ||
-    normalized.includes('edit') ||
-    normalized.includes('patch') ||
-    normalized.includes('delete') ||
-    normalized.includes('remove') ||
-    normalized.includes('rename') ||
-    normalized.includes('scaffold')
-  ) {
-    return 'file_write';
-  }
-  if (
-    normalized.includes('web') ||
-    normalized.includes('browser') ||
-    normalized.includes('http') ||
-    normalized.includes('fetch') ||
-    normalized.includes('request')
-  ) {
-    return 'network';
-  }
-
-  const record = isRecord(event) ? event : undefined;
-  if (typeof record?.command === 'string' || typeof record?.cmd === 'string') {
-    return 'shell';
-  }
-  const params = readOpenClawParams(event);
-  if (typeof params?.command === 'string' || typeof params?.cmd === 'string') {
-    return 'shell';
-  }
-  if (
-    typeof params?.url === 'string' ||
-    typeof params?.uri === 'string'
-  ) {
-    return 'network';
-  }
-  if (typeof params?.query === 'string' || typeof params?.q === 'string') {
-    return 'web_search';
-  }
-  if (
-    typeof params?.content === 'string' ||
-    typeof params?.newContent === 'string' ||
-    typeof params?.patch === 'string'
-  ) {
-    return 'file_write';
-  }
-  if (
-    typeof params?.path === 'string' ||
-    typeof params?.file_path === 'string' ||
-    typeof params?.filePath === 'string'
-  ) {
-    return 'file_read';
-  }
-
-  return 'other';
-}
-
-function readOpenClawToolName(event: unknown): string | undefined {
-  const record = isRecord(event) ? event : undefined;
-  const value = record?.toolName ?? record?.tool_name ?? record?.name ?? record?.id;
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function readOpenClawParams(event: unknown): Record<string, unknown> | undefined {
-  const record = isRecord(event) ? event : undefined;
-  const params = firstRecord(
-    record?.params,
-    record?.toolInput,
-    record?.tool_input,
-    record?.args,
-    record?.input
-  );
-  return params;
-}
-
 function isSecuritySensitiveRuntimeAction(actionType: RuntimeActionType): boolean {
   return actionType !== 'other' && actionType !== 'web_search';
-}
-
-function readOpenClawSessionId(event: unknown, ctx: unknown): string | undefined {
-  const eventRecord = isRecord(event) ? event : undefined;
-  const ctxRecord = isRecord(ctx) ? ctx : undefined;
-  const sessionId = ctxRecord?.sessionId ?? eventRecord?.sessionId;
-  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined;
 }
 
 function readOpenClawConfigLevel(
@@ -696,7 +639,7 @@ type OpenClawBeforeToolCallResult =
         description: string;
         severity?: 'info' | 'warning' | 'critical';
         timeoutMs?: number;
-        timeoutBehavior?: 'allow' | 'deny';
+        allowedDecisions?: Array<'allow-once' | 'allow-always' | 'deny'>;
       };
     };
 
@@ -722,14 +665,23 @@ function runtimeResultToBeforeToolCallResult(
   const reason =
     `GoPlus AgentGuard: runtime policy ${action} this OpenClaw tool call` +
     ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
-    (decision === 'require_approval'
-      ? ' OpenClaw cannot safely resume this call after an external approval, so AgentGuard blocked it locally.'
-      : '') +
-    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '') +
-    (result.pendingApproval ? ` ${approvalInstruction(result.pendingApproval.actionId)}` : '');
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '');
 
   if (decision === 'require_approval') {
-    return { block: true, blockReason: reason };
+    return {
+      requireApproval: {
+        title: 'AgentGuard approval required',
+        description: boundedApprovalDescription(reason),
+        severity:
+          result.decision.riskLevel === 'critical' || result.decision.riskLevel === 'high'
+            ? 'critical'
+            : result.decision.riskLevel === 'safe'
+              ? 'info'
+              : 'warning',
+        timeoutMs: 120_000,
+        allowedDecisions: ['allow-once', 'deny'],
+      },
+    };
   }
   return {
     block: true,
@@ -752,10 +704,11 @@ function isApprovedLocalRuntimeRetry(result: ProtectResult | null): boolean {
 function isRuntimeAuthoritativeAllow(
   result: ProtectResult | null,
   actionType: RuntimeActionType,
-  event: unknown
+  event: unknown,
+  adapter: OpenClawAdapter,
 ): boolean {
   if (actionType !== 'file_read' && actionType !== 'file_write') return false;
-  if (!readOpenClawFilePath(event)) return false;
+  if (!adapter.readFilePath(event)) return false;
   if (!result) return true;
   const decision = normalizeRuntimePolicyDecision(result.decision.decision);
   return decision === 'allow' || decision === 'warn';
@@ -765,37 +718,21 @@ function normalizeRuntimePolicyDecision(decision: ProtectResult['decision']['dec
   return decision === 'require_approve' ? 'require_approval' : decision as ProtectResult['decision']['decision'];
 }
 
-function approvalInstruction(actionId: string): string {
+function runGateReason(result: ProtectResult): string {
+  const reasonSummary = result.decision.reasons
+    .map(reason => reason.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(', ');
   return (
-    `Approve once (only after explicit user approval): agentguard approve --action-id ${actionId} --once.` +
-    ' Do not run this approval command yourself unless the user explicitly approves this exact action.'
+    `GoPlus AgentGuard blocked this initial OpenClaw run input` +
+    ` (risk ${result.decision.riskScore}/100, ${result.decision.riskLevel}; policy ${result.decision.policyVersion}).` +
+    (reasonSummary ? ` Reasons: ${reasonSummary}.` : '')
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
-  for (const value of values) {
-    if (isRecord(value)) return value;
-  }
-  return undefined;
-}
-
-function readOpenClawFilePath(event: unknown): string | undefined {
-  const record = isRecord(event) ? event : undefined;
-  const params = readOpenClawParams(event);
-  const value =
-    params?.path ??
-    params?.file_path ??
-    params?.filePath ??
-    params?.target ??
-    record?.path ??
-    record?.file_path ??
-    record?.filePath ??
-    record?.target;
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+function boundedApprovalDescription(value: string): string {
+  return value.length <= 512 ? value : `${value.slice(0, 509)}...`;
 }
 
 /**

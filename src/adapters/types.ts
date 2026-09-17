@@ -83,4 +83,6 @@ export interface AgentGuardInstance {
 export interface EngineOptions {
   config: { level?: string };
   agentguard: AgentGuardInstance;
+  /** Re-throw local scanner failures so a blocking host gate can deny by default. */
+  failClosedOnEngineError?: boolean;
 }

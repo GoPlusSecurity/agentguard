@@ -33,6 +33,8 @@ export interface ProtectOptions {
   decisionMode?: 'local-first' | 'cloud';
   phase?: 'pre' | 'post';
   filesystemAllowlist?: string[];
+  /** Persist low-risk/safe decisions for observer lifecycles that require a complete audit trail. */
+  auditSafe?: boolean;
 }
 
 export interface ProtectResult {
@@ -77,7 +79,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
-  if (shouldSuppressRuntimeReport(decision)) return null;
+  if (!options.auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
   const event: RuntimeAuditEvent = {
     ...action,

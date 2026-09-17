@@ -1,10 +1,17 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { evaluateHook } from '../adapters/engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { ActionScanner } from '../action/index.js';
 import openClawEntry from '../openclaw.js';
+import { protectAction } from '../runtime/protect.js';
+import type { ProtectOptions, ProtectResult } from '../runtime/protect.js';
+import type { AgentGuardConfig } from '../config.js';
 import { createTestContext } from './helpers/test-utils.js';
+import { OpenClawLifecycleFixture } from './helpers/openclaw-lifecycle-fixture.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A: Claude Code evaluateHook full chain
@@ -106,10 +113,12 @@ describe('Integration: Claude Code evaluateHook', () => {
 describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   let ctx: ReturnType<typeof createTestContext>;
   const openClawRegistryState = Symbol.for('openclaw.pluginRegistryState');
+  const temporaryRoots: string[] = [];
 
   afterEach(() => {
     ctx?.cleanup();
     delete (globalThis as Record<PropertyKey, unknown>)[openClawRegistryState];
+    for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
   function createMockApi() {
@@ -125,15 +134,24 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     return { api, handlers };
   }
 
-  it('should register before_tool_call and after_tool_call handlers', () => {
+  it('registers the supported run, model observer, diagnostic, and tool hooks only', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
       agentguardFactory: () => ctx.agentguard as never,
     });
-    assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
-    assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
+    assert.deepEqual(Object.keys(handlers).sort(), [
+      'after_tool_call',
+      'before_agent_run',
+      'before_tool_call',
+      'llm_input',
+      'llm_output',
+      'model_call_ended',
+      'model_call_started',
+    ]);
+    assert.equal(handlers['wrapStreamFn'], undefined);
+    assert.equal(handlers['before_compaction'], undefined);
   });
 
   it('exports an OpenClaw entry that supports register(api) and direct legacy calls', () => {
@@ -443,11 +461,12 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
   it('should fail closed for security-sensitive OpenClaw actions when runtime protection fails', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
+    const fakeSecret = 'sk-runtime-failure-secret';
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
       registry: ctx.agentguard.registry as never,
       protectAction: async () => {
-        throw new Error('runtime unavailable');
+        throw new Error(`runtime unavailable Authorization: Bearer ${fakeSecret}`);
       },
     });
 
@@ -458,6 +477,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 
     assert.equal(result?.block, true);
     assert.ok(result?.blockReason?.includes('runtime protection failed'));
+    assert.doesNotMatch(result?.blockReason ?? '', /Authorization|Bearer|sk-runtime-failure-secret/);
   });
 
   it('should allow explicit fallback when runtime protection fails', async () => {
@@ -517,7 +537,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result?.blockReason?.includes('cloud-test'));
   });
 
-  it('should block in OpenClaw when runtime policy requires approval', async () => {
+  it('uses OpenClaw native approval when runtime policy requires approval for a tool', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
@@ -553,16 +573,25 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       askReason?: string;
       block?: boolean;
       blockReason?: string;
+      requireApproval?: {
+        title?: string;
+        description?: string;
+        severity?: string;
+        allowedDecisions?: string[];
+      };
     } | undefined;
 
     assert.equal(result?.ask, undefined);
     assert.equal(result?.askReason, undefined);
-    assert.equal(result?.block, true);
-    assert.ok(result?.blockReason?.includes('requires approval'));
-    assert.ok(result?.blockReason?.includes('Protected path'));
+    assert.equal(result?.block, undefined);
+    assert.equal(result?.blockReason, undefined);
+    assert.equal(result?.requireApproval?.title, 'AgentGuard approval required');
+    assert.match(result?.requireApproval?.description ?? '', /Protected path/);
+    assert.equal(result?.requireApproval?.severity, 'critical');
+    assert.deepEqual(result?.requireApproval?.allowedDecisions, ['allow-once', 'deny']);
   });
 
-  it('should normalize require_approve runtime decisions before blocking in OpenClaw', async () => {
+  it('normalizes require_approve runtime decisions into OpenClaw native approval', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
@@ -596,10 +625,285 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     }) as {
       block?: boolean;
       blockReason?: string;
+      requireApproval?: { description?: string };
     } | undefined;
 
-    assert.equal(result?.block, true);
-    assert.ok(result?.blockReason?.includes('requires approval'));
+    assert.equal(result?.block, undefined);
+    assert.equal(result?.blockReason, undefined);
+    assert.match(result?.requireApproval?.description ?? '', /Protected path/);
+  });
+
+  it('keeps before_agent_run as a pass/block gate and never returns approval', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const decisions: Array<'require_approval' | 'allow'> = ['require_approval', 'allow'];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async (options) => {
+        const decision = decisions.shift() ?? 'allow';
+        return {
+          policySource: 'default',
+          event: {
+            actionId: 'act-run',
+            sessionId: options.sessionId ?? 'unknown',
+            agentHost: 'openclaw',
+            actionType: 'llm_request',
+            toolName: options.toolName ?? 'unknown',
+            input: '[LOCAL_ONLY_LLM_CONTENT]',
+            decision,
+            riskScore: decision === 'allow' ? 0 : 70,
+            riskLevel: decision === 'allow' ? 'safe' : 'high',
+            reasons: decision === 'allow' ? [] : [{
+              code: 'PII_EGRESS', severity: 'high', title: 'Personal data', description: 'PII found',
+            }],
+            policyVersion: 'test',
+          },
+          decision: {
+            actionId: 'act-run',
+            decision,
+            riskScore: 70,
+            riskLevel: 'high',
+            reasons: [{ code: 'PII_EGRESS', severity: 'high', title: 'Personal data', description: 'PII found' }],
+            policyVersion: 'test',
+          },
+        } as never;
+      },
+    });
+
+    const blocked = await handlers['before_agent_run']({
+      prompt: 'personal_email="alice@example.invalid"',
+      messages: [],
+      systemPrompt: 'Keep data private',
+    }, { runId: 'run-gate-1', sessionId: 'session-gate' }) as Record<string, unknown>;
+    const passed = await handlers['before_agent_run']({
+      prompt: 'hello',
+      messages: [],
+    }, { runId: 'run-gate-2', sessionId: 'session-gate' }) as Record<string, unknown>;
+
+    assert.equal(blocked.outcome, 'block');
+    assert.equal(typeof blocked.reason, 'string');
+    assert.equal(blocked.requireApproval, undefined);
+    assert.deepEqual(passed, { outcome: 'pass' });
+  });
+
+  it('redacts evaluator exceptions from before_agent_run block responses', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async () => {
+        throw new Error('Authorization: Bearer sk-run-gate-secret API_KEY=also-secret');
+      },
+    });
+
+    const result = await handlers['before_agent_run']({
+      prompt: 'hello',
+      messages: [],
+    }, { runId: 'run-error', sessionId: 'session-error' }) as Record<string, unknown>;
+
+    assert.equal(result.outcome, 'block');
+    assert.equal(result.reason, 'AgentGuard runtime protection failed. Blocking by default.');
+    assert.doesNotMatch(JSON.stringify(result), /Authorization|Bearer|API_KEY|sk-run-gate-secret|also-secret/);
+  });
+
+  it('observes semantic and second-loop diagnostic events without blocking or inventing retry facts', async () => {
+    ctx = createTestContext();
+    const { api, handlers } = createMockApi();
+    const calls: Array<Record<string, unknown>> = [];
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async (options) => {
+        calls.push(options as unknown as Record<string, unknown>);
+        throw new Error('observer evaluation must not affect OpenClaw');
+      },
+    });
+
+    const inputResult = await handlers['llm_input']({
+      runId: 'run-observer', sessionId: 'session-observer', provider: 'openai', model: 'gpt-test',
+      prompt: 'hello', historyMessages: [], imagesCount: 0,
+    });
+    const firstStarted = await handlers['model_call_started']({
+      runId: 'run-observer', callId: 'call-first', sessionId: 'session-observer', provider: 'openai', model: 'gpt-test',
+    });
+    const secondStarted = await handlers['model_call_started']({
+      runId: 'run-observer', callId: 'call-second', sessionId: 'session-observer', provider: 'openai', model: 'gpt-test',
+    });
+    const secondEnded = await handlers['model_call_ended']({
+      runId: 'run-observer', callId: 'call-second', sessionId: 'session-observer', provider: 'openai', model: 'gpt-test',
+      durationMs: 40, outcome: 'completed', requestPayloadBytes: 100, responseStreamBytes: 200,
+    });
+    const outputResult = await handlers['llm_output']({
+      runId: 'run-observer', sessionId: 'session-observer', provider: 'openai', model: 'gpt-test', assistantTexts: ['done'],
+    });
+
+    assert.equal(inputResult, undefined);
+    assert.equal(firstStarted, undefined);
+    assert.equal(secondStarted, undefined);
+    assert.equal(secondEnded, undefined);
+    assert.equal(outputResult, undefined);
+    assert.equal(calls.length, 6);
+    const rawInputs = calls.map(call => call.rawInput as Record<string, unknown>);
+    assert.ok(rawInputs.every(raw => raw.canBlockCurrentAction === false));
+    assert.ok(rawInputs.every(raw => raw.coverageLevel === 'observe_only'));
+    assert.ok(rawInputs.every(raw => (raw.missingFacts as string[]).includes('retry_and_fallback')));
+    assert.ok(rawInputs.every(raw => (raw.missingFacts as string[]).includes('auxiliary_model_calls')));
+    assert.ok(rawInputs.every(raw => {
+      const llm = raw.llm as Record<string, unknown>;
+      return llm.destination === undefined && llm.attempt === undefined &&
+        llm.isRetry === undefined && llm.isFallback === undefined;
+    }));
+    assert.ok(rawInputs.some(raw => (raw.llm as Record<string, unknown>).requestId === 'openclaw:call-first'));
+    assert.ok(rawInputs.some(raw => (raw.llm as Record<string, unknown>).requestId === 'openclaw:call-second'));
+  });
+
+  it('persists a routine safe observer event with redacted semantic content', async () => {
+    ctx = createTestContext();
+    const fixture = new OpenClawLifecycleFixture();
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-observer-'));
+    temporaryRoots.push(root);
+    const observerConfig: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(root, 'policy.json'),
+      auditPath: join(root, 'audit.jsonl'),
+      eventSpoolPath: join(root, 'spool.jsonl'),
+    };
+    registerOpenClawPlugin(fixture.api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async options => {
+        const raw = options.rawInput as Record<string, unknown>;
+        const llm = raw.llm as Record<string, unknown>;
+        return protectAction({
+          ...options,
+          config: observerConfig,
+          rawInput: {
+            ...raw,
+            missingFacts: [],
+            llm: {
+              ...llm,
+              destination: { scheme: 'https', host: 'api.openai.com', tier: 'T0' },
+              credentialKind: 'none',
+              credentialPresent: false,
+              payloadBytes: 5,
+              attachmentBytes: 0,
+              filePathCount: 0,
+            },
+          },
+        });
+      },
+    });
+
+    await fixture.observe('llm_input', {
+      runId: 'run-safe-audit',
+      sessionId: 'session-safe-audit',
+      provider: 'openai',
+      model: 'gpt-test',
+      prompt: 'routine-safe-observer-content',
+      historyMessages: [],
+      imagesCount: 0,
+    });
+
+    assert.equal(existsSync(observerConfig.auditPath), true);
+    const auditText = readFileSync(observerConfig.auditPath, 'utf8');
+    const audit = JSON.parse(auditText.trim()) as Record<string, unknown>;
+    assert.equal(audit.actionType, 'llm_request');
+    assert.equal(audit.canBlockCurrentAction, false);
+    assert.equal(audit.enforcementStatus, 'observed');
+    assert.equal(audit.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.doesNotMatch(auditText, /routine-safe-observer-content/);
+  });
+
+  it('denies before_tool_call when normalization or local evaluation throws', async () => {
+    ctx = createTestContext();
+    const fakeSecret = 'sk-openclaw-review-secret';
+    const normalizationFixture = new OpenClawLifecycleFixture();
+    registerOpenClawPlugin(normalizationFixture.api as never, {
+      skipAutoScan: true,
+      runtimeProtection: false,
+      registry: ctx.agentguard.registry as never,
+    });
+    const malformed = Object.defineProperty({}, 'toolName', {
+      get() { throw new Error(`malformed tool event Authorization: Bearer ${fakeSecret}`); },
+    });
+    const normalizationResult = await normalizationFixture.beforeToolCall(malformed);
+    assert.equal(normalizationResult?.block, true);
+    assert.match(normalizationResult?.blockReason ?? '', /failed.*blocking/i);
+    assert.doesNotMatch(normalizationResult?.blockReason ?? '', /Authorization|Bearer|sk-openclaw-review-secret/);
+
+    const evaluationFixture = new OpenClawLifecycleFixture();
+    registerOpenClawPlugin(evaluationFixture.api as never, {
+      skipAutoScan: true,
+      runtimeProtection: false,
+      agentguardFactory: () => ({
+        registry: ctx.agentguard.registry,
+        actionScanner: { async decide() { throw new Error(`local evaluator failed API_KEY=${fakeSecret}`); } },
+      }) as never,
+    });
+    const evaluationResult = await evaluationFixture.beforeToolCall({
+      toolName: 'exec',
+      params: { command: 'echo hello' },
+    });
+    assert.equal(evaluationResult?.block, true);
+    assert.match(evaluationResult?.blockReason ?? '', /failed.*blocking/i);
+    assert.doesNotMatch(evaluationResult?.blockReason ?? '', /API_KEY|sk-openclaw-review-secret/);
+  });
+
+  it('exercises exact OpenClaw gate, approval, second-loop, and unsupported lifecycle contracts', async () => {
+    ctx = createTestContext();
+    const fixture = new OpenClawLifecycleFixture();
+    const calls: Array<Record<string, unknown>> = [];
+    registerOpenClawPlugin(fixture.api as never, {
+      skipAutoScan: true,
+      registry: ctx.agentguard.registry as never,
+      protectAction: async options => {
+        calls.push(options as unknown as Record<string, unknown>);
+        if (options.toolName === 'openclaw.before_agent_run') {
+          return lifecycleProtectResult('block', options, 'PII_EGRESS');
+        }
+        if (options.toolName === 'read') {
+          return lifecycleProtectResult('require_approval', options, 'SECRET_ACCESS');
+        }
+        return null;
+      },
+    });
+
+    const runResult = await fixture.beforeAgentRun({
+      prompt: 'personal_email="private@example.invalid"',
+      messages: [],
+      systemPrompt: 'Keep personal data private.',
+    }, { runId: 'run-contract', sessionId: 'session-contract' });
+    assert.equal(runResult.outcome, 'block');
+
+    const approval = await fixture.beforeToolCall({
+      toolName: 'read', params: { path: '/workspace/.env' },
+    }, { sessionId: 'session-contract' });
+    assert.equal(approval?.block, undefined);
+    assert.deepEqual(approval?.requireApproval?.allowedDecisions, ['allow-once', 'deny']);
+
+    await fixture.observe('model_call_started', {
+      runId: 'run-contract', callId: 'call-first', sessionId: 'session-contract',
+      provider: 'openai', model: 'gpt-test',
+    });
+    await fixture.observe('model_call_started', {
+      runId: 'run-contract', callId: 'call-second-tool-loop', sessionId: 'session-contract',
+      provider: 'openai', model: 'gpt-test',
+    });
+    assert.ok(calls.some(call => {
+      const raw = call.rawInput as Record<string, unknown>;
+      const llm = raw?.llm as Record<string, unknown> | undefined;
+      return llm?.requestId === 'openclaw:call-second-tool-loop';
+    }));
+    assert.deepEqual(fixture.lifecycleCoverage(), {
+      mainRun: 'partial',
+      secondToolLoop: 'observe_only',
+      compaction: 'unsupported',
+      retryAndFallback: 'unsupported',
+      auxiliaryModelCalls: 'unsupported',
+    });
   });
 
   it('should allow OpenClaw retries that consumed a local one-time approval', async () => {
@@ -665,7 +969,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.ok(result!.blockReason?.includes('AgentGuard'), 'Reason should mention AgentGuard');
   });
 
-  it('should block before writing .env via OpenClaw', async () => {
+  it('should stop a .env write by block or native approval before execution', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
@@ -676,12 +980,22 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const result = await handlers['before_tool_call']({
       toolName: 'write',
       params: { path: '/project/.env' },
-    }) as { block?: boolean; blockReason?: string } | undefined;
+    }) as {
+      block?: boolean;
+      blockReason?: string;
+      requireApproval?: { title?: string; description?: string; allowedDecisions?: string[] };
+    } | undefined;
 
-    assert.equal(result?.block, true, 'Should block before writing .env');
-    assert.ok(result?.blockReason?.includes('requires approval'));
-    assert.ok(result?.blockReason?.includes('explicit user approval'));
-    assert.ok(result?.blockReason?.includes('Do not run this approval command yourself'));
+    if (result?.requireApproval) {
+      assert.equal(result.block, undefined);
+      assert.equal(result.blockReason, undefined);
+      assert.equal(result.requireApproval.title, 'AgentGuard approval required');
+      assert.match(result.requireApproval.description ?? '', /requires approval/);
+      assert.deepEqual(result.requireApproval.allowedDecisions, ['allow-once', 'deny']);
+    } else {
+      assert.equal(result?.block, true, 'Sensitive write must not execute without a gate');
+      assert.match(result?.blockReason ?? '', /AgentGuard/);
+    }
   });
 
   it('should handle after_tool_call without error', async () => {
@@ -724,6 +1038,43 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     assert.equal(captured?.actionType, 'network');
   });
 });
+
+function lifecycleProtectResult(
+  decision: 'block' | 'require_approval',
+  options: ProtectOptions,
+  reasonCode: string,
+): ProtectResult {
+  const reason = {
+    code: reasonCode,
+    severity: 'high' as const,
+    title: reasonCode === 'PII_EGRESS' ? 'Personal data' : 'Protected path',
+    description: 'Fixture policy finding.',
+  };
+  return {
+    policySource: 'default',
+    event: {
+      actionId: `act-${decision}`,
+      sessionId: options.sessionId ?? 'unknown',
+      agentHost: 'openclaw',
+      actionType: options.actionType ?? 'other',
+      toolName: options.toolName ?? 'unknown',
+      input: '[LOCAL_ONLY_LLM_CONTENT]',
+      decision,
+      riskScore: 80,
+      riskLevel: 'high',
+      reasons: [reason],
+      policyVersion: 'fixture-policy',
+    },
+    decision: {
+      actionId: `act-${decision}`,
+      decision,
+      riskScore: 80,
+      riskLevel: 'high',
+      reasons: [reason],
+      policyVersion: 'fixture-policy',
+    },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // C: Protection Level Matrix

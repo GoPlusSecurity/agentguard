@@ -11,19 +11,33 @@ import {
 } from '../adapters/common.js';
 
 describe('Adapter lifecycle capabilities', () => {
-  for (const adapter of [new ClaudeCodeAdapter(), new OpenClawAdapter()]) {
-    it(`${adapter.name} does not claim model transport visibility`, () => {
-      assert.equal(adapter.capabilities.preTool, 'blocking');
-      assert.equal(adapter.capabilities.postTool, 'observe_only');
-      assert.equal(adapter.capabilities.modelRequest, 'none');
-      assert.equal(adapter.capabilities.modelResponse, 'none');
-      assert.equal(adapter.capabilities.finalDestination, false);
-      assert.equal(adapter.capabilities.credentialFacts, false);
-      assert.equal(adapter.capabilities.exactPayloadBytes, false);
-      assert.equal(adapter.capabilities.retryAndFallback, false);
-      assert.equal(adapter.capabilities.auxiliaryModelCalls, false);
-    });
-  }
+  it('claude-code does not claim model transport visibility', () => {
+    const capabilities = new ClaudeCodeAdapter().capabilities;
+    assert.equal(capabilities.preTool, 'blocking');
+    assert.equal(capabilities.postTool, 'observe_only');
+    assert.equal(capabilities.modelRequest, 'none');
+    assert.equal(capabilities.modelResponse, 'none');
+    assert.equal(capabilities.finalDestination, false);
+    assert.equal(capabilities.credentialFacts, false);
+    assert.equal(capabilities.exactPayloadBytes, false);
+    assert.equal(capabilities.retryAndFallback, false);
+    assert.equal(capabilities.auxiliaryModelCalls, false);
+  });
+
+  it('OpenClaw declares its run gate and model observers without transport visibility', () => {
+    const capabilities = new OpenClawAdapter().capabilities;
+    assert.equal(capabilities.userPrompt, 'blocking');
+    assert.equal(capabilities.promptExpansion, 'blocking');
+    assert.equal(capabilities.modelRequest, 'observe_only');
+    assert.equal(capabilities.modelResponse, 'observe_only');
+    assert.equal(capabilities.preTool, 'blocking');
+    assert.equal(capabilities.postTool, 'observe_only');
+    assert.equal(capabilities.finalDestination, false);
+    assert.equal(capabilities.credentialFacts, false);
+    assert.equal(capabilities.exactPayloadBytes, false);
+    assert.equal(capabilities.retryAndFallback, false);
+    assert.equal(capabilities.auxiliaryModelCalls, false);
+  });
 
   it('Hermes declares main-loop model hooks as observe-only', () => {
     const capabilities = new HermesAdapter().capabilities;
@@ -352,6 +366,161 @@ describe('OpenClawAdapter', () => {
       const input = adapter.parseInput({ toolName: 'exec', params: {} });
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
+    });
+  });
+
+  describe('normalizeLifecycleEvent', () => {
+    it('normalizes the initial run gate with only visible prompt, history, and system content', () => {
+      const [normalized] = adapter.normalizeLifecycleEvent('before_agent_run', {
+        prompt: 'personal_email="alice@example.invalid"',
+        messages: [{ role: 'assistant', content: 'Earlier answer' }],
+        systemPrompt: 'Keep private data safe.',
+      }, {
+        runId: 'run-initial',
+        sessionId: 'session-1',
+        modelProviderId: 'provider-from-context',
+        modelId: 'model-from-context',
+      });
+
+      assert.equal(normalized.actionType, 'llm_request');
+      assert.equal(normalized.toolName, 'openclaw.before_agent_run');
+      assert.equal(normalized.sessionId, 'session-1');
+      assert.equal(normalized.rawInput.lifecycleStage, 'run_start');
+      assert.equal(normalized.rawInput.canBlockCurrentAction, true);
+      assert.equal(normalized.rawInput.coverageLevel, 'partial');
+      assert.deepEqual(normalized.rawInput.missingFacts, [
+        'complete_payload',
+        'final_destination',
+        'credential_kind',
+        'credential_presence',
+        'exact_payload_bytes',
+        'attachment_bytes',
+        'file_path_count',
+        'retry_and_fallback',
+        'auxiliary_model_calls',
+      ]);
+      assert.match(String(normalized.rawInput.input), /alice@example\.invalid/);
+      assert.match(String(normalized.rawInput.input), /Earlier answer/);
+      assert.match(String(normalized.rawInput.input), /Keep private data safe/);
+      const llm = normalized.rawInput.llm as Record<string, unknown>;
+      assert.equal(llm.requestId, 'openclaw:run-initial:run');
+      assert.equal(llm.sessionId, 'session-1');
+      assert.equal(llm.lifecycleStage, 'run_start');
+      assert.equal(llm.canBlockCurrentAction, true);
+      assert.equal(llm.credentialKind, 'unknown');
+      assert.equal(llm.credentialPresent, 'unknown');
+      assert.equal(llm.provider, 'provider-from-context');
+      assert.equal(llm.model, 'model-from-context');
+      assert.equal(llm.destination, undefined);
+      assert.equal(llm.attempt, undefined);
+      assert.equal(llm.isRetry, undefined);
+      assert.equal(llm.isFallback, undefined);
+    });
+
+    it('correlates semantic request and response observers by run id without transport facts', () => {
+      const [request] = adapter.normalizeLifecycleEvent('llm_input', {
+        runId: 'run-observed',
+        sessionId: 'session-2',
+        provider: 'anthropic',
+        model: 'claude-test',
+        systemPrompt: 'System text',
+        prompt: 'Prompt text',
+        historyMessages: [{ role: 'user', content: 'History text' }],
+        imagesCount: 1,
+        tools: [{ name: 'exec' }],
+      });
+      const [response] = adapter.normalizeLifecycleEvent('llm_output', {
+        runId: 'run-observed',
+        sessionId: 'session-2',
+        provider: 'anthropic',
+        model: 'claude-test',
+        assistantTexts: ['Assistant text'],
+        lastAssistant: { role: 'assistant', content: 'Last assistant text' },
+      });
+
+      assert.equal(request.rawInput.canBlockCurrentAction, false);
+      assert.equal(response.rawInput.canBlockCurrentAction, false);
+      assert.equal(request.rawInput.coverageLevel, 'observe_only');
+      assert.equal(response.rawInput.coverageLevel, 'observe_only');
+      assert.equal((request.rawInput.llm as Record<string, unknown>).requestId, 'openclaw:run-observed');
+      assert.equal((response.rawInput.llm as Record<string, unknown>).requestId, 'openclaw:run-observed');
+      assert.equal((request.rawInput.llm as Record<string, unknown>).provider, 'anthropic');
+      assert.equal((response.rawInput.llm as Record<string, unknown>).model, 'claude-test');
+      assert.equal((request.rawInput.llm as Record<string, unknown>).destination, undefined);
+      assert.equal((request.rawInput.llm as Record<string, unknown>).credentialKind, 'unknown');
+      assert.equal((request.rawInput.llm as Record<string, unknown>).credentialPresent, 'unknown');
+      assert.equal((request.rawInput.llm as Record<string, unknown>).attempt, undefined);
+      assert.equal((request.rawInput.llm as Record<string, unknown>).isRetry, undefined);
+      assert.equal((request.rawInput.llm as Record<string, unknown>).isFallback, undefined);
+      assert.match(String(request.rawInput.input), /Prompt text/);
+      assert.match(String(request.rawInput.input), /History text/);
+      assert.match(String(response.rawInput.input), /Assistant text/);
+    });
+
+    it('maps diagnostic byte counts to call-correlated observer records', () => {
+      const started = adapter.normalizeLifecycleEvent('model_call_started', {
+        runId: 'run-tools',
+        callId: 'call-second-loop',
+        sessionId: 'session-3',
+        provider: 'openai',
+        model: 'gpt-test',
+        api: 'responses',
+        transport: 'sse',
+      });
+      const ended = adapter.normalizeLifecycleEvent('model_call_ended', {
+        runId: 'run-tools',
+        callId: 'call-second-loop',
+        sessionId: 'session-3',
+        provider: 'openai',
+        model: 'gpt-test',
+        api: 'responses',
+        transport: 'sse',
+        durationMs: 125,
+        outcome: 'completed',
+        requestPayloadBytes: 1200,
+        responseStreamBytes: 3400,
+        timeToFirstByteMs: 32,
+      });
+
+      assert.equal(started.length, 1);
+      assert.equal((started[0]!.rawInput.llm as Record<string, unknown>).requestId, 'openclaw:call-second-loop');
+      assert.deepEqual(ended.map(item => item.actionType), ['llm_request', 'llm_response']);
+      assert.deepEqual(ended.map(item => (item.rawInput.llm as Record<string, unknown>).requestId), [
+        'openclaw:call-second-loop',
+        'openclaw:call-second-loop',
+      ]);
+      assert.equal((ended[0]!.rawInput.llm as Record<string, unknown>).payloadBytes, 1200);
+      assert.equal((ended[1]!.rawInput.llm as Record<string, unknown>).payloadBytes, 3400);
+      assert.ok(ended.every(item => item.rawInput.canBlockCurrentAction === false));
+      assert.ok(ended.every(item => item.rawInput.coverageLevel === 'observe_only'));
+      assert.ok(ended.every(item => (
+        item.rawInput.missingFacts as string[]
+      ).includes('retry_and_fallback')));
+      assert.ok(ended.every(item => (
+        item.rawInput.missingFacts as string[]
+      ).includes('auxiliary_model_calls')));
+    });
+
+    it('centralizes tool action classification and preserves post-tool response evidence', () => {
+      const [before] = adapter.normalizeLifecycleEvent('before_tool_call', {
+        toolName: 'terminal',
+        params: { command: 'openclaw config set models.providers.custom.baseUrl https://relay.invalid' },
+      }, { sessionId: 'session-tool' });
+      const afterEvent = {
+        toolName: 'web_fetch',
+        params: { url: 'https://example.invalid' },
+        response: { contentType: 'image/png', body: '<script>eval(atob("x"))</script>' },
+      };
+      const [after] = adapter.normalizeLifecycleEvent('after_tool_call', afterEvent, {
+        sessionId: 'session-tool',
+      });
+
+      assert.equal(before.actionType, 'shell');
+      assert.equal(before.phase, 'pre');
+      assert.equal(before.sessionId, 'session-tool');
+      assert.equal(after.actionType, 'network');
+      assert.equal(after.phase, 'post');
+      assert.equal(after.rawInput, afterEvent);
     });
   });
 });

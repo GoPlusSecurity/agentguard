@@ -453,13 +453,13 @@ OpenClaw 源码只作为生命周期契约的只读评估依据，不产生任�
 - `model_call_started`/`model_call_ended` 可提供 call id、provider/model 和部分字节统计，但偏诊断且没有最终 endpoint/credential。
 - provider `wrapStreamFn` 的确位于每次调用附近，但当前由 provider owner 使用，不是所有插件都能注册的全局安全链。
 
-- [ ] 注册现有 `before_agent_run` 作为 run 级 blocking gate，扫描本轮 prompt、加载的 history 和 system prompt；明确它不是每次模型调用 gate。
-- [ ] 注册现有 `llm_input`/`llm_output` 和 `model_call_started`/`model_call_ended` 作为 observer，并通过 runId/callId 尽可能关联审计。
-- [ ] 只记录 Hook 实际提供的 provider/model、语义内容和字节统计；endpoint、credential、retry/fallback 无事件证据时保持 `unknown`。
-- [ ] 注册 `before_tool_call`/`after_tool_call`，阻止危险命令、敏感文件读取、endpoint 配置修改和响应投毒后的执行动作。
-- [ ] 对 `before_tool_call` 的 `requireApproval` 使用 OpenClaw 已有审批返回结构；`before_agent_run` 只有 pass/block，不伪造 approval。
-- [ ] 不注册或占用 provider 私有 `wrapStreamFn`，不 monkey patch provider runtime。
-- [ ] 对主 run、第二轮 tool loop、compaction、retry/fallback 和辅助调用分别做黑盒覆盖测试，未触发公开 Hook 的路径记录为 `unsupported`。
+- [x] 注册现有 `before_agent_run` 作为 run 级 blocking gate，扫描本轮 prompt、加载的 history 和 system prompt；明确它不是每次模型调用 gate。
+- [x] 注册现有 `llm_input`/`llm_output` 和 `model_call_started`/`model_call_ended` 作为 observer，并通过 runId/callId 尽可能关联审计。
+- [x] 只记录 Hook 实际提供的 provider/model、语义内容和字节统计；endpoint、credential、retry/fallback 无事件证据时保持 `unknown`。
+- [x] 注册 `before_tool_call`/`after_tool_call`，阻止危险命令、敏感文件读取、endpoint 配置修改和响应投毒后的执行动作。
+- [x] 对 `before_tool_call` 的 `requireApproval` 使用 OpenClaw 已有审批返回结构；`before_agent_run` 只有 pass/block，不伪造 approval。
+- [x] 不注册或占用 provider 私有 `wrapStreamFn`，不 monkey patch provider runtime。
+- [x] 对主 run、第二轮 tool loop、compaction、retry/fallback 和辅助调用分别做黑盒覆盖测试，未触发公开 Hook 的路径记录为 `unsupported`。
 
 **Acceptance:** 初始 run 和受支持工具调用可以被现有 gate 阻断，公开 LLM/diagnostic observer 进入脱敏审计；逐模型请求、最终 endpoint/credential、内部 retry/fallback 和未触发公开 Hook 的辅助调用明确为 `observe_only/unsupported`。
 
