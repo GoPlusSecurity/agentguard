@@ -57,6 +57,10 @@ import {
 } from './feed/cron.js';
 import { loadDshThreatFeedSubscription } from './feed/dsh-subscription.js';
 import {
+  startHermesEvaluatorDaemon,
+  type HermesEvaluatorDaemon,
+} from './hermes/evaluator-daemon.js';
+import {
   buildDshThreatFeedNotification,
   enqueueDshThreatFeedNotification,
 } from './feed/dsh-notifications.js';
@@ -214,6 +218,14 @@ async function main() {
         console.log(`Saved Cloud configuration for ${config.cloudUrl}.`);
         console.log(`Policy fetch failed; local protection still works offline. ${error instanceof Error ? error.message : ''}`.trim());
       }
+    });
+
+  program
+    .command('hermes-daemon', { hidden: true })
+    .description('Internal: run the persistent local evaluator for the Hermes plugin')
+    .action(async () => {
+      const daemon = await startHermesEvaluatorDaemon();
+      await waitForHermesDaemonShutdown(daemon);
     });
 
   program
@@ -1040,6 +1052,22 @@ async function main() {
   }
 
   await program.parseAsync(process.argv);
+}
+
+async function waitForHermesDaemonShutdown(daemon: HermesEvaluatorDaemon): Promise<void> {
+  const stop = () => {
+    void daemon.close().catch(() => {
+      // The daemon's `closed` lifecycle still settles so this hidden process exits.
+    });
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    await daemon.closed;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+  }
 }
 
 function validateCronTarget(value: unknown): CronBackend {

@@ -425,14 +425,14 @@ Hermes 源码只作为生命周期契约的只读评估依据，不产生任何�
 - `call_llm()`、`async_call_llm()`、title、compression、iteration summary 和部分 trajectory 路径直接调用 provider client，绕过该 hook。
 - `post_api_request` 能观察主响应，但不能阻断；`transform_llm_output` 又在整个 tool loop 结束后才触发。
 
-- [ ] 注册现有 `pre_llm_call`、`pre_api_request`、`post_api_request` 和 `pre_tool_call`，不得引用不存在的 request/response gate。
-- [ ] 声明 Hermes capability：主循环模型请求/响应为 `observe_only`，`pre_tool_call` 为 `blocking`；辅助模型、完整 system/tools、retry/fallback 和 transport facts 为不完整或不可用。
-- [ ] 将 `pre_api_request` 可见的 messages/provider/model/base URL 映射到 `llm_request`，但固定 `canBlockCurrentAction=false`；即使本地 evaluator 返回 block，也只能记录违规和警告，不能报告“已阻断”。
-- [ ] 将 `post_api_request` 映射到 `llm_response` observer；发现响应投毒后记录关联风险，实际工具执行仍由 `pre_tool_call` 阻断。
-- [ ] 保留 `pre_tool_call` 作为 endpoint 劫持和响应投毒后的最后一道执行拦截。
-- [ ] 不为每次大型 prompt 启动一个 Node 子进程；由 AgentGuard 提供本地常驻 daemon + Unix socket，Windows 使用 named pipe 或 loopback authenticated IPC。
-- [ ] IPC 只允许当前用户访问，设置请求上限、超时和 fail-closed 策略。
-- [ ] 对 title、compression、iteration summary、trajectory 等已知 bypass 输出 `unsupported` capability，不尝试 monkey patch Hermes 内部对象。
+- [x] 注册现有 `pre_llm_call`、`pre_api_request`、`post_api_request` 和 `pre_tool_call`，不得引用不存在的 request/response gate。
+- [x] 声明 Hermes capability：主循环模型请求/响应为 `observe_only`，`pre_tool_call` 为 `blocking`；辅助模型、完整 system/tools、retry/fallback 和 transport facts 为不完整或不可用。
+- [x] 将 `pre_api_request` 可见的 messages/provider/model/base URL 映射到 `llm_request`，但固定 `canBlockCurrentAction=false`；即使本地 evaluator 返回 block，也只能记录违规和警告，不能报告“已阻断”。
+- [x] 将 `post_api_request` 映射到 `llm_response` observer；发现响应投毒后记录关联风险，实际工具执行仍由 `pre_tool_call` 阻断。
+- [x] 保留 `pre_tool_call` 作为 endpoint 劫持和响应投毒后的最后一道执行拦截。
+- [x] 不为每次大型 prompt 启动一个 Node 子进程；由 AgentGuard 提供本地常驻 daemon + Unix socket，Windows 使用 named pipe 或 loopback authenticated IPC。
+- [x] IPC 只允许当前用户访问，设置请求上限、超时和 fail-closed 策略。
+- [x] 对 title、compression、iteration summary、trajectory 等已知 bypass 输出 `unsupported` capability，不尝试 monkey patch Hermes 内部对象。
 
 **Acceptance:** Hermes 主循环可见模型事件进入脱敏审计，危险本地工具在 `pre_tool_call` 被阻断；模型请求本身、辅助 LLM 调用和原始模型响应明确为 `observe_only/unsupported`，不得宣称 T3 endpoint 已在发送前阻断。
 

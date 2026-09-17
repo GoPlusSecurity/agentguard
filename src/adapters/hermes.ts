@@ -57,8 +57,8 @@ export class HermesAdapter implements HookAdapter {
   readonly capabilities: AgentLifecycleCapabilities = {
     userPrompt: 'none',
     promptExpansion: 'none',
-    modelRequest: 'none',
-    modelResponse: 'none',
+    modelRequest: 'observe_only',
+    modelResponse: 'observe_only',
     preTool: 'blocking',
     postTool: 'observe_only',
     toolOutputRewrite: false,

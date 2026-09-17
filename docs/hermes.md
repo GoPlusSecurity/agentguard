@@ -1,9 +1,10 @@
 # Hermes Agent
 
 AgentGuard integrates with [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-two ways: a **native plugin** (recommended) and **shell hooks** (fallback). Both
-route tool calls through the same AgentGuard decision engine, so detection logic
-is identical; they differ only in how they are installed and managed.
+two ways: a **native plugin** (recommended) and **shell hooks** (fallback). The
+native plugin observes supported main-loop LLM traffic and protects tool calls;
+the shell-hook fallback protects tool calls only. Both reuse the same local
+AgentGuard evaluator and redacted audit pipeline.
 
 ## Native plugin (recommended)
 
@@ -23,18 +24,49 @@ agentguard init --agent hermes
 hermes plugins list
 ```
 
-The plugin shells out to the `agentguard` CLI (or a `hermes-hook.js` you point it
-at). Make sure `agentguard` is on `PATH` (`npm i -g @goplus/agentguard`) or set
+The plugin starts one persistent local evaluator on demand and communicates over
+current-user IPC, avoiding a Node startup for every large prompt. Make sure
+`agentguard` is on `PATH` (`npm i -g @goplus/agentguard`) or set
 `AGENTGUARD_BIN`. See [`plugins/hermes/README.md`](../plugins/hermes/README.md)
-for the full configuration reference (`AGENTGUARD_HERMES_*` env vars, fail policy,
-autoscan).
+for IPC limits, environment variables, and failure policy.
 
 | Hermes hook        | Behavior                                                        |
 |--------------------|-----------------------------------------------------------------|
+| `pre_llm_call`     | Non-mutating turn boundary; not a per-model-request gate.        |
+| `pre_api_request`  | Main-loop request observer; emits redacted `llm_request` audit.  |
+| `post_api_request` | Main-loop response observer; emits correlated `llm_response` audit. |
 | `pre_tool_call`    | Blocks dangerous actions (`{"action":"block","message":...}`).  |
 | `post_tool_call`   | Audit-only; never blocks.                                       |
 | `on_session_start` | Best-effort skill scan (opt out: `AGENTGUARD_HERMES_AUTOSCAN=0`).|
 | `/agentguard`      | Slash command: `status`, `report` (default), `checkup`.         |
+
+### LLM lifecycle capability
+
+| Capability | Effective coverage |
+| --- | --- |
+| Main-loop model request/response | `observe_only`; `canBlockCurrentAction=false` |
+| Dangerous tool execution | `blocking` at `pre_tool_call` |
+| Full system/tools and exact payload/response | incomplete |
+| Final destination, credentials, exact bytes | unavailable |
+| Retry/fallback and auxiliary model calls | unsupported |
+| Title, compression, iteration summary, trajectory paths | unsupported |
+
+`pre_api_request` exposes a base-URL hint, provider/model, and visible message
+data. It is not a transport gate: even when local policy would block a T3/T4
+endpoint or visible PII, AgentGuard records `policyDecision` plus
+`enforcementStatus=would_block` and returns no blocking directive. Likewise,
+`post_api_request` can correlate suspicious output but cannot stop it from
+flowing through Hermes. The actual final interception is `pre_tool_call` if the
+response attempts a dangerous local action.
+
+On Unix, the evaluator uses a `0600` socket inside a `0700` directory; a
+current-user POSIX advisory file lease serializes daemon ownership and stale-lock
+recovery. Windows uses loopback IPC with a
+current-user token and a mutual HMAC challenge: the
+client authenticates the daemon before sending prompt or tool content, and the
+token itself is never transmitted. Requests are capped at 1 MiB, responses at
+256 KiB, and timeouts are bounded; a blocking tool gate fails closed when IPC
+is unavailable unless explicitly configured fail-open.
 
 ## Shell hooks (fallback)
 

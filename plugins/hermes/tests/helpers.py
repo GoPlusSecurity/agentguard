@@ -68,3 +68,29 @@ def register_with(runner, mode="protect"):
     guard = AgentGuardBridge(runner=runner, mode=mode)
     plugin.register(ctx, bridge=guard)
     return ctx, guard
+
+
+def make_ipc_transport(result=None, *, raises=None, calls=None):
+    """Stub the persistent evaluator IPC at the serialized request boundary."""
+
+    def send(request):
+        if calls is not None:
+            calls.append(request)
+        if raises is not None:
+            raise raises
+        return {
+            "version": 1,
+            "id": request["id"],
+            "ok": True,
+            "result": result,
+        }
+
+    return send
+
+
+def register_with_transport(transport):
+    """Register the plugin with an injected persistent evaluator transport."""
+    ctx = FakeCtx()
+    guard = AgentGuardBridge(transport=transport)
+    plugin.register(ctx, bridge=guard)
+    return ctx, guard

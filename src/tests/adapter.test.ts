@@ -11,7 +11,7 @@ import {
 } from '../adapters/common.js';
 
 describe('Adapter lifecycle capabilities', () => {
-  for (const adapter of [new ClaudeCodeAdapter(), new OpenClawAdapter(), new HermesAdapter()]) {
+  for (const adapter of [new ClaudeCodeAdapter(), new OpenClawAdapter()]) {
     it(`${adapter.name} does not claim model transport visibility`, () => {
       assert.equal(adapter.capabilities.preTool, 'blocking');
       assert.equal(adapter.capabilities.postTool, 'observe_only');
@@ -24,6 +24,19 @@ describe('Adapter lifecycle capabilities', () => {
       assert.equal(adapter.capabilities.auxiliaryModelCalls, false);
     });
   }
+
+  it('Hermes declares main-loop model hooks as observe-only', () => {
+    const capabilities = new HermesAdapter().capabilities;
+    assert.equal(capabilities.modelRequest, 'observe_only');
+    assert.equal(capabilities.modelResponse, 'observe_only');
+    assert.equal(capabilities.preTool, 'blocking');
+    assert.equal(capabilities.postTool, 'observe_only');
+    assert.equal(capabilities.finalDestination, false);
+    assert.equal(capabilities.credentialFacts, false);
+    assert.equal(capabilities.exactPayloadBytes, false);
+    assert.equal(capabilities.retryAndFallback, false);
+    assert.equal(capabilities.auxiliaryModelCalls, false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
