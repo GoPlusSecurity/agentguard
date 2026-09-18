@@ -2,7 +2,7 @@ export type CloudPolicyDecision = 'allow' | 'warn' | 'require_approval' | 'block
 export type RuntimeRiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
 export type RuntimeSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type CoverageLevel = 'full' | 'partial' | 'observe_only' | 'unsupported';
-export type EnforcementStatus = 'enforced' | 'would_block' | 'observed' | 'unsupported';
+export type EnforcementStatus = 'enforced' | 'would_block' | 'observed' | 'display_only' | 'unsupported';
 
 export type AgentLifecycleAccess = 'blocking' | 'observe_only' | 'none';
 export type AssistantDisplayAccess = 'rewrite_display_only' | 'observe_only' | 'none';

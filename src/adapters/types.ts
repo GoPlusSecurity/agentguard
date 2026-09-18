@@ -11,6 +11,8 @@ export interface HookInput {
   toolInput: Record<string, unknown>;
   /** Hook event type */
   eventType: 'pre' | 'post';
+  /** Native lifecycle event name when the host exposes one. */
+  hookEventName?: string;
   /** Session identifier */
   sessionId?: string;
   /** Working directory */

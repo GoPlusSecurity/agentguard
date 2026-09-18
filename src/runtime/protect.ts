@@ -1,5 +1,6 @@
 import { cwd } from 'node:process';
 import { dirname, join } from 'node:path';
+import { closeSync, openSync, readSync } from 'node:fs';
 import { AgentGuardCloudClient } from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
@@ -54,10 +55,31 @@ type CodexHookEvent =
   | 'PreCompact'
   | 'PostCompact';
 
+type ClaudeHookEvent =
+  | 'UserPromptSubmit'
+  | 'UserPromptExpansion'
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'PostToolUseFailure'
+  | 'PostToolBatch'
+  | 'ConfigChange'
+  | 'PreModelSwitch'
+  | 'PostModelSwitch'
+  | 'MessageDisplay'
+  | 'Stop'
+  | 'InstructionsLoaded'
+  | 'PreCompact'
+  | 'PostCompact';
+
+const CLAUDE_CONFIG_READ_LIMIT = 256 * 1024;
+const CLAUDE_LARGE_CONTEXT_TOKENS = 100_000;
+
 export async function protectAction(options: ProtectOptions): Promise<ProtectResult | null> {
   const action = buildRuntimeAction(options);
   const codexHookEvent = pickCodexHookEventFromAction(action);
-  const selfApprovalAttempt = codexHookEvent === 'PreToolUse' && isAgentGuardApprovalCommand(action);
+  const claudeHookEvent = pickClaudeHookEventFromAction(action);
+  const selfApprovalAttempt = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
+    && isAgentGuardApprovalCommand(action);
   if (!action.input) return null;
   if (isAgentGuardRuntimeAction(action) && !selfApprovalAttempt) return null;
   const approvalStorePath = resolveApprovalStorePath(options.config);
@@ -69,7 +91,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
   let decision: RuntimeDecision;
   let policySource: ProtectResult['policySource'];
-  const postToolCall = options.phase === 'post' || codexHookEvent === 'PostToolUse';
+  const postToolCall = options.phase === 'post' || codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse' || claudeHookEvent === 'PostToolUseFailure';
   const canEnforce = action.canBlockCurrentAction !== false;
   if (options.decisionMode === 'cloud' && client.connected) {
     decision = normalizeRuntimeDecision(await client.evaluateAction(action));
@@ -84,7 +107,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(evaluation.decision);
     policySource = evaluation.policySource;
   }
-  decision = enforceCodexHookDecision(action, decision, selfApprovalAttempt);
+  decision = enforceNativeHookDecision(action, decision, selfApprovalAttempt);
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
@@ -92,7 +115,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = { ...decision, decision: 'allow' };
   }
   const auditSafe = options.auditSafe || codexHookEvent === 'PermissionRequest'
-    || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact';
+    || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
+    || isClaudeObserverEvent(claudeHookEvent);
   if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
   const event: RuntimeAuditEvent = {
@@ -104,7 +128,9 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     riskLevel: decision.riskLevel,
     reasons: decision.reasons,
     policyVersion: decision.policyVersion,
-    coverageLevel: mergeCoverage(action.coverageLevel, decision.coverageLevel),
+    coverageLevel: decision.ruleEvaluations?.length
+      ? mergeCoverage(action.coverageLevel, decision.coverageLevel)
+      : action.coverageLevel ?? decision.coverageLevel,
     enforcementStatus: action.enforcementStatus ?? enforcementStatusFor(action, decision),
     missingFacts: uniqueMissingFacts([...(action.missingFacts ?? []), ...(decision.missingFacts ?? [])]),
     metadata: {
@@ -130,7 +156,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
 
   let approvalChannel: ProtectResult['approvalChannel'];
-  if (client.connected && policySource !== 'cloud-decision' && !isCodexCompactEvent(codexHookEvent)) {
+  if (client.connected && policySource !== 'cloud-decision'
+      && !isCodexCompactEvent(codexHookEvent) && !isClaudeMetadataOnlyEvent(claudeHookEvent)) {
     await client.ingestEvents([event]).catch(() => spoolEvent(options.config.eventSpoolPath, event));
   }
   if (canEnforce && !postToolCall && decision.decision === 'require_approval') {
@@ -154,37 +181,100 @@ function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
     && /(?:^|[^A-Za-z0-9_-])approve(?:[^A-Za-z0-9_-]|$)/i.test(normalized);
 }
 
-function enforceCodexHookDecision(
+function enforceNativeHookDecision(
   action: RuntimeAction,
   decision: RuntimeDecision,
   selfApprovalAttempt: boolean,
 ): RuntimeDecision {
   const event = pickCodexHookEventFromAction(action);
-  const scansVisibleContent = event === 'UserPromptSubmit' || event === 'PostToolUse';
-  const containsSensitiveContent = scansVisibleContent && redactText(action.input) !== action.input;
-  if (!selfApprovalAttempt && !containsSensitiveContent) return decision;
+  const claudeEvent = pickClaudeHookEventFromAction(action);
+  const scansVisibleContent = event === 'UserPromptSubmit' || event === 'PostToolUse'
+    || claudeEvent === 'UserPromptSubmit' || claudeEvent === 'PostToolUse'
+    || claudeEvent === 'PostToolBatch' || claudeEvent === 'PostToolUseFailure'
+    || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange';
+  const containsSensitiveContent = scansVisibleContent
+    && (redactText(action.input) !== action.input || action.metadata?.configSensitive === true);
+  const untrustedExpansion = claudeEvent === 'UserPromptExpansion'
+    && isUntrustedClaudePromptExpansion(action.metadata);
+  const explicitModelSwitch = claudeEvent === 'PreModelSwitch'
+    && isExplicitClaudeModelSwitch(action.metadata);
+  const largeContextModelSwitch = claudeEvent === 'PreModelSwitch'
+    && isLargeContextClaudeModelSwitch(action.metadata);
+  const dangerousConfig = (claudeEvent === 'ConfigChange' && action.metadata?.configDangerous === true)
+    || (claudeEvent === 'PreToolUse' && action.actionType === 'file_write'
+      && isDangerousClaudeConfig(action.input));
+  if (!selfApprovalAttempt && !containsSensitiveContent && !untrustedExpansion
+      && !explicitModelSwitch && !largeContextModelSwitch && !dangerousConfig) return decision;
+
+  const approvalRequired = (explicitModelSwitch || largeContextModelSwitch)
+    && !selfApprovalAttempt && !containsSensitiveContent && !untrustedExpansion;
 
   return {
     ...decision,
-    decision: 'block',
-    policyDecision: 'block',
-    riskScore: 100,
-    riskLevel: 'critical',
+    decision: approvalRequired ? 'require_approval' : 'block',
+    policyDecision: approvalRequired ? 'require_approval' : 'block',
+    riskScore: approvalRequired ? 55 : 100,
+    riskLevel: approvalRequired ? 'high' : 'critical',
     coverageLevel: 'partial',
     reasons: [{
-      code: selfApprovalAttempt ? 'AGENT_SELF_APPROVAL' : 'PII_EGRESS',
-      severity: 'critical',
-      title: selfApprovalAttempt ? 'Agent approval command denied' : 'Sensitive content blocked',
+      code: selfApprovalAttempt ? 'AGENT_SELF_APPROVAL'
+        : untrustedExpansion ? 'UNTRUSTED_PROMPT_EXPANSION'
+          : largeContextModelSwitch ? 'LARGE_CONTEXT_MODEL_SWITCH'
+            : approvalRequired ? 'MODEL_SWITCH_APPROVAL'
+            : dangerousConfig ? 'DANGEROUS_CONFIG_CHANGE' : 'PII_EGRESS',
+      severity: approvalRequired ? 'high' : 'critical',
+      title: selfApprovalAttempt ? 'Agent approval command denied'
+        : untrustedExpansion ? 'Untrusted prompt expansion blocked'
+          : approvalRequired ? 'Explicit model switch requires approval'
+            : dangerousConfig ? 'Dangerous configuration change blocked' : 'Sensitive content blocked',
       description: selfApprovalAttempt
         ? 'Approval must be performed explicitly by the user outside the agent tool path.'
-        : 'The locally visible hook content contains sensitive data and was blocked.',
+        : untrustedExpansion
+          ? 'The expansion metadata identifies an untrusted command, skill, or MCP prompt source.'
+          : approvalRequired
+            ? 'An explicit model switch with existing context requires user approval.'
+            : dangerousConfig
+              ? 'The changed configuration adds unsafe permissions, forwarding, or hook transport behavior.'
+              : 'The locally visible hook content contains sensitive data and was blocked.',
       evidence: '[REDACTED]',
     }],
   };
 }
 
+function isUntrustedClaudePromptExpansion(metadata: Record<string, unknown> | undefined): boolean {
+  const source = String(metadata?.commandSource || '').toLowerCase();
+  const type = String(metadata?.expansionType || '').toLowerCase();
+  if (source === 'builtin' || source === 'built-in' || source === 'system') return false;
+  return source.length > 0 || ['command', 'custom_command', 'skill', 'mcp_prompt'].includes(type);
+}
+
+function isExplicitClaudeModelSwitch(metadata: Record<string, unknown> | undefined): boolean {
+  const source = String(metadata?.modelSwitchSource || '').toLowerCase();
+  return source === 'user' || source === 'manual' || source === 'sdk' || source === 'api';
+}
+
+function isLargeContextClaudeModelSwitch(metadata: Record<string, unknown> | undefined): boolean {
+  return typeof metadata?.contextTokens === 'number'
+    && metadata.contextTokens >= CLAUDE_LARGE_CONTEXT_TOKENS;
+}
+
+function isDangerousClaudeConfig(input: string): boolean {
+  return /["']permissions["']\s*:\s*\{[\s\S]{0,2000}["']allow["']\s*:\s*\[[\s\S]{0,2000}(?:Bash|PowerShell)\(\*\)/i.test(input)
+    || /["'][^"']*(?:endpoint|base_url|http|prompt|agent)[^"']*["']\s*:\s*["']https?:\/\//i.test(input)
+    || /["'](?:forward_headers|forwardCredentials|key_forwarding)["']\s*:/i.test(input);
+}
+
 function isCodexCompactEvent(event: CodexHookEvent | undefined): boolean {
   return event === 'PreCompact' || event === 'PostCompact';
+}
+
+function isClaudeObserverEvent(event: ClaudeHookEvent | undefined): boolean {
+  return event === 'PostToolUseFailure' || event === 'PostModelSwitch' || event === 'MessageDisplay'
+    || event === 'Stop' || event === 'InstructionsLoaded' || event === 'PreCompact' || event === 'PostCompact';
+}
+
+function isClaudeMetadataOnlyEvent(event: ClaudeHookEvent | undefined): boolean {
+  return event === 'InstructionsLoaded' || event === 'PreCompact' || event === 'PostCompact';
 }
 
 function resolveApprovalStorePath(config: AgentGuardConfig): string {
@@ -206,6 +296,8 @@ function shouldSuppressRuntimeReport(decision: RuntimeDecision): boolean {
 export function formatProtectResult(result: ProtectResult, json = false): string {
   const codexHook = formatCodexHookResult(result);
   if (!json && codexHook !== null) return codexHook;
+  const claudeHook = formatClaudeHookResult(result);
+  if (!json && claudeHook !== null) return claudeHook;
 
   if (!json) {
     const agentApproval = formatAgentApproval(result);
@@ -259,6 +351,7 @@ export function exitCodeForDecision(
 ): number {
   if (result?.event.canBlockCurrentAction === false) return 0;
   if (result?.event.agentHost === 'codex' && pickCodexHookEventFromAction(result.event)) return 0;
+  if (result?.event.agentHost === 'claude-code' && pickClaudeHookEventFromAction(result.event)) return 0;
   if (
     decision.decision === 'require_approval' &&
     result?.approvalChannel === 'agent' &&
@@ -268,7 +361,10 @@ export function exitCodeForDecision(
 }
 
 function enforcementStatusFor(action: RuntimeAction, decision: RuntimeDecision) {
-  if (mergeCoverage(action.coverageLevel, decision.coverageLevel) === 'unsupported') return 'unsupported' as const;
+  const effectiveCoverage = decision.ruleEvaluations?.length
+    ? mergeCoverage(action.coverageLevel, decision.coverageLevel)
+    : action.coverageLevel ?? decision.coverageLevel;
+  if (effectiveCoverage === 'unsupported') return 'unsupported' as const;
   const policyDecision = decision.policyDecision ?? decision.decision;
   if (action.canBlockCurrentAction === false) {
     return policyDecision === 'block' || policyDecision === 'require_approval'
@@ -389,6 +485,83 @@ function formatCodexHookResult(result: ProtectResult): string | null {
   return '';
 }
 
+function formatClaudeHookResult(result: ProtectResult): string | null {
+  if (result.event.agentHost !== 'claude-code') return null;
+  const event = pickClaudeHookEventFromAction(result.event);
+  if (!event) return null;
+  const decision = result.decision.decision;
+  const denied = decision === 'block' || decision === 'require_approval';
+  const reason = safeCodexReason(result, decision === 'require_approval');
+
+  if (event === 'UserPromptSubmit' || event === 'UserPromptExpansion') {
+    if (denied) return JSON.stringify({ decision: 'block', reason });
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'PreToolUse') {
+    if (denied) {
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: decision === 'require_approval' ? 'ask' : 'deny',
+          permissionDecisionReason: reason,
+        },
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'PostToolUse') {
+    if (Object.prototype.hasOwnProperty.call(result.event.metadata || {}, 'claudeUpdatedToolOutput')) {
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          updatedToolOutput: result.event.metadata?.claudeUpdatedToolOutput,
+        },
+      });
+    }
+    return denied || decision === 'warn'
+      ? JSON.stringify({ systemMessage: `${reason} Output schema was not rewritten; PostToolBatch remains the continuation gate.` })
+      : '';
+  }
+  if (event === 'PostToolBatch') {
+    if (denied) {
+      return JSON.stringify({
+        decision: 'block',
+        reason: `${reason} Tool results already exist; the current model continuation was stopped. Session-resume retransmission is not guaranteed blocked.`,
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'ConfigChange') {
+    if (denied) {
+      return JSON.stringify({
+        decision: 'block',
+        reason: `${reason} The configuration was not applied to this session; disk content was not rolled back.`,
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'PreModelSwitch') {
+    if (denied) {
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreModelSwitch',
+          permissionDecision: decision === 'require_approval' ? 'ask' : 'deny',
+          permissionDecisionReason: reason,
+        },
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'MessageDisplay') {
+    const updatedMessage = result.event.metadata?.claudeUpdatedMessage;
+    if (typeof updatedMessage === 'string') {
+      return JSON.stringify({ displayContent: updatedMessage });
+    }
+    return '';
+  }
+  return '';
+}
+
 function safeCodexReason(result: ProtectResult, approvalRequired = false): string {
   const ruleIds = result.decision.reasons
     .map((reason) => /^[A-Z][A-Z0-9_]{0,63}$/.test(reason.code) ? reason.code : 'POLICY')
@@ -438,42 +611,75 @@ function approvalCommand(record: ApprovalRecord): string {
 
 function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const wrapper = process.env.AGENTGUARD_CODEX_WRAPPER;
-  const nativeCodexHook = (options.agentHost || process.env.AGENTGUARD_AGENT_HOST) === 'codex' && Boolean(wrapper);
-  const raw = parseRawInput(options.rawInput, options.stdinText, nativeCodexHook);
-  if (nativeCodexHook) validateNativeCodexHook(raw, wrapper);
-  const codexHookEvent = pickCodexHookEvent(raw);
-  const envActionType = process.env.AGENTGUARD_ACTION_TYPE as RuntimeActionType | undefined;
   const envAgentHost = process.env.AGENTGUARD_AGENT_HOST as RuntimeAgentHost | undefined;
+  const agentHost = options.agentHost || envAgentHost || 'claude-code';
+  const nativeCodexHook = agentHost === 'codex' && Boolean(wrapper);
+  const nativeClaudeHook = agentHost === 'claude-code' && process.env.AGENTGUARD_CLAUDE_HOOK === '1';
+  const raw = parseRawInput(options.rawInput, options.stdinText, nativeCodexHook || nativeClaudeHook);
+  if (nativeCodexHook) validateNativeCodexHook(raw, wrapper);
+  if (nativeClaudeHook) validateNativeClaudeHook(raw);
+  const codexHookEvent = agentHost === 'codex' ? pickCodexHookEvent(raw) : undefined;
+  const claudeHookEvent = agentHost === 'claude-code' ? pickClaudeHookEvent(raw) : undefined;
+  const envActionType = process.env.AGENTGUARD_ACTION_TYPE as RuntimeActionType | undefined;
   const toolName = options.toolName || process.env.AGENTGUARD_TOOL_NAME || pickToolName(raw);
-  const actionType = options.actionType || envActionType || codexActionType(codexHookEvent, toolName, raw);
+  const actionType = options.actionType || envActionType || (claudeHookEvent
+    ? claudeActionType(claudeHookEvent, toolName, raw)
+    : codexActionType(codexHookEvent, toolName, raw));
   const toolInput = pickToolInput(raw);
-  const codexLifecycle = codexLifecycleFields(codexHookEvent);
+  const nativeLifecycle = claudeHookEvent
+    ? claudeLifecycleFields(claudeHookEvent)
+    : codexLifecycleFields(codexHookEvent);
+  const sessionId = options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw);
+  const claudeBatch = claudeHookEvent === 'PostToolBatch' ? claudeBatchFacts(raw, sessionId) : undefined;
+  const claudeConfig = claudeHookEvent === 'ConfigChange' ? readClaudeConfigChange(raw) : undefined;
+  const verifiedOutput = claudeHookEvent === 'PostToolUse'
+    ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
+    : undefined;
+  const displayMessage = claudeHookEvent === 'MessageDisplay'
+    ? firstString(raw?.delta)
+    : '';
+  const actionInput = process.env.TOOL_INPUT
+    || pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input);
+  const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse'
+    && verifiedOutput === undefined && redactText(actionInput) !== actionInput;
 
   return {
-    sessionId: options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw),
-    agentHost: options.agentHost || envAgentHost || 'claude-code',
+    sessionId,
+    agentHost,
     actionType,
     toolName,
-    input: process.env.TOOL_INPUT || pickInput(raw, actionType, toolInput, codexHookEvent),
+    input: actionInput,
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
-    lifecycleStage: codexLifecycle.lifecycleStage
+    lifecycleStage: nativeLifecycle.lifecycleStage
       ?? pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
-    canBlockCurrentAction: codexLifecycle.canBlockCurrentAction
+    canBlockCurrentAction: nativeLifecycle.canBlockCurrentAction
       ?? pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
-    coverageLevel: codexLifecycle.coverageLevel
+    coverageLevel: nativeLifecycle.coverageLevel
       ?? pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
-    enforcementStatus: codexLifecycle.enforcementStatus
+    enforcementStatus: (unknownSensitiveToolOutput ? 'would_block' : nativeLifecycle.enforcementStatus)
       ?? pickEnum(raw?.enforcementStatus ?? raw?.enforcement_status, ENFORCEMENT_STATUSES),
-    missingFacts: codexLifecycle.missingFacts
+    missingFacts: nativeLifecycle.missingFacts
       ?? pickEnumArray(raw?.missingFacts ?? raw?.missing_facts, MISSING_LLM_FACTS),
-    llm: pickLlmMetadata(raw),
+    llm: claudeBatch?.llm ?? pickLlmMetadata(raw),
     metadata: {
       rawProtocol: raw ? 'stdin-json' : 'env',
       ...(codexHookEvent ? { codexHookEvent } : {}),
+      ...(claudeHookEvent ? { claudeHookEvent } : {}),
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
       ...pickNetworkMetadata(raw, toolInput),
       ...pickFilePathMetadata(raw),
+      ...claudeEventMetadata(claudeHookEvent, raw),
+      ...(claudeBatch?.metadata || {}),
+      ...(claudeConfig ? {
+        configBytesRead: claudeConfig.bytesRead,
+        configDangerous: claudeConfig.dangerous,
+        configSensitive: claudeConfig.sensitive,
+      } : {}),
+      ...(verifiedOutput !== undefined ? { claudeUpdatedToolOutput: verifiedOutput } : {}),
+      ...(displayMessage && redactText(displayMessage) !== displayMessage
+        ? { claudeUpdatedMessage: redactText(displayMessage) }
+        : {}),
     },
   };
 }
@@ -511,6 +717,37 @@ function invalidCodexPayload(): Error {
   return new Error('Invalid Codex hook payload.');
 }
 
+function validateNativeClaudeHook(raw: Record<string, unknown> | null): void {
+  if (!raw || typeof raw.session_id !== 'string' || typeof raw.cwd !== 'string') throw invalidClaudePayload();
+  const event = pickClaudeHookEvent(raw);
+  if (!event) throw invalidClaudePayload();
+  if (event === 'UserPromptSubmit' && typeof raw.prompt !== 'string') throw invalidClaudePayload();
+  if (event === 'UserPromptExpansion'
+      && (typeof raw.expansion_type !== 'string' || typeof raw.command_name !== 'string')) throw invalidClaudePayload();
+  if (event === 'PreToolUse' || event === 'PostToolUse' || event === 'PostToolUseFailure') {
+    if (typeof raw.tool_name !== 'string' || !raw.tool_name || !isPlainRecord(raw.tool_input)) throw invalidClaudePayload();
+    if (event === 'PostToolUse' && !Object.prototype.hasOwnProperty.call(raw, 'tool_response')) throw invalidClaudePayload();
+  }
+  if (event === 'PostToolBatch' && (!Array.isArray(raw.tool_calls)
+      || !raw.tool_calls.every((call) => isPlainRecord(call)
+        && Object.prototype.hasOwnProperty.call(call, 'tool_response')))) {
+    throw invalidClaudePayload();
+  }
+  if (event === 'ConfigChange' && (typeof raw.source !== 'string'
+      || !(raw.file_path === undefined || typeof raw.file_path === 'string'))) {
+    throw invalidClaudePayload();
+  }
+  if (event === 'MessageDisplay' && typeof raw.delta !== 'string') throw invalidClaudePayload();
+  if ((event === 'PreModelSwitch' || event === 'PostModelSwitch')
+      && (typeof raw.from_model !== 'string' || typeof raw.to_model !== 'string' || typeof raw.source !== 'string')) {
+    throw invalidClaudePayload();
+  }
+}
+
+function invalidClaudePayload(): Error {
+  return new Error('Invalid Claude Code hook payload.');
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -523,9 +760,25 @@ function pickCodexHookEvent(raw: Record<string, unknown> | null): CodexHookEvent
     : undefined;
 }
 
+function pickClaudeHookEvent(raw: Record<string, unknown> | null): ClaudeHookEvent | undefined {
+  const value = raw?.hook_event_name;
+  return value === 'UserPromptSubmit' || value === 'UserPromptExpansion' || value === 'PreToolUse'
+    || value === 'PostToolUse' || value === 'PostToolUseFailure' || value === 'PostToolBatch'
+    || value === 'ConfigChange' || value === 'PreModelSwitch' || value === 'PostModelSwitch'
+    || value === 'MessageDisplay' || value === 'Stop' || value === 'InstructionsLoaded'
+    || value === 'PreCompact' || value === 'PostCompact'
+    ? value
+    : undefined;
+}
+
 function pickCodexHookEventFromAction(action: Pick<RuntimeAction, 'metadata'>): CodexHookEvent | undefined {
   const value = action.metadata?.codexHookEvent;
   return typeof value === 'string' ? pickCodexHookEvent({ hook_event_name: value }) : undefined;
+}
+
+function pickClaudeHookEventFromAction(action: Pick<RuntimeAction, 'metadata'>): ClaudeHookEvent | undefined {
+  const value = action.metadata?.claudeHookEvent;
+  return typeof value === 'string' ? pickClaudeHookEvent({ hook_event_name: value }) : undefined;
 }
 
 function codexActionType(
@@ -536,6 +789,17 @@ function codexActionType(
   if (event === 'UserPromptSubmit') return 'other';
   if (event === 'PostToolUse' || event === 'PreCompact' || event === 'PostCompact') return 'other';
   return mapToolToRuntimeAction(toolName, raw);
+}
+
+function claudeActionType(
+  event: ClaudeHookEvent,
+  toolName: string,
+  raw: Record<string, unknown> | null,
+): RuntimeActionType {
+  if (event === 'PostToolBatch') return 'llm_request';
+  if (event === 'ConfigChange') return 'file_write';
+  if (event === 'PreToolUse') return mapToolToRuntimeAction(toolName, raw);
+  return 'other';
 }
 
 function codexLifecycleFields(event: CodexHookEvent | undefined): Pick<
@@ -571,12 +835,86 @@ function codexLifecycleFields(event: CodexHookEvent | undefined): Pick<
   return {};
 }
 
+function claudeLifecycleFields(event: ClaudeHookEvent | undefined): Pick<
+  RuntimeAction,
+  'lifecycleStage' | 'canBlockCurrentAction' | 'coverageLevel' | 'enforcementStatus' | 'missingFacts'
+> {
+  const requestMissing: MissingLlmFact[] = [
+    'complete_payload', 'final_destination', 'credential_kind', 'credential_presence',
+    'attachment_bytes', 'retry_and_fallback', 'auxiliary_model_calls',
+  ];
+  if (event === 'UserPromptSubmit') {
+    return {
+      lifecycleStage: 'user_prompt', canBlockCurrentAction: true, coverageLevel: 'partial',
+      missingFacts: [...requestMissing, 'exact_payload_bytes', 'file_path_count'],
+    };
+  }
+  if (event === 'UserPromptExpansion') {
+    return {
+      lifecycleStage: 'prompt_expansion', canBlockCurrentAction: true, coverageLevel: 'partial',
+      missingFacts: [...requestMissing, 'exact_payload_bytes', 'file_path_count'],
+    };
+  }
+  if (event === 'PreToolUse') {
+    return { lifecycleStage: 'pre_tool', canBlockCurrentAction: true, coverageLevel: 'partial' };
+  }
+  if (event === 'PostToolUse') {
+    return { lifecycleStage: 'post_tool', canBlockCurrentAction: true, coverageLevel: 'partial' };
+  }
+  if (event === 'PostToolUseFailure') {
+    return {
+      lifecycleStage: 'post_tool', canBlockCurrentAction: false, coverageLevel: 'partial',
+      enforcementStatus: 'observed', missingFacts: ['complete_response'],
+    };
+  }
+  if (event === 'PostToolBatch') {
+    return {
+      lifecycleStage: 'post_tool_batch', canBlockCurrentAction: true, coverageLevel: 'partial',
+      missingFacts: requestMissing,
+    };
+  }
+  if (event === 'ConfigChange') {
+    return { lifecycleStage: 'config_change', canBlockCurrentAction: true, coverageLevel: 'partial' };
+  }
+  if (event === 'PreModelSwitch') {
+    return {
+      lifecycleStage: 'model_switch', canBlockCurrentAction: true, coverageLevel: 'partial',
+      missingFacts: [...requestMissing, 'exact_payload_bytes', 'file_path_count'],
+    };
+  }
+  if (event === 'PostModelSwitch') {
+    return {
+      lifecycleStage: 'model_switch', canBlockCurrentAction: false, coverageLevel: 'observe_only',
+      enforcementStatus: 'observed', missingFacts: ['final_destination', 'retry_and_fallback'],
+    };
+  }
+  if (event === 'MessageDisplay') {
+    return {
+      lifecycleStage: 'assistant_display', canBlockCurrentAction: false, coverageLevel: 'partial',
+      enforcementStatus: 'display_only', missingFacts: ['complete_response', 'response_source'],
+    };
+  }
+  if (event === 'Stop') {
+    return {
+      lifecycleStage: 'stop', canBlockCurrentAction: false, coverageLevel: 'observe_only',
+      enforcementStatus: 'observed', missingFacts: ['complete_response', 'response_source'],
+    };
+  }
+  if (event === 'InstructionsLoaded' || event === 'PreCompact' || event === 'PostCompact') {
+    return {
+      lifecycleStage: 'stop', canBlockCurrentAction: false, coverageLevel: 'observe_only',
+      enforcementStatus: 'observed', missingFacts: ['complete_payload'],
+    };
+  }
+  return {};
+}
+
 const LIFECYCLE_STAGES: RuntimeLifecycleStage[] = [
   'user_prompt', 'prompt_expansion', 'run_start', 'model_request', 'model_response', 'pre_tool',
   'post_tool', 'post_tool_batch', 'config_change', 'model_switch', 'assistant_display', 'stop',
 ];
 const COVERAGE_LEVELS: CoverageLevel[] = ['full', 'partial', 'observe_only', 'unsupported'];
-const ENFORCEMENT_STATUSES: EnforcementStatus[] = ['enforced', 'would_block', 'observed', 'unsupported'];
+const ENFORCEMENT_STATUSES: EnforcementStatus[] = ['enforced', 'would_block', 'observed', 'display_only', 'unsupported'];
 const MISSING_LLM_FACTS: MissingLlmFact[] = [
   'complete_payload', 'complete_response', 'final_destination', 'credential_kind', 'credential_presence',
   'exact_payload_bytes', 'attachment_bytes', 'file_path_count', 'retry_and_fallback',
@@ -640,6 +978,112 @@ function pickFilePathMetadata(raw: Record<string, unknown> | null): Record<strin
   return { filePaths: paths.filter((item): item is string => typeof item === 'string').slice(0, 10_000) };
 }
 
+function claudeEventMetadata(
+  event: ClaudeHookEvent | undefined,
+  raw: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (!event || !raw) return {};
+  if (event === 'UserPromptExpansion') {
+    return {
+      expansionType: firstString(raw.expansion_type) || 'unknown',
+      commandName: firstString(raw.command_name) || 'unknown',
+      commandSource: firstString(raw.command_source) || 'unknown',
+    };
+  }
+  if (event === 'ConfigChange') {
+    return { configSource: firstString(raw.source) || 'unknown', configDiskRollback: false };
+  }
+  if (event === 'PreModelSwitch' || event === 'PostModelSwitch') {
+    return {
+      fromModel: firstString(raw.from_model) || 'unknown',
+      toModel: firstString(raw.to_model) || 'unknown',
+      modelSwitchSource: firstString(raw.source) || 'unknown',
+      contextTokens: nonNegativeInteger(raw.context_tokens),
+      modelIdIsEndpoint: false,
+    };
+  }
+  if (event === 'PostToolUseFailure') {
+    return { failureType: firstString(raw.error_type, raw.failure_type) || 'unknown', outputReplaceable: false };
+  }
+  if (event === 'MessageDisplay') return { displayOnly: true, transcriptModified: false };
+  if (event === 'PostToolBatch') return { continuationBlockedOnly: true, resumeRetransmissionGuaranteed: false };
+  return {};
+}
+
+function claudeBatchFacts(
+  raw: Record<string, unknown> | null,
+  sessionId: string,
+): { llm: LlmEgressRequestMetadata; metadata: Record<string, unknown> } {
+  const responses = raw?.tool_calls ?? [];
+  const serialized = JSON.stringify(responses);
+  const filePaths = collectClaudeBatchFilePaths(responses);
+  return {
+    llm: {
+      schemaVersion: 1,
+      requestId: `claude-code:${sessionId}:post-tool-batch`,
+      sessionId,
+      purpose: 'conversation',
+      lifecycleStage: 'post_tool_batch',
+      canBlockCurrentAction: true,
+      credentialKind: 'unknown',
+      credentialPresent: 'unknown',
+      payloadBytes: Buffer.byteLength(serialized, 'utf8'),
+      filePathCount: filePaths.length,
+    },
+    metadata: {
+      filePathCount: filePaths.length,
+      serializedResultBytes: Buffer.byteLength(serialized, 'utf8'),
+      redactedBytes: Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8'),
+      filePaths,
+    },
+  };
+}
+
+function collectClaudeBatchFilePaths(value: unknown): string[] {
+  const paths = new Set<string>();
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item);
+      return;
+    }
+    if (!candidate || typeof candidate !== 'object') return;
+    for (const [key, item] of Object.entries(candidate as Record<string, unknown>)) {
+      if ((key === 'file_path' || key === 'filePath' || key === 'path') && typeof item === 'string') {
+        paths.add(item);
+      } else {
+        visit(item);
+      }
+    }
+  };
+  visit(value);
+  return [...paths].slice(0, 10_000);
+}
+
+function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unknown | undefined {
+  const lower = toolName.toLowerCase();
+  const verifiedTool = toolName === 'Read' || toolName === 'Bash' || toolName === 'PowerShell'
+    || toolName === 'WebFetch' || toolName === 'WebSearch' || lower.startsWith('mcp__');
+  if (!verifiedTool) return undefined;
+  if (typeof output === 'string') return redactText(output);
+  if (!isPlainRecord(output)) return undefined;
+  const hasVerifiedShape = toolName === 'Read'
+    ? typeof output.content === 'string'
+    : toolName === 'Bash' || toolName === 'PowerShell'
+      ? ['stdout', 'stderr', 'output'].some((key) => typeof output[key] === 'string')
+      : lower.startsWith('mcp__')
+        ? Array.isArray(output.content)
+        : typeof output.content === 'string' || Array.isArray(output.content);
+  return hasVerifiedShape ? redactStructuredClaudeOutput(output) : undefined;
+}
+
+function redactStructuredClaudeOutput(value: unknown): unknown {
+  if (typeof value === 'string') return redactText(value);
+  if (Array.isArray(value)) return value.map(redactStructuredClaudeOutput);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, item]) => [key, redactStructuredClaudeOutput(item)]));
+}
+
 function pickEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   return typeof value === 'string' && allowed.includes(value as T) ? value as T : undefined;
 }
@@ -684,12 +1128,23 @@ function pickToolName(raw: Record<string, unknown> | null): string {
 
 function mapToolToRuntimeAction(toolName: string, raw: Record<string, unknown> | null): RuntimeActionType {
   const lower = toolName.toLowerCase();
+  const toolInput = pickToolInput(raw);
   if (lower.startsWith('mcp__')) return 'mcp_tool';
-  if (toolName === 'Bash' || lower.includes('shell') || lower.includes('exec')) return 'shell';
+  if (toolName === 'Bash' || toolName === 'PowerShell' || lower.includes('shell') || lower.includes('exec')) return 'shell';
   if (toolName === 'Read' || lower.includes('read') || lower === 'view_image') return 'file_read';
-  if (['Write', 'Edit', 'MultiEdit', 'apply_patch'].includes(toolName) || lower.includes('write') || lower.includes('patch')) return 'file_write';
+  if (['Write', 'Edit', 'MultiEdit', 'apply_patch'].includes(toolName)
+      || lower.includes('write') || lower.includes('edit') || lower.includes('patch')) return 'file_write';
   if (lower.includes('websearch') || lower.includes('web_search') || lower.includes('search_query')) return 'web_search';
   if (lower.includes('web') || lower.includes('browser')) return 'network';
+  if (typeof toolInput?.command === 'string' || typeof toolInput?.cmd === 'string') return 'shell';
+  if (typeof toolInput?.query === 'string') return 'web_search';
+  if (typeof toolInput?.url === 'string' || typeof toolInput?.uri === 'string'
+      || typeof toolInput?.href === 'string') return 'network';
+  const hasPath = typeof toolInput?.file_path === 'string' || typeof toolInput?.filePath === 'string'
+    || typeof toolInput?.path === 'string' || typeof toolInput?.target === 'string';
+  const hasWriteContent = ['content', 'new_string', 'old_string', 'patch'].some((key) =>
+    typeof toolInput?.[key] === 'string');
+  if (hasPath) return hasWriteContent ? 'file_write' : 'file_read';
   if (raw?.actionType && typeof raw.actionType === 'string') return raw.actionType as RuntimeActionType;
   if (raw?.action_type && typeof raw.action_type === 'string') return raw.action_type as RuntimeActionType;
   return 'other';
@@ -700,6 +1155,8 @@ function pickInput(
   actionType: RuntimeActionType,
   toolInput = pickToolInput(raw),
   codexHookEvent?: CodexHookEvent,
+  claudeHookEvent?: ClaudeHookEvent,
+  claudeConfigInput?: string,
 ): string {
   if (!raw) return '';
   if (codexHookEvent === 'UserPromptSubmit') return firstString(raw.prompt);
@@ -708,6 +1165,41 @@ function pickInput(
     return typeof response === 'string' ? response : response === undefined ? '' : JSON.stringify(response);
   }
   if (codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact') {
+    return `compact trigger=${firstString(raw.trigger) || 'unknown'}`;
+  }
+  if (claudeHookEvent === 'UserPromptSubmit') return firstString(raw.prompt);
+  if (claudeHookEvent === 'UserPromptExpansion') {
+    return JSON.stringify({
+      expansion_type: raw.expansion_type,
+      command_name: raw.command_name,
+      command_args: raw.command_args,
+      command_source: raw.command_source,
+    });
+  }
+  if (claudeHookEvent === 'PostToolUse') {
+    const response = raw.tool_response ?? raw.toolResponse;
+    return typeof response === 'string' ? response : response === undefined ? '' : JSON.stringify(response);
+  }
+  if (claudeHookEvent === 'PostToolUseFailure') {
+    const failure = raw.error ?? raw.error_message ?? raw.stderr ?? raw.tool_response;
+    return typeof failure === 'string' ? failure : failure === undefined ? 'tool failure' : JSON.stringify(failure);
+  }
+  if (claudeHookEvent === 'PostToolBatch') {
+    return JSON.stringify(raw.tool_calls ?? []);
+  }
+  if (claudeHookEvent === 'ConfigChange') return claudeConfigInput ?? 'config change';
+  if (claudeHookEvent === 'PreModelSwitch' || claudeHookEvent === 'PostModelSwitch') {
+    return `model switch source=${firstString(raw.source) || 'unknown'} context_tokens=${nonNegativeInteger(raw.context_tokens) ?? 'unknown'}`;
+  }
+  if (claudeHookEvent === 'MessageDisplay') return firstString(raw.delta);
+  if (claudeHookEvent === 'Stop') {
+    return firstString(raw.last_assistant_message, raw.lastAssistantMessage, raw.stop_reason, raw.reason, raw.message, raw.content, 'stop');
+  }
+  if (claudeHookEvent === 'InstructionsLoaded') {
+    const count = Array.isArray(raw.instructions) ? raw.instructions.length : nonNegativeInteger(raw.instruction_count) ?? 0;
+    return `instructions loaded count=${count}`;
+  }
+  if (claudeHookEvent === 'PreCompact' || claudeHookEvent === 'PostCompact') {
     return `compact trigger=${firstString(raw.trigger) || 'unknown'}`;
   }
   if (typeof raw.input === 'string') return raw.input;
@@ -722,7 +1214,11 @@ function pickInput(
       if (command) return command;
     }
     const filePath = toolInput.file_path || toolInput.filePath || toolInput.path || toolInput.target;
-    if ((actionType === 'file_read' || actionType === 'file_write') && typeof filePath === 'string') return filePath;
+    if (actionType === 'file_read' && typeof filePath === 'string') return filePath;
+    if (actionType === 'file_write') {
+      const content = firstString(toolInput.content, toolInput.new_string, toolInput.old_string, toolInput.patch);
+      return `${JSON.stringify(toolInput)}${content ? `\n${content}` : ''}`;
+    }
     if (actionType === 'web_search') {
       const query = firstString(toolInput.query, toolInput.q, toolInput.search, toolInput.url);
       if (query) return query;
@@ -732,6 +1228,33 @@ function pickInput(
     return JSON.stringify(toolInput);
   }
   return JSON.stringify(raw);
+}
+
+function readClaudeConfigChange(raw: Record<string, unknown> | null): {
+  input: string;
+  bytesRead: number;
+  dangerous: boolean;
+  sensitive: boolean;
+} {
+  const path = firstString(raw?.file_path);
+  if (!path) return { input: 'config change', bytesRead: 0, dangerous: false, sensitive: false };
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, 'r');
+    const buffer = Buffer.alloc(CLAUDE_CONFIG_READ_LIMIT);
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const content = buffer.subarray(0, bytesRead).toString('utf8');
+    return {
+      input: path,
+      bytesRead,
+      dangerous: isDangerousClaudeConfig(content),
+      sensitive: redactText(content) !== content,
+    };
+  } catch {
+    return { input: path, bytesRead: 0, dangerous: false, sensitive: false };
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 function pickToolInput(raw: Record<string, unknown> | null): Record<string, unknown> | undefined {

@@ -14,7 +14,9 @@ describe('Adapter lifecycle capabilities', () => {
   it('claude-code does not claim model transport visibility', () => {
     const capabilities = new ClaudeCodeAdapter().capabilities;
     assert.equal(capabilities.preTool, 'blocking');
-    assert.equal(capabilities.postTool, 'observe_only');
+    assert.equal(capabilities.postTool, 'blocking');
+    assert.equal(capabilities.toolOutputRewrite, true);
+    assert.equal(capabilities.postToolBatch, 'blocking');
     assert.equal(capabilities.modelRequest, 'none');
     assert.equal(capabilities.modelResponse, 'none');
     assert.equal(capabilities.finalDestination, false);
@@ -121,8 +123,9 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal(adapter.mapToolToActionType('WebSearch'), 'web_search');
     });
 
-    it('should return null for unknown tools', () => {
-      assert.equal(adapter.mapToolToActionType('Read'), null);
+    it('should map Read to read_file and return null for unknown tools', () => {
+      assert.equal(adapter.mapToolToActionType('Read'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('FutureTool'), null);
       assert.equal(adapter.mapToolToActionType('UnknownTool'), null);
     });
   });
@@ -179,14 +182,16 @@ describe('ClaudeCodeAdapter', () => {
       assert.equal((envelope!.action.data as unknown as Record<string, unknown>).query, 'test query');
     });
 
-    it('should return null for unmapped tools', () => {
+    it('should build a read_file envelope and return null for unmapped tools', () => {
       const input = adapter.parseInput({
         hook_event_name: 'PreToolUse',
         tool_name: 'Read',
         tool_input: { file_path: '/tmp/test.txt' },
       });
       const envelope = adapter.buildEnvelope(input);
-      assert.equal(envelope, null);
+      assert.equal(envelope?.action.type, 'read_file');
+      assert.equal((envelope?.action.data as unknown as Record<string, unknown>).path, '/tmp/test.txt');
+      assert.equal(adapter.buildEnvelope(adapter.parseInput({ tool_name: 'FutureTool', tool_input: {} })), null);
     });
 
     it('should include initiating skill in actor', () => {

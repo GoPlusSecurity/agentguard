@@ -4,21 +4,21 @@ import type { PolicyReason, RuntimeAction, RuntimeAuditEvent, RuntimePrivacyRule
 import { redactLlmMetadata, redactMetadata, redactPreview, redactReasons } from './redaction.js';
 
 export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
-  const codexHook = isCodexNativeHookAction(event);
+  const nativeHook = isCodexNativeHookAction(event) || isClaudeNativeHookAction(event);
   return {
     actionId: redactPreview(event.actionId, 160),
     sessionId: redactPreview(event.sessionId, 160),
     agentHost: event.agentHost,
     actionType: event.actionType,
     toolName: redactPreview(event.toolName, 160),
-    input: isLlmTrafficEvent(event) || codexHook ? '[LOCAL_ONLY_LLM_CONTENT]' : redactPreview(event.input),
+    input: isLlmTrafficEvent(event) || nativeHook ? '[LOCAL_ONLY_LLM_CONTENT]' : redactPreview(event.input),
     decision: event.decision,
     policyDecision: event.policyDecision,
     riskScore: clampRiskScore(event.riskScore),
     riskLevel: event.riskLevel,
-    reasons: codexHook ? codexSafeReasons(event.reasons) : redactReasons(event.reasons),
+    reasons: nativeHook ? codexSafeReasons(event.reasons) : redactReasons(event.reasons),
     policyVersion: redactPreview(event.policyVersion, 160),
-    cwd: event.cwd ? redactPreview(event.cwd, 500) : event.cwd,
+    cwd: nativeHook ? undefined : event.cwd ? redactPreview(event.cwd, 500) : event.cwd,
     sourceSkill: event.sourceSkill ? redactPreview(event.sourceSkill, 240) : event.sourceSkill,
     lifecycleStage: event.lifecycleStage,
     canBlockCurrentAction: event.canBlockCurrentAction,
@@ -26,8 +26,8 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     enforcementStatus: event.enforcementStatus,
     missingFacts: event.missingFacts ? [...event.missingFacts] : undefined,
     llm: event.llm ? redactLlmMetadata(event.llm) : undefined,
-    metadata: codexHook
-      ? codexSafeMetadata(event.metadata)
+    metadata: nativeHook
+      ? nativeHookSafeMetadata(event.metadata)
       : {
           ...redactMetadata(event.metadata),
           evaluation: redactPreview(event.metadata?.evaluation || 'local-oss', 120),
@@ -39,10 +39,19 @@ export function isCodexNativeHookAction(action: Pick<RuntimeAction, 'agentHost' 
   return action.agentHost === 'codex' && CODEX_HOOK_EVENTS.has(action.metadata?.codexHookEvent);
 }
 
+export function isClaudeNativeHookAction(action: Pick<RuntimeAction, 'agentHost' | 'metadata'>): boolean {
+  return action.agentHost === 'claude-code' && CLAUDE_HOOK_EVENTS.has(action.metadata?.claudeHookEvent);
+}
+
 export function codexSafeMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
+  return nativeHookSafeMetadata(metadata);
+}
+
+export function nativeHookSafeMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
   if (!metadata) return {};
   const result: Record<string, unknown> = {};
   if (CODEX_HOOK_EVENTS.has(metadata.codexHookEvent)) result.codexHookEvent = metadata.codexHookEvent;
+  if (CLAUDE_HOOK_EVENTS.has(metadata.claudeHookEvent)) result.claudeHookEvent = metadata.claudeHookEvent;
   if (metadata.evaluation === 'local-oss' || metadata.evaluation === 'cloud') result.evaluation = metadata.evaluation;
   if (metadata.policySource === 'cloud' || metadata.policySource === 'cache'
       || metadata.policySource === 'default' || metadata.policySource === 'cloud-decision') {
@@ -51,7 +60,10 @@ export function codexSafeMetadata(metadata: Record<string, unknown> | undefined)
   if (Array.isArray(metadata.privacyRules)) {
     result.privacyRules = metadata.privacyRules.slice(0, 20).map(codexSafePrivacyRule).filter(Boolean);
   }
-  for (const key of ['responseStatusCode', 'statusCode', 'responseBodyBytes', 'responseBytes', 'contentLength']) {
+  for (const key of [
+    'responseStatusCode', 'statusCode', 'responseBodyBytes', 'responseBytes', 'contentLength',
+    'filePathCount', 'serializedResultBytes', 'redactedBytes', 'contextTokens',
+  ]) {
     const value = metadata[key];
     if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) result[key] = value;
   }
@@ -60,6 +72,12 @@ export function codexSafeMetadata(metadata: Record<string, unknown> | undefined)
     result.approvalActionId = metadata.approvalActionId;
   }
   if (metadata.approvalOnce === true) result.approvalOnce = true;
+  for (const key of [
+    'configDiskRollback', 'modelIdIsEndpoint', 'outputReplaceable', 'displayOnly', 'transcriptModified',
+    'continuationBlockedOnly', 'resumeRetransmissionGuaranteed',
+  ]) {
+    if (typeof metadata[key] === 'boolean') result[key] = metadata[key];
+  }
   return result;
 }
 
@@ -94,6 +112,11 @@ function codexSafePrivacyRule(value: unknown): RuntimePrivacyRuleEvaluation | nu
 
 const CODEX_HOOK_EVENTS = new Set<unknown>([
   'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PreCompact', 'PostCompact',
+]);
+const CLAUDE_HOOK_EVENTS = new Set<unknown>([
+  'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'PostToolBatch', 'ConfigChange', 'PreModelSwitch', 'PostModelSwitch', 'MessageDisplay', 'Stop',
+  'InstructionsLoaded', 'PreCompact', 'PostCompact',
 ]);
 const CODEX_PRIVACY_RULES = new Set<unknown>([
   'UNTRUSTED_LLM_ENDPOINT', 'PII_EGRESS', 'LLM_ENDPOINT_HIJACK', 'RELAY_RESPONSE_TAMPERING',

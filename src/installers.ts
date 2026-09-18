@@ -16,9 +16,15 @@ interface ClawInstallTarget {
   configPath: string;
 }
 
-export function installAgentTemplates(agent: AgentInstaller, options: { cwd?: string; force?: boolean; shellHooks?: boolean } = {}): InstallResult {
+export function installAgentTemplates(agent: AgentInstaller, options: {
+  cwd?: string;
+  force?: boolean;
+  shellHooks?: boolean;
+  /** Exact paths explicitly selected for Claude Code @file Read deny compensation. */
+  protectedPaths?: string[];
+} = {}): InstallResult {
   const root = options.cwd || process.cwd();
-  if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force));
+  if (agent === 'claude-code') return installClaudeCode(root, Boolean(options.force), options.protectedPaths ?? []);
   if (agent === 'codex') return installCodex(root, Boolean(options.force));
   if (agent === 'openclaw') return installOpenClaw(options.cwd, Boolean(options.force));
   if (agent === 'hermes') return installHermes(options.cwd, Boolean(options.force), { shellHooks: Boolean(options.shellHooks) });
@@ -50,14 +56,27 @@ function installDsh(root: string): InstallResult {
   return { agent: 'dsh', files: [] };
 }
 
-function installClaudeCode(root: string, force: boolean): InstallResult {
-  const hookDir = join(root, '.claude', 'hooks');
+function installClaudeCode(root: string, force: boolean, protectedPaths: string[]): InstallResult {
+  const stableRoot = resolve(root);
+  const hookDir = join(stableRoot, '.claude', 'hooks');
   const hookPath = join(hookDir, 'agentguard-protect.sh');
-  const settingsPath = join(root, '.claude', 'settings.local.json');
+  const settingsPath = join(stableRoot, '.claude', 'settings.local.json');
+  const managedStatePath = join(stableRoot, '.claude', 'agentguard-managed.json');
   mkdirSync(hookDir, { recursive: true });
   writeIfAllowed(hookPath, claudeHookScript(), force);
-  writeIfAllowed(settingsPath, JSON.stringify(claudeSettings(), null, 2) + '\n', force);
-  return { agent: 'claude-code', files: [hookPath, settingsPath] };
+  const version = probeClaudeVersion();
+  const previousManagedDenies = readClaudeManagedDenies(managedStatePath);
+  const managedReadDenies = mergeClaudeSettings(
+    settingsPath,
+    claudeSettings(version.supportsModelSwitch, protectedPaths, stableRoot),
+    previousManagedDenies,
+  );
+  writeFileSync(managedStatePath, `${JSON.stringify({ version: 1, managedReadDenies }, null, 2)}\n`);
+  return {
+    agent: 'claude-code',
+    files: [hookPath, settingsPath, managedStatePath],
+    messages: claudeInstallMessages(version, protectedPaths.filter(isExactClaudeProtectedPath).length),
+  };
 }
 
 function installCodex(root: string, force: boolean): InstallResult {
@@ -298,58 +317,205 @@ function copyBundledSkill(targetDir: string, force: boolean): void {
 
 function claudeHookScript(): string {
   return `#!/bin/sh
-set -eu
-exec agentguard protect
+set -u
+
+input_file="$(mktemp "\${TMPDIR:-/tmp}/agentguard-claude-hook.XXXXXX")" || exit 2
+trap 'rm -f "$input_file"' EXIT HUP INT TERM
+chmod 600 "$input_file" 2>/dev/null || true
+cat >"$input_file"
+event="$(node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const v=JSON.parse(s);if(v&&typeof v.hook_event_name==="string")process.stdout.write(v.hook_event_name)}catch{}})' <"$input_file" 2>/dev/null || true)"
+
+if AGENTGUARD_AGENT_HOST=claude-code AGENTGUARD_CLAUDE_HOOK=1 agentguard protect <"$input_file" 2>/dev/null; then
+  exit 0
+fi
+
+case "$event" in
+  PostToolUseFailure|PostModelSwitch|MessageDisplay|Stop|InstructionsLoaded|PreCompact|PostCompact)
+    printf '%s\n' 'SECURITY_GATE_ERROR' >&2
+    exit 0
+    ;;
+esac
+
+printf '%s\n' 'AgentGuard hook evaluation failed; action denied.' >&2
+exit 2
 `;
 }
 
-function claudeSettings(): unknown {
+type ClaudeHookEvent =
+  | 'UserPromptSubmit'
+  | 'UserPromptExpansion'
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'PostToolUseFailure'
+  | 'PostToolBatch'
+  | 'ConfigChange'
+  | 'PreModelSwitch'
+  | 'PostModelSwitch'
+  | 'MessageDisplay'
+  | 'Stop'
+  | 'InstructionsLoaded'
+  | 'PreCompact'
+  | 'PostCompact';
+
+const CLAUDE_BASE_EVENTS: ClaudeHookEvent[] = [
+  'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'PostToolBatch', 'ConfigChange', 'MessageDisplay', 'Stop', 'InstructionsLoaded', 'PreCompact', 'PostCompact',
+];
+
+function claudeSettings(
+  supportsModelSwitch: boolean,
+  protectedPaths: string[],
+  projectRoot: string,
+): Record<string, unknown> {
+  const command = '"${CLAUDE_PROJECT_DIR}/.claude/hooks/agentguard-protect.sh"';
+  const events = supportsModelSwitch
+    ? [...CLAUDE_BASE_EVENTS, 'PreModelSwitch', 'PostModelSwitch'] as ClaudeHookEvent[]
+    : CLAUDE_BASE_EVENTS;
+  const hooks = Object.fromEntries(events.map((event) => [event, [{
+    hooks: [{
+      type: 'command',
+      command,
+      timeout: 30,
+    }],
+  }]]));
+  const exactDenies = protectedPaths
+    .filter(isExactClaudeProtectedPath)
+    .map((path) => path.startsWith('~') || isAbsolute(path) ? path : resolve(projectRoot, path))
+    .map((path) => `Read(${path})`);
   return {
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: 'Bash',
-          hooks: [
-            {
-              type: 'command',
-              command:
-                'AGENTGUARD_AGENT_HOST=claude-code AGENTGUARD_ACTION_TYPE=shell AGENTGUARD_TOOL_NAME=Bash ./.claude/hooks/agentguard-protect.sh',
-            },
-          ],
-        },
-        {
-          matcher: 'Read',
-          hooks: [
-            {
-              type: 'command',
-              command:
-                'AGENTGUARD_AGENT_HOST=claude-code AGENTGUARD_ACTION_TYPE=file_read AGENTGUARD_TOOL_NAME=Read ./.claude/hooks/agentguard-protect.sh',
-            },
-          ],
-        },
-        {
-          matcher: 'Write|Edit|MultiEdit',
-          hooks: [
-            {
-              type: 'command',
-              command:
-                'AGENTGUARD_AGENT_HOST=claude-code AGENTGUARD_ACTION_TYPE=file_write AGENTGUARD_TOOL_NAME=Write ./.claude/hooks/agentguard-protect.sh',
-            },
-          ],
-        },
-        {
-          matcher: 'WebFetch|WebSearch',
-          hooks: [
-            {
-              type: 'command',
-              command:
-                'AGENTGUARD_AGENT_HOST=claude-code AGENTGUARD_ACTION_TYPE=network AGENTGUARD_TOOL_NAME=WebFetch ./.claude/hooks/agentguard-protect.sh',
-            },
-          ],
-        },
-      ],
-    },
+    hooks,
+    ...(exactDenies.length > 0 ? { permissions: { deny: exactDenies } } : {}),
   };
+}
+
+function isExactClaudeProtectedPath(path: string): boolean {
+  return path.length > 0 && !/[?*\[\]{}()|]/.test(path) && !/[\r\n]/.test(path);
+}
+
+interface ClaudeVersionProbe {
+  version?: string;
+  supportsModelSwitch: boolean;
+  status: 'enabled' | 'unsupported' | 'unverified';
+}
+
+function probeClaudeVersion(): ClaudeVersionProbe {
+  const result = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) return { supportsModelSwitch: false, status: 'unverified' };
+  const match = String(result.stdout || result.stderr || '').match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+  if (!match) return { supportsModelSwitch: false, status: 'unverified' };
+  const version = `${match[1]}.${match[2]}.${match[3]}`;
+  const supportsModelSwitch = compareVersions([Number(match[1]), Number(match[2]), Number(match[3])], [2, 1, 251]) >= 0;
+  return { version, supportsModelSwitch, status: supportsModelSwitch ? 'enabled' : 'unsupported' };
+}
+
+function compareVersions(left: number[], right: number[]): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function claudeInstallMessages(probe: ClaudeVersionProbe, protectedPathCount: number): string[] {
+  const enabled = [...CLAUDE_BASE_EVENTS, ...(probe.supportsModelSwitch ? ['PreModelSwitch', 'PostModelSwitch'] : [])];
+  const gated = probe.supportsModelSwitch ? [] : ['PreModelSwitch', 'PostModelSwitch'];
+  return [
+    `Claude Code version: ${probe.version ?? 'not detected'} (${probe.status}).`,
+    `Claude Code enabled events: ${enabled.join(', ')}.`,
+    `Claude Code gated events: ${gated.length > 0 ? gated.join(', ') : 'none'}.`,
+    'Claude Code coverage: prompt/tool/context partial; model transport, final endpoint, credentials, and complete payload unsupported.',
+    `Claude Code @file coverage: ${protectedPathCount} exact Read deny path(s) configured; every unconfigured @file path is unsupported.`,
+    'Claude Code command-hook timeout/failure behavior is host fail-open; monitor SECURITY_GATE_ERROR and do not treat timeouts as fail-closed.',
+  ];
+}
+
+function mergeClaudeSettings(
+  path: string,
+  addition: Record<string, unknown>,
+  previousManagedDenies: string[],
+): string[] {
+  let existing: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      existing = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error(`Cannot merge Claude Code settings: ${path} is not a valid JSON object. Existing file was left unchanged.`);
+    }
+  }
+  const currentHooks = existing.hooks;
+  if (currentHooks !== undefined && (!currentHooks || typeof currentHooks !== 'object' || Array.isArray(currentHooks))) {
+    throw new Error(`Cannot merge Claude Code settings: ${path} has a non-object hooks value. Existing file was left unchanged.`);
+  }
+  const hooks = { ...((currentHooks || {}) as Record<string, unknown>) };
+  const additions = addition.hooks as Record<ClaudeHookEvent, unknown[]>;
+  const managedEvents = [...CLAUDE_BASE_EVENTS, 'PreModelSwitch', 'PostModelSwitch'] as ClaudeHookEvent[];
+  for (const event of managedEvents) {
+    const existingGroups = hooks[event];
+    if (existingGroups !== undefined && !Array.isArray(existingGroups)) {
+      throw new Error(`Cannot merge Claude Code settings: ${event} is not an array. Existing file was left unchanged.`);
+    }
+    const groups = ((existingGroups || []) as unknown[]).flatMap(removeClaudeManagedHandlers);
+    if (additions[event]) groups.push(...additions[event]);
+    if (groups.length > 0) hooks[event] = groups;
+    else delete hooks[event];
+  }
+
+  const merged: Record<string, unknown> = { ...existing, hooks };
+  const newPermissions = addition.permissions as { deny?: string[] } | undefined;
+  let managedReadDenies: string[] = [];
+  if (newPermissions?.deny?.length || previousManagedDenies.length > 0) {
+    const currentPermissions = existing.permissions;
+    if (currentPermissions !== undefined && (!currentPermissions || typeof currentPermissions !== 'object' || Array.isArray(currentPermissions))) {
+      throw new Error(`Cannot merge Claude Code settings: ${path} has a non-object permissions value. Existing file was left unchanged.`);
+    }
+    const permissions = { ...((currentPermissions || {}) as Record<string, unknown>) };
+    const currentDeny = permissions.deny;
+    if (currentDeny !== undefined && !Array.isArray(currentDeny)) {
+      throw new Error(`Cannot merge Claude Code settings: ${path} has a non-array permissions.deny value. Existing file was left unchanged.`);
+    }
+    const denyWithoutManaged = [...(currentDeny || []) as unknown[]];
+    for (const rule of previousManagedDenies) {
+      const index = denyWithoutManaged.indexOf(rule);
+      if (index >= 0) denyWithoutManaged.splice(index, 1);
+    }
+    managedReadDenies = (newPermissions?.deny ?? []).filter((rule) => !denyWithoutManaged.includes(rule));
+    permissions.deny = [...denyWithoutManaged, ...managedReadDenies];
+    merged.permissions = permissions;
+  }
+  const content = `${JSON.stringify(merged, null, 2)}\n`;
+  mkdirSync(dirname(path), { recursive: true });
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== content) writeFileSync(path, content);
+  return managedReadDenies;
+}
+
+function readClaudeManagedDenies(path: string): string[] {
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { managedReadDenies?: unknown };
+    return Array.isArray(parsed.managedReadDenies)
+      ? parsed.managedReadDenies.filter((rule): rule is string =>
+          typeof rule === 'string' && /^Read\([^\r\n]+\)$/.test(rule))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function removeClaudeManagedHandlers(group: unknown): unknown[] {
+  if (!group || typeof group !== 'object' || Array.isArray(group)) return [group];
+  const candidate = group as Record<string, unknown>;
+  if (!Array.isArray(candidate.hooks)) return [group];
+  const hooks = candidate.hooks.filter((hook) => !isClaudeManagedHandler(hook));
+  if (hooks.length === 0) return [];
+  return [{ ...candidate, hooks }];
+}
+
+function isClaudeManagedHandler(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const command = (value as Record<string, unknown>).command;
+  return typeof command === 'string' && command.includes('.claude/hooks/agentguard-protect.sh');
 }
 
 function codexSkillTemplate(): string {

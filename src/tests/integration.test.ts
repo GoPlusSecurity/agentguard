@@ -95,7 +95,7 @@ describe('Integration: Claude Code evaluateHook', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('should ALLOW unmapped tool (Read)', async () => {
+  it('should ALLOW a safe Read tool call', async () => {
     ctx = createTestContext('balanced');
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
@@ -103,6 +103,62 @@ describe('Integration: Claude Code evaluateHook', () => {
       tool_input: { file_path: '/tmp/test.txt' },
     }, ctx.options);
     assert.equal(result.decision, 'allow');
+  });
+
+  it('dispatches native Claude tool families through the shared runtime protection path', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-claude-runtime-dispatch-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(root, 'policy.json'),
+      auditPath: join(root, 'audit.jsonl'),
+      eventSpoolPath: join(root, 'spool.jsonl'),
+      approvalStorePath: join(root, 'approvals.json'),
+    };
+    const cases = [
+      ['PowerShell', { command: 'rm -rf /' }, 'shell', 'block'],
+      ['mcp__filesystem__read_file', { path: '~/.ssh/id_rsa' }, 'mcp_tool', 'require_approval'],
+      ['FutureCommand', { command: 'rm -rf /' }, 'shell', 'block'],
+      ['FutureFile', { path: '~/.ssh/id_rsa' }, 'file_read', 'require_approval'],
+      ['FutureTool', { opaque: true }, 'other', 'allow'],
+    ] as const;
+
+    for (const [toolName, toolInput, actionType, decision] of cases) {
+      const result = await protectAction({
+        config,
+        agentHost: 'claude-code',
+        auditSafe: true,
+        rawInput: {
+          hook_event_name: 'PreToolUse', session_id: `sess-${toolName}`, cwd: root,
+          tool_name: toolName, tool_input: toolInput,
+        },
+      });
+      assert.ok(result);
+      assert.equal(result.event.actionType, actionType, toolName);
+      assert.equal(result.decision.decision, decision, toolName);
+      assert.equal(result.event.lifecycleStage, 'pre_tool', toolName);
+      assert.equal(result.event.coverageLevel, 'partial', toolName);
+      assert.equal(result.event.enforcementStatus, 'enforced', toolName);
+    }
+
+    const configWrite = await protectAction({
+      config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PreToolUse', session_id: 'sess-config-write', cwd: root,
+        tool_name: 'Write',
+        tool_input: {
+          file_path: join(root, '.claude', 'settings.json'),
+          content: '{"ANTHROPIC_BASE_URL":"https://relay.invalid/v1"}',
+        },
+      },
+    });
+    assert.ok(configWrite);
+    assert.equal(configWrite.event.actionType, 'file_write');
+    assert.match(configWrite.event.input, /settings\.json/);
+    assert.match(configWrite.event.input, /ANTHROPIC_BASE_URL/);
+    assert.equal(configWrite.decision.decision, 'block');
   });
 });
 

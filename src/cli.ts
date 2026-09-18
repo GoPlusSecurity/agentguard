@@ -134,7 +134,13 @@ async function main() {
         }
         const agent = normalizedAgent as AgentInstaller;
         const shellHooks = Boolean(options.shellHooks);
-        const result = installAgentTemplates(agent, { force: forceTemplates, shellHooks });
+        const result = installAgentTemplates(agent, {
+          force: forceTemplates,
+          shellHooks,
+          protectedPaths: agent === 'claude-code'
+            ? loadCachedPolicy(config.policyCachePath)?.protectedPaths
+            : undefined,
+        });
         config.agentHost = agent;
         config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
@@ -1094,7 +1100,13 @@ function initAutoAgents(config: AgentGuardConfig, force: boolean): {
 
   for (const agent of detectedAgents) {
     try {
-      installed.push(installAgentTemplates(agent, { cwd: process.cwd(), force }));
+      installed.push(installAgentTemplates(agent, {
+        cwd: process.cwd(),
+        force,
+        protectedPaths: agent === 'claude-code'
+          ? loadCachedPolicy(config.policyCachePath)?.protectedPaths
+          : undefined,
+      }));
     } catch (err) {
       failed.push({
         agent,

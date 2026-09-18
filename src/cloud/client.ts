@@ -7,7 +7,12 @@ import type {
   RuntimeDecision,
 } from '../runtime/types.js';
 import { redactLlmMetadata, redactMetadata, redactPreview } from '../runtime/redaction.js';
-import { buildAuditEvent, codexSafeMetadata, isCodexNativeHookAction } from '../runtime/audit.js';
+import {
+  buildAuditEvent,
+  isClaudeNativeHookAction,
+  isCodexNativeHookAction,
+  nativeHookSafeMetadata,
+} from '../runtime/audit.js';
 import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
 interface ApiSuccess<T> {
@@ -275,16 +280,16 @@ function buildCloudRequestError(status: number, path: string, body: unknown): Cl
 }
 
 function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
-  const codexHook = isCodexNativeHookAction(action);
+  const nativeHook = isCodexNativeHookAction(action) || isClaudeNativeHookAction(action);
   return {
     sessionId: redactPreview(action.sessionId, 160),
     agentHost: action.agentHost,
     actionType: action.actionType,
     toolName: redactPreview(action.toolName, 160),
-    input: action.actionType === 'llm_request' || action.actionType === 'llm_response' || codexHook
+    input: action.actionType === 'llm_request' || action.actionType === 'llm_response' || nativeHook
       ? '[LOCAL_ONLY_LLM_CONTENT]'
       : redactPreview(action.input, 64_000),
-    cwd: action.cwd ? redactPreview(action.cwd, 500) : undefined,
+    cwd: nativeHook ? undefined : action.cwd ? redactPreview(action.cwd, 500) : undefined,
     sourceSkill: action.sourceSkill ? redactPreview(action.sourceSkill, 240) : undefined,
     lifecycleStage: action.lifecycleStage,
     canBlockCurrentAction: action.canBlockCurrentAction,
@@ -292,6 +297,6 @@ function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
     enforcementStatus: action.enforcementStatus,
     missingFacts: action.missingFacts ? [...action.missingFacts] : undefined,
     llm: action.llm ? redactLlmMetadata(action.llm) : undefined,
-    metadata: codexHook ? codexSafeMetadata(action.metadata) : redactMetadata(action.metadata),
+    metadata: nativeHook ? nativeHookSafeMetadata(action.metadata) : redactMetadata(action.metadata),
   };
 }

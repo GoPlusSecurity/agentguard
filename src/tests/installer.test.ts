@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installAgentTemplates } from '../installers.js';
@@ -10,9 +10,161 @@ describe('Agent template installers', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-'));
     const result = installAgentTemplates('claude-code', { cwd: dir });
 
-    assert.equal(result.files.length, 2);
+    assert.equal(result.files.length, 3);
     assert.ok(existsSync(join(dir, '.claude', 'hooks', 'agentguard-protect.sh')));
     assert.ok(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8').includes('agentguard-protect.sh'));
+    assert.ok(existsSync(join(dir, '.claude', 'agentguard-managed.json')));
+  });
+
+  it('merges Claude Code lifecycle hooks without replacing user settings and stays idempotent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-merge-'));
+    const claudeDir = join(dir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({
+      model: 'keep-model',
+      futureSetting: { keep: true },
+      hooks: {
+        PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/user-hook' }] }],
+        FutureEvent: [{ hooks: [{ type: 'command', command: '/usr/local/bin/future-hook' }] }],
+      },
+      permissions: { deny: ['Write(/keep/existing.txt)'] },
+    }, null, 2));
+
+    installAgentTemplates('claude-code', { cwd: dir, force: true });
+    const once = readFileSync(settingsPath, 'utf8');
+    installAgentTemplates('claude-code', { cwd: dir, force: true });
+    const twice = readFileSync(settingsPath, 'utf8');
+    const settings = JSON.parse(twice);
+
+    assert.equal(twice, once);
+    assert.equal(settings.model, 'keep-model');
+    assert.deepEqual(settings.futureSetting, { keep: true });
+    assert.deepEqual(settings.hooks.FutureEvent, [{ hooks: [{ type: 'command', command: '/usr/local/bin/future-hook' }] }]);
+    assert.ok(settings.hooks.PreToolUse.some((group: { hooks?: Array<{ command?: string }> }) =>
+      group.hooks?.some((hook) => hook.command === '/usr/local/bin/user-hook')));
+    assert.ok(settings.permissions.deny.includes('Write(/keep/existing.txt)'));
+    assert.deepEqual(Object.keys(settings.hooks).sort(), [
+      'ConfigChange', 'FutureEvent', 'InstructionsLoaded', 'MessageDisplay', 'PostCompact', 'PostToolBatch',
+      'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'Stop', 'UserPromptExpansion',
+      'UserPromptSubmit',
+    ].sort());
+    for (const [event, groups] of Object.entries(settings.hooks) as Array<[string, Array<{ hooks?: Array<Record<string, unknown>> }>]>) {
+      if (event === 'FutureEvent') continue;
+      const managed = groups.flatMap((group) => group.hooks || []).filter((hook) =>
+        String(hook.command || '').includes('agentguard-protect.sh'));
+      assert.equal(managed.length, 1, event);
+      assert.equal(managed[0]!.type, 'command', event);
+      assert.equal(managed[0]!.timeout, 30, event);
+      assert.match(String(managed[0]!.command), /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/agentguard-protect\.sh/, event);
+    }
+  });
+
+  it('reports absent and unsupported Claude versions as unverified without model-switch hooks', () => {
+    const originalPath = process.env.PATH;
+    const emptyBin = mkdtempSync(join(tmpdir(), 'agentguard-no-claude-'));
+    process.env.PATH = emptyBin;
+    try {
+      const absent = installAgentTemplates('claude-code', { cwd: mkdtempSync(join(tmpdir(), 'agentguard-claude-absent-')) });
+      assert.ok(absent.messages?.some((message) => /unverified/i.test(message)));
+
+      const fake = join(emptyBin, 'claude');
+      writeFileSync(fake, '#!/bin/sh\nprintf \'%s\\n\' \'2.1.250 (Claude Code)\'\n');
+      chmodSync(fake, 0o755);
+      const oldDir = mkdtempSync(join(tmpdir(), 'agentguard-claude-old-'));
+      const oldResult = installAgentTemplates('claude-code', { cwd: oldDir });
+      const oldSettings = JSON.parse(readFileSync(join(oldDir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.equal(oldSettings.hooks.PreModelSwitch, undefined);
+      assert.equal(oldSettings.hooks.PostModelSwitch, undefined);
+      assert.ok(oldResult.messages?.some((message) => /2\.1\.250/.test(message) && /unsupported/i.test(message)));
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
+  it('registers model-switch hooks for Claude Code 2.1.251 and newer', () => {
+    const originalPath = process.env.PATH;
+    const bin = mkdtempSync(join(tmpdir(), 'agentguard-claude-supported-bin-'));
+    const fake = join(bin, 'claude');
+    writeFileSync(fake, '#!/bin/sh\nprintf \'%s\\n\' \'2.1.251 (Claude Code)\'\n');
+    chmodSync(fake, 0o755);
+    process.env.PATH = bin;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-supported-'));
+      const result = installAgentTemplates('claude-code', { cwd: dir });
+      const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(settings.hooks.PreModelSwitch);
+      assert.ok(settings.hooks.PostModelSwitch);
+      assert.ok(result.messages?.some((message) => /2\.1\.251/.test(message) && /enabled/i.test(message)));
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
+  it('adds Read denies only for explicitly supplied exact protected paths', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-protected-paths-'));
+    const exact = join(dir, 'private', 'identity.txt');
+    installAgentTemplates('claude-code', {
+      cwd: dir,
+      protectedPaths: [exact, 'private/relative.txt', '**/.env*', join(dir, '**', 'credentials*'), '/tmp/bad)matcher'],
+    });
+
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, [
+      `Read(${exact})`,
+      `Read(${join(dir, 'private', 'relative.txt')})`,
+    ]);
+    assert.ok(!settings.permissions.deny.some((rule: string) => /\*|workspace/i.test(rule)));
+  });
+
+  it('replaces only previously owned exact Read denies when protected paths change', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-owned-denies-'));
+    const claudeDir = join(dir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    const firstPath = join(dir, 'private', 'first.txt');
+    const secondPath = join(dir, 'private', 'second.txt');
+    const userRead = `Read(${join(dir, 'user-owned.txt')})`;
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({
+      permissions: { deny: [userRead, 'Write(/keep/user-rule)'] },
+    }, null, 2));
+
+    const first = installAgentTemplates('claude-code', { cwd: dir, protectedPaths: [firstPath] });
+    assert.ok(first.files.includes(join(claudeDir, 'agentguard-managed.json')));
+    installAgentTemplates('claude-code', { cwd: dir, protectedPaths: [secondPath] });
+
+    const changed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    assert.deepEqual(changed.permissions.deny, [
+      userRead,
+      'Write(/keep/user-rule)',
+      `Read(${secondPath})`,
+    ]);
+
+    installAgentTemplates('claude-code', { cwd: dir, protectedPaths: [] });
+    const removed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    assert.deepEqual(removed.permissions.deny, [userRead, 'Write(/keep/user-rule)']);
+  });
+
+  it('preserves an identical user Read deny when managed ownership is released', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-claude-identical-deny-'));
+    const claudeDir = join(dir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    const protectedPath = join(dir, 'private', 'identity.txt');
+    const identicalRule = `Read(${protectedPath})`;
+
+    installAgentTemplates('claude-code', { cwd: dir, protectedPaths: [protectedPath] });
+    const installed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    installed.permissions.deny.push(identicalRule);
+    writeFileSync(settingsPath, `${JSON.stringify(installed, null, 2)}\n`);
+
+    installAgentTemplates('claude-code', { cwd: dir, protectedPaths: [] });
+
+    const removed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    assert.deepEqual(removed.permissions.deny, [identicalRule]);
+    const managed = JSON.parse(readFileSync(join(claudeDir, 'agentguard-managed.json'), 'utf8'));
+    assert.deepEqual(managed.managedReadDenies, []);
   });
 
   it('writes native synchronous Codex hooks with stable wrapper paths', () => {

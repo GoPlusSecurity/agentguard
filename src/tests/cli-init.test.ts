@@ -304,6 +304,26 @@ describe('init CLI', () => {
     assert.equal(readFileSync(join(skillDir, 'SKILL.md'), 'utf8'), 'old skill template');
   });
 
+  it('installs only exact cached protected paths as Claude @file Read denies', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-init-claude-paths-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-claude-paths-cwd-'));
+    const cliPath = resolve('dist', 'cli.js');
+    const exact = join(cwd, 'private', 'identity.txt');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'policy-cache.json'), JSON.stringify({
+      policyVersion: 'explicit-test-policy',
+      protectedPaths: [exact, '**/.env*'],
+    }));
+
+    await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'claude-code'], {
+      cwd,
+      env: { ...process.env, AGENTGUARD_HOME: home },
+    });
+
+    const settings = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, [`Read(${exact})`]);
+  });
+
   it('accepts Hermes and QClaw agent installers', async () => {
     for (const agent of ['hermes', 'qclaw']) {
       const home = mkdtempSync(join(tmpdir(), `agentguard-init-${agent}-home-`));

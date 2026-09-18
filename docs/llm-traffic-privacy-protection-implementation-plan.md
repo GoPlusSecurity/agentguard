@@ -545,50 +545,50 @@ Claude Code 源码和 CLI 不属于修改范围。AgentGuard 只安装官方 set
 
 #### 9.1 安装器与版本能力
 
-- [ ] 将 `.claude/settings.local.json` 改为结构化、幂等合并；保留用户已有 settings 和同事件其他 Hook，禁止 `--force` 整体覆盖未知配置。
-- [ ] Hook command 使用 `${CLAUDE_PROJECT_DIR}` 或稳定绝对路径，避免 `/cd` 或从子目录启动后相对路径失效。
-- [ ] 记录 `claude --version`；对有明确最低版本的事件做 version gate，例如 `PreModelSwitch`/`PostModelSwitch` 只在 `2.1.251+` 注册。
-- [ ] 安装后输出实际启用事件、未满足版本要求的事件和覆盖矩阵；CLI 不存在时仍可生成模板，但状态必须标为 `unverified`。
-- [ ] 默认只生成本地同步 `type: "command"` Hook；禁止把原始 prompt/tool result 发送到 `http`、`prompt`、`agent` 或外部 MCP Hook。
+- [x] 将 `.claude/settings.local.json` 改为结构化、幂等合并；保留用户已有 settings 和同事件其他 Hook，禁止 `--force` 整体覆盖未知配置。
+- [x] Hook command 使用 `${CLAUDE_PROJECT_DIR}` 或稳定绝对路径，避免 `/cd` 或从子目录启动后相对路径失效。
+- [x] 记录 `claude --version`；对有明确最低版本的事件做 version gate，例如 `PreModelSwitch`/`PostModelSwitch` 只在 `2.1.251+` 注册。
+- [x] 安装后输出实际启用事件、未满足版本要求的事件和覆盖矩阵；CLI 不存在时仍可生成模板，但状态必须标为 `unverified`。
+- [x] 默认只生成本地同步 `type: "command"` Hook；禁止把原始 prompt/tool result 发送到 `http`、`prompt`、`agent` 或外部 MCP Hook。
 
 #### 9.2 生命周期映射
 
-- [ ] `UserPromptSubmit`：映射为 `user_prompt`，扫描当前 prompt；`block` 返回顶层 `{ "decision": "block", "reason": "<脱敏原因>" }`。
-- [ ] `UserPromptExpansion`：映射为 `prompt_expansion`，根据 `expansion_type`、`command_name`、`command_args` 和 `command_source` 阻止不受信任的 slash/custom command、skill 或 MCP prompt 展开；不得声称扫描了 Hook 未提供的展开后完整正文。
-- [ ] `PreToolUse`：统一处理 Bash/PowerShell、Read、Write/Edit、Web、MCP 和未知工具；按 `tool_name`/`tool_input` 动态映射，避免只依赖安装器写死的少量 matcher。
-- [ ] `@file` 不触发 `PreToolUse`：仅当 AgentGuard policy 明确列出敏感路径时，幂等合并对应的精确 Claude Code `Read` deny 权限规则；未配置的 `@file` 路径标记为 `unsupported`，禁止生成覆盖整个 workspace 的宽泛 deny。
-- [ ] `require_approval` 继续使用 Claude Code 原生 `permissionDecision: "ask"`；非交互场景和无审批 UI 时按 Claude Code 实际行为测试并记录。
-- [ ] `PostToolUse`：扫描 `tool_response`；对有稳定 schema 的内置/MCP 工具使用 `updatedToolOutput` 替换为脱敏结果。顶层 `decision: "block"` 不能替代脱敏，因为 Claude 仍会看到原始输出。
-- [ ] `PostToolUseFailure`：只映射失败类型、脱敏错误摘要和 coverage；该事件没有输出替换或阻断能力，不得把附加 context 记为脱敏成功。
-- [ ] `PostToolBatch`：映射为 `post_tool_batch`，对模型即将看到的 serialized results 计算本批 PII、文件路径数和字节数；命中阻断策略时在下一模型调用前结束 agentic loop。
-- [ ] `ConfigChange`：读取 `source`/`file_path`，扫描新配置是否加入未知 endpoint、key forwarding 或危险 permission；对可阻断来源拒绝当前 session 应用，并明确不会自动回滚磁盘内容。
-- [ ] `PreModelSwitch`：读取 `from_model`、`to_model`、`source` 和 `context_tokens`；阻止不允许的显式 model switch 或对大上下文重发请求审批，但不把 model id 当作 endpoint。
-- [ ] `PostModelSwitch`：只审计自动/session model 变化；未触发事件的一次性 fallback 标为 `unsupported`。
-- [ ] `MessageDisplay` 和 `Stop`：用于响应文本观察及可选的显示层脱敏；固定 `canBlockCurrentAction=false` 或 `display_only`，不得声称修改了 transcript、模型响应或已发生的工具行为。
-- [ ] `InstructionsLoaded`、`PreCompact`、`PostCompact`：只记录脱敏元数据和 coverage，不解析不稳定 transcript 来伪造最终模型 payload。
+- [x] `UserPromptSubmit`：映射为 `user_prompt`，扫描当前 prompt；`block` 返回顶层 `{ "decision": "block", "reason": "<脱敏原因>" }`。
+- [x] `UserPromptExpansion`：映射为 `prompt_expansion`，根据 `expansion_type`、`command_name`、`command_args` 和 `command_source` 阻止不受信任的 slash/custom command、skill 或 MCP prompt 展开；不得声称扫描了 Hook 未提供的展开后完整正文。
+- [x] `PreToolUse`：统一处理 Bash/PowerShell、Read、Write/Edit、Web、MCP 和未知工具；按 `tool_name`/`tool_input` 动态映射，避免只依赖安装器写死的少量 matcher。
+- [x] `@file` 不触发 `PreToolUse`：仅当 AgentGuard policy 明确列出敏感路径时，幂等合并对应的精确 Claude Code `Read` deny 权限规则；未配置的 `@file` 路径标记为 `unsupported`，禁止生成覆盖整个 workspace 的宽泛 deny。
+- [x] `require_approval` 继续使用 Claude Code 原生 `permissionDecision: "ask"`；非交互场景和无审批 UI 时按 Claude Code 实际行为测试并记录。
+- [x] `PostToolUse`：扫描 `tool_response`；对有稳定 schema 的内置/MCP 工具使用 `updatedToolOutput` 替换为脱敏结果。顶层 `decision: "block"` 不能替代脱敏，因为 Claude 仍会看到原始输出。
+- [x] `PostToolUseFailure`：只映射失败类型、脱敏错误摘要和 coverage；该事件没有输出替换或阻断能力，不得把附加 context 记为脱敏成功。
+- [x] `PostToolBatch`：映射为 `post_tool_batch`，对模型即将看到的 serialized results 计算本批 PII、文件路径数和字节数；命中阻断策略时在下一模型调用前结束 agentic loop。
+- [x] `ConfigChange`：读取 `source`/`file_path`，扫描新配置是否加入未知 endpoint、key forwarding 或危险 permission；对可阻断来源拒绝当前 session 应用，并明确不会自动回滚磁盘内容。
+- [x] `PreModelSwitch`：读取 `from_model`、`to_model`、`source` 和 `context_tokens`；阻止不允许的显式 model switch 或对大上下文重发请求审批，但不把 model id 当作 endpoint。
+- [x] `PostModelSwitch`：只审计自动/session model 变化；未触发事件的一次性 fallback 标为 `unsupported`。
+- [x] `MessageDisplay` 和 `Stop`：用于响应文本观察及可选的显示层脱敏；固定 `canBlockCurrentAction=false` 或 `display_only`，不得声称修改了 transcript、模型响应或已发生的工具行为。
+- [x] `InstructionsLoaded`、`PreCompact`、`PostCompact`：只记录脱敏元数据和 coverage，不解析不稳定 transcript 来伪造最终模型 payload。
 
 #### 9.3 决策、性能和失败语义
 
-- [ ] 对可捕获的 adapter/JSON/evaluator 错误，blocking Hook wrapper 使用退出码 `2`；observer 错误只记录 `SECURITY_GATE_ERROR`。
-- [ ] Claude Code 的 `UserPromptSubmit`、`PreToolUse` 等 command Hook 超时/失败可能继续原动作；将该行为标为 host fail-open 缺口，配置合理超时并监控，不能在文档中宣称 timeout fail-closed。
-- [ ] `PostToolUse.updatedToolOutput` 只对有 fixture 验证的输出 schema 启用；未知 schema 不做破坏性猜测，转由 `PostToolBatch` 阻止下一次模型调用并标为 `partial`。
-- [ ] 并行 `PreToolUse` Hook 不共享可靠的批次前状态；批量读取阈值在 `PostToolBatch` 聚合，审计同时标明“读取已发生、当前模型续接已阻止”。旧结果仍可能保留在 transcript，恢复会话后的再次发送必须标为未保证。
-- [ ] Hook 输出只含规则 ID、掩码、计数和 action id；不把原始 PII、API key 或大型 tool result 写入 stdout/stderr、audit 或 Cloud。
+- [x] 对可捕获的 adapter/JSON/evaluator 错误，blocking Hook wrapper 使用退出码 `2`；observer 错误只记录 `SECURITY_GATE_ERROR`。
+- [x] Claude Code 的 `UserPromptSubmit`、`PreToolUse` 等 command Hook 超时/失败可能继续原动作；将该行为标为 host fail-open 缺口，配置合理超时并监控，不能在文档中宣称 timeout fail-closed。
+- [x] `PostToolUse.updatedToolOutput` 只对有 fixture 验证的输出 schema 启用；未知 schema 不做破坏性猜测，转由 `PostToolBatch` 阻止下一次模型调用并标为 `partial`。
+- [x] 并行 `PreToolUse` Hook 不共享可靠的批次前状态；批量读取阈值在 `PostToolBatch` 聚合，审计同时标明“读取已发生、当前模型续接已阻止”。旧结果仍可能保留在 transcript，恢复会话后的再次发送必须标为未保证。
+- [x] Hook 输出只含规则 ID、掩码、计数和 action id；不把原始 PII、API key 或大型 tool result 写入 stdout/stderr、audit 或 Cloud。
 
 #### 9.4 Claude Code 专属验收
 
-- [ ] 用户 prompt 命中 PII/API key 时，在 Claude 处理前被拒绝，且不会进入本轮模型处理。
-- [ ] direct slash/custom command、skill 和 MCP prompt 的展开路径触发 `UserPromptExpansion`；不受信任命令按元数据被阻止，测试不假设 Hook 可见展开后正文。
-- [ ] Bash、PowerShell、Read、Write/Edit、Web、MCP 和未知工具均有 matcher/动态映射测试；危险调用在执行前 deny/ask。
-- [ ] `@sensitive-file` 在 policy 已配置精确路径时由合并后的 `Read` deny 规则阻止；未配置路径的 fixture 明确报告 `unsupported`，不计入 PreToolUse 保护率。
-- [ ] 已验证 schema 的敏感 tool result 被 `updatedToolOutput` 替换，下一模型调用 fixture 中不再包含原值。
-- [ ] 失败工具的 stderr/异常含 PII 时，fixture 验证该目标版本的 `PostToolBatch.tool_response` 是否包含失败结果并能阻止下一模型调用；若不包含，则该路径报告 `unsupported`。
-- [ ] 并行读取多个敏感文件时，`PostToolBatch` 在下一模型调用前阻断，并报告本批文件数和脱敏字节数。
-- [ ] endpoint settings 通过 Agent 工具修改时由 `PreToolUse` 拦截；外部修改时 `ConfigChange` 阻止当前 session 应用，同时明确磁盘文件未回滚。
-- [ ] 显式 model switch 能 deny/ask；自动 fallback 只审计或标为 `unsupported`，不会误报为已阻断。
-- [ ] `MessageDisplay` 替换只计为 `display_only`；原 transcript 和 Stop 内容保持不受其影响的测试证据。
-- [ ] 安装器对已有 settings 做幂等合并；从子目录启动和 `/cd` 后 Hook 仍能找到 AgentGuard 脚本。
-- [ ] 每个 Hook fixture 同时断言 policy decision、实际 enforcement status、coverage level 和 missing facts。
+- [x] 用户 prompt 命中 PII/API key 时，在 Claude 处理前被拒绝，且不会进入本轮模型处理。
+- [x] direct slash/custom command、skill 和 MCP prompt 的展开路径触发 `UserPromptExpansion`；不受信任命令按元数据被阻止，测试不假设 Hook 可见展开后正文。
+- [x] Bash、PowerShell、Read、Write/Edit、Web、MCP 和未知工具均有 matcher/动态映射测试；危险调用在执行前 deny/ask。
+- [x] `@sensitive-file` 在 policy 已配置精确路径时由合并后的 `Read` deny 规则阻止；未配置路径的 fixture 明确报告 `unsupported`，不计入 PreToolUse 保护率。
+- [x] 已验证 schema 的敏感 tool result 被 `updatedToolOutput` 替换，下一模型调用 fixture 中不再包含原值。
+- [x] 失败工具的 stderr/异常含 PII 时，fixture 验证该目标版本的 `PostToolBatch.tool_response` 是否包含失败结果并能阻止下一模型调用；若不包含，则该路径报告 `unsupported`。
+- [x] 并行读取多个敏感文件时，`PostToolBatch` 在下一模型调用前阻断，并报告本批文件数和脱敏字节数。
+- [x] endpoint settings 通过 Agent 工具修改时由 `PreToolUse` 拦截；外部修改时 `ConfigChange` 阻止当前 session 应用，同时明确磁盘文件未回滚。
+- [x] 显式 model switch 能 deny/ask；自动 fallback 只审计或标为 `unsupported`，不会误报为已阻断。
+- [x] `MessageDisplay` 替换只计为 `display_only`；原 transcript 和 Stop 内容保持不受其影响的测试证据。
+- [x] 安装器对已有 settings 做幂等合并；从子目录启动和 `/cd` 后 Hook 仍能找到 AgentGuard 脚本。
+- [x] 每个 Hook fixture 同时断言 policy decision、实际 enforcement status、coverage level 和 missing facts。
 
 **Acceptance:** Claude Code 的当前 prompt、命令展开元数据、受支持工具、已验证 tool output 和本批 tool results 可以由原生同步 Hook 检查、阻断或脱敏；配置和显式 model switch 可获得部分保护。`@file` 仅在有精确 `Read` deny 策略时获得路径级补偿。最终模型 endpoint、credential、完整 payload、自动/临时 fallback、未配置的 `@file` 注入和原始模型响应仍明确标为 `partial/unsupported`。
 
