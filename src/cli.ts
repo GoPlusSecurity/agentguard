@@ -574,7 +574,8 @@ async function main() {
         decisionMode: options.decisionMode,
       });
       if (!result) return;
-      console.log(formatProtectResult(result, Boolean(options.json)));
+      const output = formatProtectResult(result, Boolean(options.json));
+      if (output) console.log(output);
       process.exitCode = exitCodeForDecision(result.decision, result);
     });
 
@@ -1119,6 +1120,7 @@ function printInstallResult(result: InstallResult): void {
   }
   console.log(`Installed ${result.agent} template:`);
   for (const file of result.files) console.log(`- ${file}`);
+  for (const message of result.messages || []) console.log(message);
 }
 
 function appendAgentHost(

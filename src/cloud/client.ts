@@ -7,7 +7,7 @@ import type {
   RuntimeDecision,
 } from '../runtime/types.js';
 import { redactLlmMetadata, redactMetadata, redactPreview } from '../runtime/redaction.js';
-import { buildAuditEvent } from '../runtime/audit.js';
+import { buildAuditEvent, codexSafeMetadata, isCodexNativeHookAction } from '../runtime/audit.js';
 import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
 interface ApiSuccess<T> {
@@ -275,12 +275,13 @@ function buildCloudRequestError(status: number, path: string, body: unknown): Cl
 }
 
 function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
+  const codexHook = isCodexNativeHookAction(action);
   return {
     sessionId: redactPreview(action.sessionId, 160),
     agentHost: action.agentHost,
     actionType: action.actionType,
     toolName: redactPreview(action.toolName, 160),
-    input: action.actionType === 'llm_request' || action.actionType === 'llm_response'
+    input: action.actionType === 'llm_request' || action.actionType === 'llm_response' || codexHook
       ? '[LOCAL_ONLY_LLM_CONTENT]'
       : redactPreview(action.input, 64_000),
     cwd: action.cwd ? redactPreview(action.cwd, 500) : undefined,
@@ -291,6 +292,6 @@ function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
     enforcementStatus: action.enforcementStatus,
     missingFacts: action.missingFacts ? [...action.missingFacts] : undefined,
     llm: action.llm ? redactLlmMetadata(action.llm) : undefined,
-    metadata: redactMetadata(action.metadata),
+    metadata: codexHook ? codexSafeMetadata(action.metadata) : redactMetadata(action.metadata),
   };
 }

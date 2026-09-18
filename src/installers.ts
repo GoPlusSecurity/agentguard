@@ -8,6 +8,7 @@ export type AgentInstaller = 'claude-code' | 'codex' | 'openclaw' | 'hermes' | '
 export interface InstallResult {
   agent: AgentInstaller;
   files: string[];
+  messages?: string[];
 }
 
 interface ClawInstallTarget {
@@ -60,13 +61,25 @@ function installClaudeCode(root: string, force: boolean): InstallResult {
 }
 
 function installCodex(root: string, force: boolean): InstallResult {
-  const skillDir = join(root, '.codex', 'skills', 'agentguard');
+  const stableRoot = resolve(root);
+  const skillDir = join(stableRoot, '.codex', 'skills', 'agentguard');
   const skillPath = join(skillDir, 'SKILL.md');
-  const hookPath = join(root, '.codex', 'agentguard-hook.json');
+  const hookDir = join(stableRoot, '.codex', 'hooks');
+  const hooksPath = join(stableRoot, '.codex', 'hooks.json');
+  const userPromptPath = join(hookDir, 'agentguard-user-prompt.sh');
+  const preToolPath = join(hookDir, 'agentguard-pre-tool.sh');
+  const postToolPath = join(hookDir, 'agentguard-post-tool.sh');
   mkdirSync(skillDir, { recursive: true });
   writeIfAllowed(skillPath, codexSkillTemplate(), force);
-  writeIfAllowed(hookPath, JSON.stringify(codexHookTemplate(), null, 2) + '\n', force);
-  return { agent: 'codex', files: [skillPath, hookPath] };
+  writeIfAllowed(userPromptPath, codexHookScript('user-prompt'), force);
+  writeIfAllowed(preToolPath, codexHookScript('pre-tool'), force);
+  writeIfAllowed(postToolPath, codexHookScript('post-tool'), force);
+  mergeCodexHooks(hooksPath, codexHookTemplate({ userPromptPath, preToolPath, postToolPath }));
+  return {
+    agent: 'codex',
+    files: [skillPath, hooksPath, userPromptPath, preToolPath, postToolPath],
+    messages: codexInstallMessages(),
+  };
 }
 
 function installOpenClaw(cwd: string | undefined, force: boolean): InstallResult {
@@ -342,47 +355,191 @@ function claudeSettings(): unknown {
 function codexSkillTemplate(): string {
   return `# AgentGuard
 
-Use AgentGuard before risky shell, file, network, or MCP tool actions.
+This Skill documents the AgentGuard workflow. It is not a security boundary.
+Enforcement comes from the synchronous native hooks in \`.codex/hooks.json\`
+after the user reviews and trusts them with \`/hooks\`.
 
-\`\`\`bash
-printf '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \\
-  | AGENTGUARD_AGENT_HOST=codex agentguard protect --json
-\`\`\`
-
-Expected decisions:
-
-- \`allow\`: continue
-- \`warn\`: show warning and continue
-- \`confirm\`: ask for approval in the agent channel before continuing
-- \`block\`: stop the action
-
-When a response includes \`Approve once ... agentguard approve --action-id ... --once\`,
-show the exact approval command to the user and ask before running it. Do not
-run an approval command proactively or infer approval from context. Treat replies such as
-"yes", "approve", "confirm", "continue", "go ahead", "execute", "run it",
-"同意", "确认", "批准", "继续", or "执行" as explicit approval for the most
-recent protected action only after the user has seen the command and understood
-which action is being approved. After approval, run the exact
-\`agentguard approve --action-id ... --once\` command and retry the original
-action once. If the id is unavailable, inspect \`agentguard approvals list --json\`;
-use \`agentguard approve --last --once\` only when there is exactly one relevant
-unexpired pending approval. If multiple pending approvals exist, ask the user to
-choose a specific action id.
+When a hook denies an action that requires approval, show the action id and
+redacted reason to the user. The user may approve it from their own terminal
+with \`agentguard approve --action-id <id> --once\`, then explicitly retry the
+original action. Never run \`agentguard approve\` directly or indirectly,
+including through a tool, wrapper, script, or delegated agent. Approval is a
+human action performed outside the agent session.
 `;
 }
 
-function codexHookTemplate(): unknown {
+type CodexHookEvent =
+  | 'UserPromptSubmit'
+  | 'PreToolUse'
+  | 'PermissionRequest'
+  | 'PostToolUse'
+  | 'PreCompact'
+  | 'PostCompact';
+
+function codexHookTemplate(paths: {
+  userPromptPath: string;
+  preToolPath: string;
+  postToolPath: string;
+}): Record<string, unknown> {
   return {
-    agentHost: 'codex',
-    command: 'AGENTGUARD_AGENT_HOST=codex agentguard protect',
-    actionTypes: {
-      shell: 'shell',
-      fileRead: 'file_read',
-      fileWrite: 'file_write',
-      network: 'network',
-      mcpTool: 'mcp_tool',
+    hooks: {
+      UserPromptSubmit: [codexMatcherGroup(paths.userPromptPath, 'Checking prompt privacy')],
+      PreToolUse: [codexMatcherGroup(paths.preToolPath, 'Checking tool action')],
+      PermissionRequest: [codexMatcherGroup(paths.preToolPath, 'Checking approval request')],
+      PostToolUse: [codexMatcherGroup(paths.postToolPath, 'Checking tool result')],
+      PreCompact: [codexMatcherGroup(paths.postToolPath, 'Recording compact policy state')],
+      PostCompact: [codexMatcherGroup(paths.postToolPath, 'Recording compact policy state')],
     },
   };
+}
+
+function codexMatcherGroup(scriptPath: string, statusMessage: string): Record<string, unknown> {
+  return {
+    hooks: [{
+      type: 'command',
+      command: JSON.stringify(scriptPath),
+      timeout: 30,
+      statusMessage,
+    }],
+  };
+}
+
+function codexHookScript(wrapper: 'user-prompt' | 'pre-tool' | 'post-tool'): string {
+  return `#!/bin/sh
+set -u
+
+if AGENTGUARD_AGENT_HOST=codex AGENTGUARD_CODEX_WRAPPER=${wrapper} agentguard protect 2>/dev/null; then
+  exit 0
+fi
+
+printf '%s\\n' 'AgentGuard hook evaluation failed; action denied.' >&2
+exit 2
+`;
+}
+
+function mergeCodexHooks(path: string, addition: Record<string, unknown>): void {
+  let existing: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      existing = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error(`Cannot merge Codex hooks: ${path} is not a valid JSON object. Existing file was left unchanged.`);
+    }
+  }
+
+  const currentHooks = existing.hooks;
+  if (currentHooks !== undefined && (!currentHooks || typeof currentHooks !== 'object' || Array.isArray(currentHooks))) {
+    throw new Error(`Cannot merge Codex hooks: ${path} has a non-object hooks value. Existing file was left unchanged.`);
+  }
+  const hooks = { ...((currentHooks || {}) as Record<string, unknown>) };
+  const additions = addition.hooks as Record<CodexHookEvent, Array<Record<string, unknown>>>;
+  for (const [event, groupsToAdd] of Object.entries(additions)) {
+    const existingGroups = hooks[event];
+    if (existingGroups !== undefined && !Array.isArray(existingGroups)) {
+      throw new Error(`Cannot merge Codex hooks: ${event} is not an array. Existing file was left unchanged.`);
+    }
+    const groups = [...((existingGroups || []) as unknown[])];
+    for (const group of groupsToAdd) {
+      const managedIndexes = groups.flatMap((candidate, index) =>
+        containsCodexManagedHandler(candidate, group) ? [index] : []
+      );
+      if (managedIndexes.length === 0) {
+        groups.push(group);
+        continue;
+      }
+      const primaryIndex = managedIndexes.find((index) => sameCodexHookGroup(groups[index], group))
+        ?? managedIndexes.find((index) => isRepairableCodexHookGroup(groups[index], group));
+      for (const index of managedIndexes.reverse()) {
+        const repaired = repairCodexManagedHandlers(groups[index], group, index === primaryIndex);
+        if (repaired === undefined) groups.splice(index, 1);
+        else groups[index] = repaired;
+      }
+      if (primaryIndex === undefined) groups.push(group);
+    }
+    hooks[event] = groups;
+  }
+
+  const merged = { ...existing, hooks };
+  mkdirSync(dirname(path), { recursive: true });
+  const content = `${JSON.stringify(merged, null, 2)}\n`;
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== content) writeFileSync(path, content);
+}
+
+function sameCodexHookGroup(left: unknown, right: Record<string, unknown>): boolean {
+  if (!left || typeof left !== 'object' || Array.isArray(left)) return false;
+  const candidate = left as Record<string, unknown>;
+  const leftHooks = candidate.hooks;
+  const rightHooks = right.hooks as Array<Record<string, unknown>>;
+  if (Object.keys(candidate).length !== 1 || !Array.isArray(leftHooks) || leftHooks.length !== 1
+      || !Array.isArray(rightHooks) || rightHooks.length !== 1) return false;
+  const leftHook = leftHooks[0];
+  const rightHook = rightHooks[0];
+  if (!leftHook || typeof leftHook !== 'object' || Array.isArray(leftHook)) return false;
+  const actual = leftHook as Record<string, unknown>;
+  return Object.keys(actual).length === Object.keys(rightHook).length
+    && actual.type === rightHook.type
+    && actual.command === rightHook.command
+    && actual.timeout === rightHook.timeout
+    && actual.statusMessage === rightHook.statusMessage;
+}
+
+function isRepairableCodexHookGroup(left: unknown, right: Record<string, unknown>): boolean {
+  if (!left || typeof left !== 'object' || Array.isArray(left)) return false;
+  const candidate = left as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => key !== 'hooks')) return false;
+  const expectedCommand = ((right.hooks as Array<Record<string, unknown>>)[0] || {}).command;
+  const hooks = Array.isArray(candidate.hooks) ? candidate.hooks : [candidate.hooks];
+  return hooks.length === 1 && hooks.some((hook) => Boolean(hook) && typeof hook === 'object' && !Array.isArray(hook)
+    && (hook as Record<string, unknown>).command === expectedCommand);
+}
+
+function containsCodexManagedHandler(left: unknown, right: Record<string, unknown>): boolean {
+  if (!left || typeof left !== 'object' || Array.isArray(left)) return false;
+  const candidate = left as Record<string, unknown>;
+  const expectedCommand = ((right.hooks as Array<Record<string, unknown>>)[0] || {}).command;
+  const hooks = Array.isArray(candidate.hooks) ? candidate.hooks : [candidate.hooks];
+  return hooks.some((hook) => Boolean(hook) && typeof hook === 'object' && !Array.isArray(hook)
+    && (hook as Record<string, unknown>).command === expectedCommand);
+}
+
+function repairCodexManagedHandlers(
+  left: unknown,
+  right: Record<string, unknown>,
+  keepManagedHandler: boolean,
+): Record<string, unknown> | undefined {
+  const candidate = left as Record<string, unknown>;
+  const expectedHook = (right.hooks as Array<Record<string, unknown>>)[0];
+  const hooks = Array.isArray(candidate.hooks) ? candidate.hooks : [candidate.hooks];
+  let keptManagedHandler = false;
+  const repairedHooks = hooks.flatMap((hook) => {
+    const managed = Boolean(hook) && typeof hook === 'object' && !Array.isArray(hook)
+      && (hook as Record<string, unknown>).command === expectedHook.command;
+    if (!managed) return [hook];
+    if (keepManagedHandler && !keptManagedHandler) {
+      keptManagedHandler = true;
+      return [expectedHook];
+    }
+    return [];
+  });
+  return repairedHooks.length > 0 ? { ...candidate, hooks: repairedHooks } : undefined;
+}
+
+function codexInstallMessages(): string[] {
+  const minimum = '0.148.0-alpha.15';
+  const feature = spawnSync('codex', ['features', 'list'], { encoding: 'utf8' });
+  const messages = [
+    `Codex ${minimum} or newer with the hooks feature is required.`,
+    'Open /hooks in Codex to review and trust the new project hooks; untrusted project hooks are skipped.',
+    'Legacy .codex/agentguard-hook.json is not active; an existing file is preserved for migration safety.',
+  ];
+  if (feature.error || feature.status !== 0) {
+    messages.push('Warning: could not run `codex features list`; verify that `hooks` is available before relying on this integration.');
+  } else if (!/^\s*hooks\s+\S+\s+true\s*$/m.test(feature.stdout || '')) {
+    messages.push('Warning: this Codex installation does not report the `hooks` feature as enabled.');
+  }
+  return messages;
 }
 
 function hermesHooksTemplate(skillDir: string): string {

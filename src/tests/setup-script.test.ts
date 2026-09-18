@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -65,5 +65,19 @@ describe('setup.sh', () => {
     assert.match(stdout, /Platform detected: custom/);
     assert.ok(existsSync(join(skillDir, 'SKILL.md')));
     assert.ok(existsSync(join(skillDir, 'scripts', 'action-cli.js')));
+  });
+
+  it('does not create or overwrite the retired Codex hook file', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentguard-setup-codex-home-'));
+    const codexDir = join(home, '.codex');
+    const legacyPath = join(codexDir, 'agentguard-hook.json');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(legacyPath, '{"legacy":"keep"}\n', { flag: 'wx' });
+
+    const { stdout } = await runSetup([], home);
+
+    assert.match(stdout, /Platform detected: codex/);
+    assert.equal(readFileSync(legacyPath, 'utf8'), '{"legacy":"keep"}\n');
+    assert.match(stdout, /agentguard init --agent codex/);
   });
 });

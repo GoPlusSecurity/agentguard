@@ -15,12 +15,155 @@ describe('Agent template installers', () => {
     assert.ok(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8').includes('agentguard-protect.sh'));
   });
 
-  it('writes Codex skill and AgentGuard hook config', () => {
+  it('writes native synchronous Codex hooks with stable wrapper paths', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-'));
-    installAgentTemplates('codex', { cwd: dir });
+    const result = installAgentTemplates('codex', { cwd: dir });
+    const configPath = join(dir, '.codex', 'hooks.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
 
     assert.ok(existsSync(join(dir, '.codex', 'skills', 'agentguard', 'SKILL.md')));
-    assert.ok(readFileSync(join(dir, '.codex', 'agentguard-hook.json'), 'utf8').includes('AGENTGUARD_AGENT_HOST=codex'));
+    assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-user-prompt.sh')));
+    assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-pre-tool.sh')));
+    assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-post-tool.sh')));
+    assert.ok(!existsSync(join(dir, '.codex', 'agentguard-hook.json')));
+    assert.ok(result.files.includes(configPath));
+    assert.deepEqual(Object.keys(config.hooks).sort(), [
+      'PermissionRequest', 'PostCompact', 'PostToolUse', 'PreCompact', 'PreToolUse', 'UserPromptSubmit',
+    ].sort());
+    for (const groups of Object.values(config.hooks) as Array<Array<{ hooks: Array<Record<string, unknown>> }>>) {
+      for (const group of groups) {
+        for (const hook of group.hooks) {
+          assert.equal(hook.type, 'command');
+          assert.equal(hook.async, undefined);
+          assert.match(String(hook.command), /^"\//);
+        }
+      }
+    }
+  });
+
+  it('preserves user Codex hooks, unknown keys, and legacy files while merging idempotently', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-merge-'));
+    const codexDir = join(dir, '.codex');
+    const configPath = join(codexDir, 'hooks.json');
+    const legacyPath = join(codexDir, 'agentguard-hook.json');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      description: 'keep me',
+      futureKey: { enabled: true },
+      hooks: {
+        PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: '/usr/local/bin/user-hook' }] }],
+        FutureEvent: [{ future: true }],
+      },
+    }, null, 2));
+    writeFileSync(legacyPath, '{"legacy":"untouched"}\n');
+
+    installAgentTemplates('codex', { cwd: dir, force: true });
+    const once = readFileSync(configPath, 'utf8');
+    installAgentTemplates('codex', { cwd: dir, force: true });
+    const twice = readFileSync(configPath, 'utf8');
+    const config = JSON.parse(twice);
+
+    assert.equal(twice, once);
+    assert.equal(config.description, 'keep me');
+    assert.deepEqual(config.futureKey, { enabled: true });
+    assert.deepEqual(config.hooks.FutureEvent, [{ future: true }]);
+    assert.ok(config.hooks.PreToolUse.some((group: { hooks?: Array<{ command?: string }> }) =>
+      group.hooks?.some((hook) => hook.command === '/usr/local/bin/user-hook')));
+    assert.equal(readFileSync(legacyPath, 'utf8'), '{"legacy":"untouched"}\n');
+  });
+
+  it('repairs same-command Codex entries with async, wrong-type, or malformed definitions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-repair-'));
+    const codexDir = join(dir, '.codex');
+    const configPath = join(codexDir, 'hooks.json');
+    const userPromptCommand = JSON.stringify(join(dir, '.codex', 'hooks', 'agentguard-user-prompt.sh'));
+    const preToolCommand = JSON.stringify(join(dir, '.codex', 'hooks', 'agentguard-pre-tool.sh'));
+    const postToolCommand = JSON.stringify(join(dir, '.codex', 'hooks', 'agentguard-post-tool.sh'));
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      hooks: {
+        UserPromptSubmit: [{ hooks: { type: 'command', command: userPromptCommand } }],
+        PreToolUse: [{ hooks: [{ type: 'prompt', command: preToolCommand, timeout: 30, statusMessage: 'Checking tool action' }] }],
+        PostToolUse: [{ hooks: [{ type: 'command', command: postToolCommand, timeout: 30, statusMessage: 'Checking tool result', async: true }] }],
+        PermissionRequest: [
+          { hooks: [{ type: 'command', command: preToolCommand, timeout: 30, statusMessage: 'Checking approval request' }] },
+          { hooks: [{ type: 'command', command: preToolCommand, timeout: 30, statusMessage: 'Checking approval request', async: true }] },
+        ],
+      },
+    }, null, 2));
+
+    installAgentTemplates('codex', { cwd: dir, force: true });
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      hooks: Record<string, Array<{ hooks: Array<Record<string, unknown>> }>>;
+    };
+    for (const [event, command, statusMessage] of [
+      ['UserPromptSubmit', userPromptCommand, 'Checking prompt privacy'],
+      ['PreToolUse', preToolCommand, 'Checking tool action'],
+      ['PostToolUse', postToolCommand, 'Checking tool result'],
+      ['PermissionRequest', preToolCommand, 'Checking approval request'],
+    ] as const) {
+      assert.equal(config.hooks[event].length, 1, event);
+      assert.deepEqual(config.hooks[event][0], {
+        hooks: [{ type: 'command', command, timeout: 30, statusMessage }],
+      }, event);
+    }
+  });
+
+  it('repairs an AgentGuard handler in a mixed Codex group without deleting user handlers or metadata', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-mixed-repair-'));
+    const codexDir = join(dir, '.codex');
+    const configPath = join(codexDir, 'hooks.json');
+    const preToolCommand = JSON.stringify(join(dir, '.codex', 'hooks', 'agentguard-pre-tool.sh'));
+    const userHook = {
+      type: 'command',
+      command: '/usr/local/bin/user-pre-tool-hook',
+      timeout: 12,
+      userOption: 'preserve',
+    };
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          matcher: '^mcp__',
+          futureMetadata: { preserve: true },
+          hooks: [
+            {
+              type: 'prompt',
+              command: preToolCommand,
+              timeout: 1,
+              statusMessage: 'stale',
+              async: true,
+            },
+            userHook,
+          ],
+        }],
+      },
+    }, null, 2));
+
+    installAgentTemplates('codex', { cwd: dir, force: true });
+    const once = readFileSync(configPath, 'utf8');
+    installAgentTemplates('codex', { cwd: dir, force: true });
+    const twice = readFileSync(configPath, 'utf8');
+    const config = JSON.parse(twice) as {
+      hooks: { PreToolUse: Array<Record<string, unknown>> };
+    };
+
+    assert.equal(twice, once);
+    assert.deepEqual(config.hooks.PreToolUse, [
+      {
+        matcher: '^mcp__',
+        futureMetadata: { preserve: true },
+        hooks: [userHook],
+      },
+      {
+        hooks: [{
+          type: 'command',
+          command: preToolCommand,
+          timeout: 30,
+          statusMessage: 'Checking tool action',
+        }],
+      },
+    ]);
   });
 
   it('installs and enables the native Hermes plugin by default', () => {

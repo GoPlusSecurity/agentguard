@@ -188,13 +188,15 @@ describe('init CLI', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'agentguard-init-cwd-'));
     const cliPath = resolve('dist', 'cli.js');
 
-    await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'codex', '--force'], {
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'init', '--agent', 'codex', '--force'], {
       cwd,
       env: { ...process.env, AGENTGUARD_HOME: home },
     });
 
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agentHost?: string };
     assert.equal(config.agentHost, 'codex');
+    assert.match(stdout, /Codex 0\.148\.0-alpha\.15 or newer/);
+    assert.match(stdout, /Open \/hooks in Codex to review and trust/);
   });
 
   it('installs the native AgentGuard bundle when DSH is selected explicitly', async () => {
@@ -375,7 +377,9 @@ describe('init CLI', () => {
     assert.ok(existsSync(join(cwd, '.hermes', 'plugins', 'agentguard', 'plugin.yaml')));
     assert.ok(readFileSync(join(cwd, '.hermes', 'config.yaml'), 'utf8').includes('- agentguard'));
     assert.ok(existsSync(join(cwd, '.codex', 'skills', 'agentguard', 'SKILL.md')));
-    assert.ok(existsSync(join(cwd, '.codex', 'agentguard-hook.json')));
+    assert.ok(existsSync(join(cwd, '.codex', 'hooks.json')));
+    assert.ok(existsSync(join(cwd, '.codex', 'hooks', 'agentguard-pre-tool.sh')));
+    assert.ok(!existsSync(join(cwd, '.codex', 'agentguard-hook.json')));
     assert.match(stdout, /Installed openclaw template:/);
     assert.match(stdout, /Installed hermes template:/);
     assert.match(stdout, /Hermes native plugin enabled in config\.yaml/);

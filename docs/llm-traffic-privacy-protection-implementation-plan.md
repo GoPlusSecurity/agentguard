@@ -484,39 +484,39 @@ OpenClaw 源码只作为生命周期契约的只读评估依据，不产生任�
 
 当前 `agentguard init --agent codex` 生成 `.codex/skills/agentguard/SKILL.md` 和 `.codex/agentguard-hook.json`，后者不是 Codex 官方 Hook 的加载文件；Skill 也依赖模型自觉调用 `agentguard protect`，不能作为强制执行机制。
 
-- [ ] 改为生成或安全合并官方 `<repo>/.codex/hooks.json`；不要覆盖用户已有 Hook。
-- [ ] 保留 Skill 作为使用说明，但不得把 Skill 描述成安全边界。
-- [ ] 安装后提示用户通过 `/hooks` 审查并信任新增 Hook；在未信任前，Codex 会跳过项目 Hook。
-- [ ] 记录受支持的最低 Codex 版本，并在初始化时检查 `hooks` feature 是否可用。
-- [ ] Hook command 使用 Git 根目录或安装时解析出的稳定绝对路径，不能假设 Codex 总从仓库根目录启动。
+- [x] 改为生成或安全合并官方 `<repo>/.codex/hooks.json`；不要覆盖用户已有 Hook。
+- [x] 保留 Skill 作为使用说明，但不得把 Skill 描述成安全边界。
+- [x] 安装后提示用户通过 `/hooks` 审查并信任新增 Hook；在未信任前，Codex 会跳过项目 Hook。
+- [x] 记录受支持的最低 Codex 版本，并在初始化时检查 `hooks` feature 是否可用。
+- [x] Hook command 使用 Git 根目录或安装时解析出的稳定绝对路径，不能假设 Codex 总从仓库根目录启动。
 
 #### 8.2 Hook 映射
 
-- [ ] `UserPromptSubmit`：将 `prompt` 映射成只在本机处理的 `user_prompt`/隐私检查事件；`block` 输出 `{ "decision": "block", "reason": "<脱敏原因>" }` 或使用退出码 `2`；`warn` 只返回简短 `systemMessage`。
-- [ ] `PreToolUse`：按 `tool_name` 和 `tool_input` 映射为 `shell`、`file_read`、`file_write`、`network`、`mcp_tool`；AgentGuard `block` 和不能原生审批的 `require_approval` 都返回官方 `permissionDecision: "deny"`。
-- [ ] `PostToolUse`：扫描敏感工具结果；命中阻断规则时阻止原始结果继续交给模型，但明确它不能撤销已产生的副作用。
-- [ ] `PermissionRequest`：只处理 Codex 已经触发的审批。AgentGuard 可以 deny 或 allow，但不能使用它为普通动作主动发起审批。
-- [ ] `PreCompact`/`PostCompact`：只记录脱敏元数据和策略状态，不把 transcript 或 compact 内容送到 Cloud。
-- [ ] 所有安全 Hook 必须同步运行；禁止设置 `async: true`。
+- [x] `UserPromptSubmit`：将 `prompt` 映射成只在本机处理的 `user_prompt`/隐私检查事件；`block` 输出 `{ "decision": "block", "reason": "<脱敏原因>" }` 或使用退出码 `2`；`warn` 只返回简短 `systemMessage`。
+- [x] `PreToolUse`：按 `tool_name` 和 `tool_input` 映射为 `shell`、`file_read`、`file_write`、`network`、`mcp_tool`；AgentGuard `block` 和不能原生审批的 `require_approval` 都返回官方 `permissionDecision: "deny"`。
+- [x] `PostToolUse`：扫描敏感工具结果；命中阻断规则时阻止原始结果继续交给模型，但明确它不能撤销已产生的副作用。
+- [x] `PermissionRequest`：只处理 Codex 已经触发的审批。AgentGuard 可以 deny 或 allow，但不能使用它为普通动作主动发起审批。
+- [x] `PreCompact`/`PostCompact`：只记录脱敏元数据和策略状态，不把 transcript 或 compact 内容送到 Cloud。
+- [x] 所有安全 Hook 必须同步运行；禁止设置 `async: true`。
 
 #### 8.3 决策与失败语义
 
-- [ ] 删除或停止输出 Codex 专用 `{ "decision": "confirm" }`；这不是当前官方 `PreToolUse` 决策格式。
-- [ ] 不输出 `permissionDecision: "ask"`。当前 Codex 会把它视为不受支持的字段、报告 Hook 失败并继续工具调用。
-- [ ] `require_approval` 首版采取 fail-closed：拒绝当前工具调用，返回 action id 和脱敏说明，要求用户显式批准后重试；审批命令本身仍需防止 Agent 自行执行。
-- [ ] AgentGuard wrapper 对可捕获的 JSON 解析失败或 evaluator 错误以退出码 `2` 拒绝；宿主强制终止 Hook、进程未能返回退出码等情况按 Codex 实际语义记录，不得笼统宣称超时 fail-closed。
-- [ ] 不读取或解析 `transcript_path` 来重建最终模型请求；官方明确该记录格式不是稳定 Hook 接口，且即使读取也不能获得可靠的发送前阻断点。
-- [ ] Hook stdout/stderr 只返回规则 ID、风险级别、action id 和脱敏原因，避免 Codex 的长输出溢写机制把敏感内容落盘。
+- [x] 删除或停止输出 Codex 专用 `{ "decision": "confirm" }`；这不是当前官方 `PreToolUse` 决策格式。
+- [x] 不输出 `permissionDecision: "ask"`。当前 Codex 会把它视为不受支持的字段、报告 Hook 失败并继续工具调用。
+- [x] `require_approval` 首版采取 fail-closed：拒绝当前工具调用，返回 action id 和脱敏说明，要求用户显式批准后重试；审批命令本身仍需防止 Agent 自行执行。
+- [x] AgentGuard wrapper 对可捕获的 JSON 解析失败或 evaluator 错误以退出码 `2` 拒绝；宿主强制终止 Hook、进程未能返回退出码等情况按 Codex 实际语义记录，不得笼统宣称超时 fail-closed。
+- [x] 不读取或解析 `transcript_path` 来重建最终模型请求；官方明确该记录格式不是稳定 Hook 接口，且即使读取也不能获得可靠的发送前阻断点。
+- [x] Hook stdout/stderr 只返回规则 ID、风险级别、action id 和脱敏原因，避免 Codex 的长输出溢写机制把敏感内容落盘。
 
 #### 8.4 Codex 专属验收
 
-- [ ] 用户 prompt 命中 API key、证件号等策略时，模型请求开始前被 `UserPromptSubmit` 拒绝。
-- [ ] Bash、`apply_patch`、MCP 和已确认支持的本地函数工具均经过 `PreToolUse`；危险调用在工具执行前被拒绝。
-- [ ] endpoint 配置修改、敏感文件批量读取和显式 `curl` 外发有正向与误报抑制测试。
-- [ ] `PostToolUse` 能阻止敏感结果继续进入下一次模型请求，但测试明确验证原工具副作用不会被误报为已撤销。
-- [ ] 已有 `.codex/hooks.json` 被结构化合并且重复执行 init 幂等。
-- [ ] 未信任 Hook、托管 WebSearch、专用工具绕过和 Codex 内部模型调用被列为已知缺口，不计入“受保护”统计。
-- [ ] 规则 14–19 的报告区分 `full`、`partial`、`observe_only`、`unsupported`，不得把 prompt/tool 命中率包装成模型 API 流量覆盖率。
+- [x] 用户 prompt 命中 API key、证件号等策略时，模型请求开始前被 `UserPromptSubmit` 拒绝。
+- [x] Bash、`apply_patch`、MCP 和已确认支持的本地函数工具均经过 `PreToolUse`；危险调用在工具执行前被拒绝。
+- [x] endpoint 配置修改、敏感文件批量读取和显式 `curl` 外发有正向与误报抑制测试。
+- [x] `PostToolUse` 能阻止敏感结果继续进入下一次模型请求，但测试明确验证原工具副作用不会被误报为已撤销。
+- [x] 已有 `.codex/hooks.json` 被结构化合并且重复执行 init 幂等。
+- [x] 未信任 Hook、托管 WebSearch、专用工具绕过和 Codex 内部模型调用被列为已知缺口，不计入“受保护”统计。
+- [x] 规则 14–19 的报告区分 `full`、`partial`、`observe_only`、`unsupported`，不得把 prompt/tool 命中率包装成模型 API 流量覆盖率。
 
 **Acceptance:** Codex 的用户输入和受支持本地工具路径可以被官方同步 Hook 检查并拒绝；文档、CLI 状态和审计明确显示其有限覆盖，不宣称能够观察或阻断最终模型 endpoint、credential、完整 payload 或原始模型响应。
 

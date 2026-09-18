@@ -6,6 +6,7 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
+import { redactText } from './redaction.js';
 import type {
   CoverageLevel,
   CredentialKind,
@@ -45,10 +46,20 @@ export interface ProtectResult {
   policySource: 'cloud' | 'cache' | 'default' | 'cloud-decision';
 }
 
+type CodexHookEvent =
+  | 'UserPromptSubmit'
+  | 'PreToolUse'
+  | 'PermissionRequest'
+  | 'PostToolUse'
+  | 'PreCompact'
+  | 'PostCompact';
+
 export async function protectAction(options: ProtectOptions): Promise<ProtectResult | null> {
   const action = buildRuntimeAction(options);
+  const codexHookEvent = pickCodexHookEventFromAction(action);
+  const selfApprovalAttempt = codexHookEvent === 'PreToolUse' && isAgentGuardApprovalCommand(action);
   if (!action.input) return null;
-  if (isAgentGuardRuntimeAction(action)) return null;
+  if (isAgentGuardRuntimeAction(action) && !selfApprovalAttempt) return null;
   const approvalStorePath = resolveApprovalStorePath(options.config);
 
   const client = new AgentGuardCloudClient(options.config);
@@ -58,7 +69,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
   let decision: RuntimeDecision;
   let policySource: ProtectResult['policySource'];
-  const postToolCall = options.phase === 'post';
+  const postToolCall = options.phase === 'post' || codexHookEvent === 'PostToolUse';
   const canEnforce = action.canBlockCurrentAction !== false;
   if (options.decisionMode === 'cloud' && client.connected) {
     decision = normalizeRuntimeDecision(await client.evaluateAction(action));
@@ -73,13 +84,16 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     decision = normalizeRuntimeDecision(evaluation.decision);
     policySource = evaluation.policySource;
   }
+  decision = enforceCodexHookDecision(action, decision, selfApprovalAttempt);
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
-  if (!options.auditSafe && shouldSuppressRuntimeReport(decision)) return null;
+  const auditSafe = options.auditSafe || codexHookEvent === 'PermissionRequest'
+    || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact';
+  if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
   const event: RuntimeAuditEvent = {
     ...action,
@@ -116,7 +130,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
 
   let approvalChannel: ProtectResult['approvalChannel'];
-  if (client.connected && policySource !== 'cloud-decision') {
+  if (client.connected && policySource !== 'cloud-decision' && !isCodexCompactEvent(codexHookEvent)) {
     await client.ingestEvents([event]).catch(() => spoolEvent(options.config.eventSpoolPath, event));
   }
   if (canEnforce && !postToolCall && decision.decision === 'require_approval') {
@@ -131,6 +145,46 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+}
+
+function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
+  if (action.actionType !== 'shell') return false;
+  const normalized = action.input.replace(/\\(.)/gs, '$1').replace(/["']/g, ' ');
+  return /(?:^|[^A-Za-z0-9_-])(?:[^\s;|&()]*[\\/])?agentguard(?:[^A-Za-z0-9_-]|$)/i.test(normalized)
+    && /(?:^|[^A-Za-z0-9_-])approve(?:[^A-Za-z0-9_-]|$)/i.test(normalized);
+}
+
+function enforceCodexHookDecision(
+  action: RuntimeAction,
+  decision: RuntimeDecision,
+  selfApprovalAttempt: boolean,
+): RuntimeDecision {
+  const event = pickCodexHookEventFromAction(action);
+  const scansVisibleContent = event === 'UserPromptSubmit' || event === 'PostToolUse';
+  const containsSensitiveContent = scansVisibleContent && redactText(action.input) !== action.input;
+  if (!selfApprovalAttempt && !containsSensitiveContent) return decision;
+
+  return {
+    ...decision,
+    decision: 'block',
+    policyDecision: 'block',
+    riskScore: 100,
+    riskLevel: 'critical',
+    coverageLevel: 'partial',
+    reasons: [{
+      code: selfApprovalAttempt ? 'AGENT_SELF_APPROVAL' : 'PII_EGRESS',
+      severity: 'critical',
+      title: selfApprovalAttempt ? 'Agent approval command denied' : 'Sensitive content blocked',
+      description: selfApprovalAttempt
+        ? 'Approval must be performed explicitly by the user outside the agent tool path.'
+        : 'The locally visible hook content contains sensitive data and was blocked.',
+      evidence: '[REDACTED]',
+    }],
+  };
+}
+
+function isCodexCompactEvent(event: CodexHookEvent | undefined): boolean {
+  return event === 'PreCompact' || event === 'PostCompact';
 }
 
 function resolveApprovalStorePath(config: AgentGuardConfig): string {
@@ -150,6 +204,9 @@ function shouldSuppressRuntimeReport(decision: RuntimeDecision): boolean {
 }
 
 export function formatProtectResult(result: ProtectResult, json = false): string {
+  const codexHook = formatCodexHookResult(result);
+  if (!json && codexHook !== null) return codexHook;
+
   if (!json) {
     const agentApproval = formatAgentApproval(result);
     if (agentApproval) return agentApproval;
@@ -201,6 +258,7 @@ export function exitCodeForDecision(
   result?: Pick<ProtectResult, 'approvalChannel' | 'event'>
 ): number {
   if (result?.event.canBlockCurrentAction === false) return 0;
+  if (result?.event.agentHost === 'codex' && pickCodexHookEventFromAction(result.event)) return 0;
   if (
     decision.decision === 'require_approval' &&
     result?.approvalChannel === 'agent' &&
@@ -246,6 +304,7 @@ function publicDecision(decision: RuntimeDecision['decision']): 'allow' | 'warn'
 
 function publicEnforcedDecision(result: ProtectResult): 'allow' | 'warn' | 'confirm' | 'block' {
   if (isNonEnforcingObservation(result)) return 'warn';
+  if (result.event.agentHost === 'codex' && result.decision.decision === 'require_approval') return 'block';
   return publicDecision(result.decision.decision);
 }
 
@@ -272,20 +331,79 @@ function formatAgentApproval(result: ProtectResult): string | null {
 
   if (result.event.agentHost === 'codex') {
     return JSON.stringify({
-      decision: 'confirm',
-      actionId: result.decision.actionId,
-      riskScore: result.decision.riskScore,
-      riskLevel: result.decision.riskLevel,
-      reasons: result.decision.reasons,
-      approvalChannel: 'agent',
-      message: reason,
-      approvalCommand: result.pendingApproval ? approvalCommand(result.pendingApproval) : undefined,
-      approvalInstruction: result.pendingApproval ? approvalInstruction(result.pendingApproval) : undefined,
-      approvalExpiresAt: result.pendingApproval?.expiresAt,
-    }, null, 2);
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: safeCodexReason(result, true),
+      },
+    });
   }
 
   return null;
+}
+
+function formatCodexHookResult(result: ProtectResult): string | null {
+  if (result.event.agentHost !== 'codex') return null;
+  const event = pickCodexHookEventFromAction(result.event);
+  if (!event) return null;
+  const decision = result.decision.decision;
+  const denied = decision === 'block' || decision === 'require_approval';
+  const reason = safeCodexReason(result, decision === 'require_approval');
+
+  if (event === 'UserPromptSubmit') {
+    if (denied) return JSON.stringify({ decision: 'block', reason });
+    if (decision === 'warn') return JSON.stringify({ systemMessage: reason });
+    return '';
+  }
+  if (event === 'PreToolUse') {
+    if (denied) {
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: reason,
+        },
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  if (event === 'PermissionRequest') {
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: denied
+          ? { behavior: 'deny', message: reason }
+          : { behavior: 'allow' },
+      },
+    });
+  }
+  if (event === 'PostToolUse') {
+    if (denied) {
+      return JSON.stringify({
+        decision: 'block',
+        reason: `${reason} Tool side effects already occurred and were not undone.`,
+      });
+    }
+    return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
+  }
+  return '';
+}
+
+function safeCodexReason(result: ProtectResult, approvalRequired = false): string {
+  const ruleIds = result.decision.reasons
+    .map((reason) => /^[A-Z][A-Z0-9_]{0,63}$/.test(reason.code) ? reason.code : 'POLICY')
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(',') || 'POLICY';
+  return (
+    `AgentGuard ${approvalRequired ? 'approval required' : 'policy decision'}; ` +
+    `action=${safeCodexActionId(result.decision.actionId)}; risk=${result.decision.riskLevel}; rules=${ruleIds}; reason=[REDACTED].` +
+    (approvalRequired ? ' Approve this action id explicitly outside the agent, then retry.' : '')
+  );
+}
+
+function safeCodexActionId(value: string): string {
+  return /^[A-Za-z0-9_-]{1,160}$/.test(value) ? value : 'act_redacted';
 }
 
 function formatApprovalReason(result: ProtectResult): string {
@@ -319,34 +437,138 @@ function approvalCommand(record: ApprovalRecord): string {
 }
 
 function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
-  const raw = parseRawInput(options.rawInput, options.stdinText);
+  const wrapper = process.env.AGENTGUARD_CODEX_WRAPPER;
+  const nativeCodexHook = (options.agentHost || process.env.AGENTGUARD_AGENT_HOST) === 'codex' && Boolean(wrapper);
+  const raw = parseRawInput(options.rawInput, options.stdinText, nativeCodexHook);
+  if (nativeCodexHook) validateNativeCodexHook(raw, wrapper);
+  const codexHookEvent = pickCodexHookEvent(raw);
   const envActionType = process.env.AGENTGUARD_ACTION_TYPE as RuntimeActionType | undefined;
   const envAgentHost = process.env.AGENTGUARD_AGENT_HOST as RuntimeAgentHost | undefined;
   const toolName = options.toolName || process.env.AGENTGUARD_TOOL_NAME || pickToolName(raw);
-  const actionType = options.actionType || envActionType || mapToolToRuntimeAction(toolName, raw);
+  const actionType = options.actionType || envActionType || codexActionType(codexHookEvent, toolName, raw);
   const toolInput = pickToolInput(raw);
+  const codexLifecycle = codexLifecycleFields(codexHookEvent);
 
   return {
     sessionId: options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw),
     agentHost: options.agentHost || envAgentHost || 'claude-code',
     actionType,
     toolName,
-    input: process.env.TOOL_INPUT || pickInput(raw, actionType, toolInput),
+    input: process.env.TOOL_INPUT || pickInput(raw, actionType, toolInput, codexHookEvent),
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
-    lifecycleStage: pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
-    canBlockCurrentAction: pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
-    coverageLevel: pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
-    enforcementStatus: pickEnum(raw?.enforcementStatus ?? raw?.enforcement_status, ENFORCEMENT_STATUSES),
-    missingFacts: pickEnumArray(raw?.missingFacts ?? raw?.missing_facts, MISSING_LLM_FACTS),
+    lifecycleStage: codexLifecycle.lifecycleStage
+      ?? pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
+    canBlockCurrentAction: codexLifecycle.canBlockCurrentAction
+      ?? pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
+    coverageLevel: codexLifecycle.coverageLevel
+      ?? pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
+    enforcementStatus: codexLifecycle.enforcementStatus
+      ?? pickEnum(raw?.enforcementStatus ?? raw?.enforcement_status, ENFORCEMENT_STATUSES),
+    missingFacts: codexLifecycle.missingFacts
+      ?? pickEnumArray(raw?.missingFacts ?? raw?.missing_facts, MISSING_LLM_FACTS),
     llm: pickLlmMetadata(raw),
     metadata: {
       rawProtocol: raw ? 'stdin-json' : 'env',
+      ...(codexHookEvent ? { codexHookEvent } : {}),
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
       ...pickNetworkMetadata(raw, toolInput),
       ...pickFilePathMetadata(raw),
     },
   };
+}
+
+function validateNativeCodexHook(raw: Record<string, unknown> | null, wrapper: string | undefined): void {
+  if (!raw || typeof raw.session_id !== 'string' || typeof raw.cwd !== 'string') throw invalidCodexPayload();
+  const event = pickCodexHookEvent(raw);
+  const validPair = wrapper === 'user-prompt'
+    ? event === 'UserPromptSubmit'
+    : wrapper === 'pre-tool'
+      ? event === 'PreToolUse' || event === 'PermissionRequest'
+      : wrapper === 'post-tool'
+        ? event === 'PostToolUse' || event === 'PreCompact' || event === 'PostCompact'
+        : false;
+  if (!event || !validPair) throw invalidCodexPayload();
+
+  if (event === 'UserPromptSubmit') {
+    if (typeof raw.prompt !== 'string') throw invalidCodexPayload();
+    return;
+  }
+  if (event === 'PreToolUse' || event === 'PermissionRequest' || event === 'PostToolUse') {
+    if (typeof raw.tool_name !== 'string' || !raw.tool_name || !isPlainRecord(raw.tool_input)) {
+      throw invalidCodexPayload();
+    }
+    if (event === 'PostToolUse' && !Object.prototype.hasOwnProperty.call(raw, 'tool_response')) {
+      throw invalidCodexPayload();
+    }
+    return;
+  }
+  if (typeof raw.trigger !== 'string'
+      || !(typeof raw.transcript_path === 'string' || raw.transcript_path === null)) throw invalidCodexPayload();
+}
+
+function invalidCodexPayload(): Error {
+  return new Error('Invalid Codex hook payload.');
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickCodexHookEvent(raw: Record<string, unknown> | null): CodexHookEvent | undefined {
+  const value = raw?.hook_event_name;
+  return value === 'UserPromptSubmit' || value === 'PreToolUse' || value === 'PermissionRequest'
+    || value === 'PostToolUse' || value === 'PreCompact' || value === 'PostCompact'
+    ? value
+    : undefined;
+}
+
+function pickCodexHookEventFromAction(action: Pick<RuntimeAction, 'metadata'>): CodexHookEvent | undefined {
+  const value = action.metadata?.codexHookEvent;
+  return typeof value === 'string' ? pickCodexHookEvent({ hook_event_name: value }) : undefined;
+}
+
+function codexActionType(
+  event: CodexHookEvent | undefined,
+  toolName: string,
+  raw: Record<string, unknown> | null,
+): RuntimeActionType {
+  if (event === 'UserPromptSubmit') return 'other';
+  if (event === 'PostToolUse' || event === 'PreCompact' || event === 'PostCompact') return 'other';
+  return mapToolToRuntimeAction(toolName, raw);
+}
+
+function codexLifecycleFields(event: CodexHookEvent | undefined): Pick<
+  RuntimeAction,
+  'lifecycleStage' | 'canBlockCurrentAction' | 'coverageLevel' | 'enforcementStatus' | 'missingFacts'
+> {
+  if (event === 'UserPromptSubmit') {
+    return {
+      lifecycleStage: 'user_prompt',
+      canBlockCurrentAction: true,
+      coverageLevel: 'partial',
+      missingFacts: [
+        'complete_payload', 'final_destination', 'credential_kind', 'credential_presence',
+        'exact_payload_bytes', 'attachment_bytes', 'file_path_count', 'retry_and_fallback',
+        'auxiliary_model_calls',
+      ],
+    };
+  }
+  if (event === 'PreToolUse' || event === 'PermissionRequest') {
+    return { lifecycleStage: 'pre_tool', canBlockCurrentAction: true, coverageLevel: 'partial' };
+  }
+  if (event === 'PostToolUse') {
+    return { lifecycleStage: 'post_tool', canBlockCurrentAction: true, coverageLevel: 'partial' };
+  }
+  if (event === 'PreCompact' || event === 'PostCompact') {
+    return {
+      lifecycleStage: 'stop',
+      canBlockCurrentAction: false,
+      coverageLevel: 'observe_only',
+      enforcementStatus: 'observed',
+    };
+  }
+  return {};
 }
 
 const LIFECYCLE_STAGES: RuntimeLifecycleStage[] = [
@@ -439,14 +661,18 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function parseRawInput(rawInput: unknown, stdinText?: string): Record<string, unknown> | null {
-  if (rawInput && typeof rawInput === 'object') return rawInput as Record<string, unknown>;
+function parseRawInput(rawInput: unknown, stdinText?: string, strictJson = false): Record<string, unknown> | null {
+  if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) return rawInput as Record<string, unknown>;
+  if (strictJson && rawInput !== undefined) throw new Error('Codex hook input must be a JSON object.');
   const text = stdinText?.trim();
   if (!text) return null;
   try {
     const parsed = JSON.parse(text) as unknown;
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    if (strictJson) throw new Error('Codex hook input must be a JSON object.');
+    return null;
   } catch {
+    if (strictJson) throw new Error('Codex hook input must be a JSON object.');
     return { content: text };
   }
 }
@@ -458,9 +684,10 @@ function pickToolName(raw: Record<string, unknown> | null): string {
 
 function mapToolToRuntimeAction(toolName: string, raw: Record<string, unknown> | null): RuntimeActionType {
   const lower = toolName.toLowerCase();
+  if (lower.startsWith('mcp__')) return 'mcp_tool';
   if (toolName === 'Bash' || lower.includes('shell') || lower.includes('exec')) return 'shell';
-  if (toolName === 'Read' || lower.includes('read')) return 'file_read';
-  if (['Write', 'Edit', 'MultiEdit'].includes(toolName) || lower.includes('write')) return 'file_write';
+  if (toolName === 'Read' || lower.includes('read') || lower === 'view_image') return 'file_read';
+  if (['Write', 'Edit', 'MultiEdit', 'apply_patch'].includes(toolName) || lower.includes('write') || lower.includes('patch')) return 'file_write';
   if (lower.includes('websearch') || lower.includes('web_search') || lower.includes('search_query')) return 'web_search';
   if (lower.includes('web') || lower.includes('browser')) return 'network';
   if (raw?.actionType && typeof raw.actionType === 'string') return raw.actionType as RuntimeActionType;
@@ -471,9 +698,18 @@ function mapToolToRuntimeAction(toolName: string, raw: Record<string, unknown> |
 function pickInput(
   raw: Record<string, unknown> | null,
   actionType: RuntimeActionType,
-  toolInput = pickToolInput(raw)
+  toolInput = pickToolInput(raw),
+  codexHookEvent?: CodexHookEvent,
 ): string {
   if (!raw) return '';
+  if (codexHookEvent === 'UserPromptSubmit') return firstString(raw.prompt);
+  if (codexHookEvent === 'PostToolUse') {
+    const response = raw.tool_response ?? raw.toolResponse;
+    return typeof response === 'string' ? response : response === undefined ? '' : JSON.stringify(response);
+  }
+  if (codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact') {
+    return `compact trigger=${firstString(raw.trigger) || 'unknown'}`;
+  }
   if (typeof raw.input === 'string') return raw.input;
   if (typeof raw.content === 'string') return raw.content;
   if (actionType === 'shell') {

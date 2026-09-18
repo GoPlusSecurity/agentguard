@@ -1537,6 +1537,107 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('keeps Codex hook content out of audit, connected Cloud, and failed-ingest spool sinks', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-codex-local-only-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const cloudBodies: string[] = [];
+    let failIngest = false;
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/v1/policies/effective')) {
+        return jsonResponse({ success: true, data: policy });
+      }
+      if (url.endsWith('/api/v1/events/ingest')) {
+        cloudBodies.push(typeof init?.body === 'string' ? init.body : '');
+        if (failIngest) throw new Error('offline');
+        return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+      }
+      if (url.endsWith('/api/v1/actions/evaluate')) {
+        cloudBodies.push(typeof init?.body === 'string' ? init.body : '');
+        return jsonResponse({
+          success: true,
+          data: {
+            actionId: 'act_cloud_codex_safe', decision: 'allow', riskScore: 0, riskLevel: 'safe',
+            reasons: [], policyVersion: 'cloud-test',
+          },
+        });
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+      const patchMarker = 'NEUTRAL_PATCH_CONTENT_MARKER';
+      const responseContentMarker = 'NEUTRAL_RESPONSE_CONTENT_MARKER';
+      const responseBodyMarker = 'NEUTRAL_RESPONSE_BODY_MARKER';
+      const reasonEvidenceMarker = 'NEUTRAL_REASON_EVIDENCE_MARKER';
+      const reasonSeverityMarker = 'NEUTRAL_REASON_SEVERITY_MARKER';
+
+      const patch = await protectAction({
+        config,
+        agentHost: 'codex',
+        rawInput: {
+          hook_event_name: 'PreToolUse',
+          session_id: 'sess_codex_patch',
+          cwd: dir,
+          tool_name: 'apply_patch',
+          tool_input: {
+            command: `*** Begin Patch\n+${patchMarker}\n+OPENAI_BASE_URL=https://relay.invalid/v1\n*** End Patch`,
+          },
+        },
+      });
+      assert.ok(patch && ['block', 'require_approval'].includes(patch.decision.decision));
+      await new AgentGuardCloudClient(config).evaluateAction(patch.event);
+
+      failIngest = true;
+      patch.event.reasons[0].evidence = reasonEvidenceMarker;
+      patch.event.reasons[0].severity = reasonSeverityMarker as never;
+      spoolEvent(config.eventSpoolPath, patch.event);
+      const postTool = await protectAction({
+        config,
+        agentHost: 'codex',
+        rawInput: {
+          hook_event_name: 'PostToolUse',
+          session_id: 'sess_codex_post',
+          cwd: dir,
+          tool_name: 'Bash',
+          tool_input: { command: 'printf output' },
+          tool_response: {
+            content: responseContentMarker,
+            body: responseBodyMarker,
+            output: 'api_key=sk-codex-spool-trigger-1234567890',
+          },
+        },
+      });
+      assert.equal(postTool?.decision.decision, 'block');
+
+      const persisted = [
+        readFileSync(config.auditPath, 'utf8'),
+        readFileSync(config.eventSpoolPath, 'utf8'),
+        ...cloudBodies,
+      ].join('\n');
+      for (const marker of [
+        patchMarker, responseContentMarker, responseBodyMarker, reasonEvidenceMarker, reasonSeverityMarker,
+      ]) {
+        assert.doesNotMatch(persisted, new RegExp(marker));
+      }
+      assert.match(persisted, /\[LOCAL_ONLY_LLM_CONTENT\]/);
+      assert.doesNotMatch(persisted, /responseBodyPreview|bodyPreview|evidence":"[^[]/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('stores pending approvals with expiration and cleans expired records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-approval-expiry-'));
     const config: AgentGuardConfig = {
