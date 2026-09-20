@@ -57,6 +57,10 @@ import {
 } from './feed/cron.js';
 import { loadDshThreatFeedSubscription } from './feed/dsh-subscription.js';
 import {
+  startHermesEvaluatorDaemon,
+  type HermesEvaluatorDaemon,
+} from './hermes/evaluator-daemon.js';
+import {
   buildDshThreatFeedNotification,
   enqueueDshThreatFeedNotification,
 } from './feed/dsh-notifications.js';
@@ -130,7 +134,13 @@ async function main() {
         }
         const agent = normalizedAgent as AgentInstaller;
         const shellHooks = Boolean(options.shellHooks);
-        const result = installAgentTemplates(agent, { force: forceTemplates, shellHooks });
+        const result = installAgentTemplates(agent, {
+          force: forceTemplates,
+          shellHooks,
+          protectedPaths: agent === 'claude-code'
+            ? loadCachedPolicy(config.policyCachePath)?.protectedPaths
+            : undefined,
+        });
         config.agentHost = agent;
         config.agentHosts = appendAgentHost(config.agentHosts, agent);
         saveConfig(config);
@@ -214,6 +224,14 @@ async function main() {
         console.log(`Saved Cloud configuration for ${config.cloudUrl}.`);
         console.log(`Policy fetch failed; local protection still works offline. ${error instanceof Error ? error.message : ''}`.trim());
       }
+    });
+
+  program
+    .command('hermes-daemon', { hidden: true })
+    .description('Internal: run the persistent local evaluator for the Hermes plugin')
+    .action(async () => {
+      const daemon = await startHermesEvaluatorDaemon();
+      await waitForHermesDaemonShutdown(daemon);
     });
 
   program
@@ -562,7 +580,8 @@ async function main() {
         decisionMode: options.decisionMode,
       });
       if (!result) return;
-      console.log(formatProtectResult(result, Boolean(options.json)));
+      const output = formatProtectResult(result, Boolean(options.json));
+      if (output) console.log(output);
       process.exitCode = exitCodeForDecision(result.decision, result);
     });
 
@@ -1042,6 +1061,22 @@ async function main() {
   await program.parseAsync(process.argv);
 }
 
+async function waitForHermesDaemonShutdown(daemon: HermesEvaluatorDaemon): Promise<void> {
+  const stop = () => {
+    void daemon.close().catch(() => {
+      // The daemon's `closed` lifecycle still settles so this hidden process exits.
+    });
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    await daemon.closed;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+  }
+}
+
 function validateCronTarget(value: unknown): CronBackend {
   if (value === 'auto' || value === 'openclaw' || value === 'qclaw' || value === 'hermes' || value === 'system' || value === 'windows') return value;
   throw new Error('Invalid cron target. Use auto, openclaw, qclaw, hermes, system, or windows.');
@@ -1065,7 +1100,13 @@ function initAutoAgents(config: AgentGuardConfig, force: boolean): {
 
   for (const agent of detectedAgents) {
     try {
-      installed.push(installAgentTemplates(agent, { cwd: process.cwd(), force }));
+      installed.push(installAgentTemplates(agent, {
+        cwd: process.cwd(),
+        force,
+        protectedPaths: agent === 'claude-code'
+          ? loadCachedPolicy(config.policyCachePath)?.protectedPaths
+          : undefined,
+      }));
     } catch (err) {
       failed.push({
         agent,
@@ -1091,6 +1132,7 @@ function printInstallResult(result: InstallResult): void {
   }
   console.log(`Installed ${result.agent} template:`);
   for (const file of result.files) console.log(`- ${file}`);
+  for (const message of result.messages || []) console.log(message);
 }
 
 function appendAgentHost(

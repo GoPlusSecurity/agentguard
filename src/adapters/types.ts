@@ -1,4 +1,5 @@
 import type { ActionEnvelope, PolicyDecision } from '../types/action.js';
+import type { AgentLifecycleCapabilities } from '../runtime/types.js';
 
 /**
  * Standardized hook input — platform-agnostic representation
@@ -10,6 +11,8 @@ export interface HookInput {
   toolInput: Record<string, unknown>;
   /** Hook event type */
   eventType: 'pre' | 'post';
+  /** Native lifecycle event name when the host exposes one. */
+  hookEventName?: string;
   /** Session identifier */
   sessionId?: string;
   /** Working directory */
@@ -43,6 +46,9 @@ export interface HookOutput {
 export interface HookAdapter {
   /** Platform identifier */
   readonly name: string;
+
+  /** Lifecycle visibility actually wired by this adapter version. */
+  readonly capabilities: AgentLifecycleCapabilities;
 
   /** Parse raw platform input into standardized HookInput */
   parseInput(raw: unknown): HookInput;
@@ -79,4 +85,6 @@ export interface AgentGuardInstance {
 export interface EngineOptions {
   config: { level?: string };
   agentguard: AgentGuardInstance;
+  /** Re-throw local scanner failures so a blocking host gate can deny by default. */
+  failClosedOnEngineError?: boolean;
 }

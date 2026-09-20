@@ -9,6 +9,8 @@ import { OBFUSCATION_RULES } from './obfuscation.js';
 import { PROMPT_INJECTION_RULES } from './prompt-injection.js';
 import { EXFILTRATION_RULES } from './exfiltration.js';
 import { TROJAN_RULES } from './trojan.js';
+import { PRIVACY_RULES } from './privacy.js';
+import { LLM_RELAY_RULES } from './llm-relay.js';
 
 /**
  * All built-in scan rules
@@ -22,7 +24,12 @@ export const ALL_RULES: ScanRule[] = [
   ...PROMPT_INJECTION_RULES,
   ...EXFILTRATION_RULES,
   ...TROJAN_RULES,
+  ...PRIVACY_RULES,
+  ...LLM_RELAY_RULES,
 ];
+
+export { PRIVACY_RULES } from './privacy.js';
+export { LLM_RELAY_RULES } from './llm-relay.js';
 
 /**
  * Get rules by severity

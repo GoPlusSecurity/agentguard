@@ -5,3 +5,5 @@
       config:
         runtime:
           mode: protect
+        llmPrivacy:
+          enabled: true

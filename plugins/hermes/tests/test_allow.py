@@ -11,7 +11,14 @@ def test_benign_exec_is_allowed():
 
 def test_register_wires_all_hooks_and_command():
     ctx, _ = register_with(make_protect_runner(decision=None))
-    assert set(ctx.hooks) == {"pre_tool_call", "post_tool_call", "on_session_start"}
+    assert set(ctx.hooks) == {
+        "pre_llm_call",
+        "pre_api_request",
+        "post_api_request",
+        "pre_tool_call",
+        "post_tool_call",
+        "on_session_start",
+    }
     assert "agentguard" in ctx.commands
 
 

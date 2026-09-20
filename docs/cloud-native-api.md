@@ -152,6 +152,7 @@ Response:
 {
   "success": true,
   "data": {
+    "schemaVersion": 1,
     "policyVersion": "runtime-v0.1",
     "mode": "balanced",
     "decisions": {
@@ -168,7 +169,17 @@ Response:
     "network": {
       "defaultOutbound": "warn",
       "blockedDomains": ["discord.com/api/webhooks"],
-      "approvalDomains": []
+      "approvalDomains": [],
+      "untrustedLlmEndpoint": "require_approval",
+      "trustedLlmEndpoints": []
+    },
+    "privacy": {
+      "piiEgressTrusted": "warn",
+      "piiEgressUntrusted": "require_approval",
+      "enabledCategories": ["email_address", "phone_number"],
+      "bulkEgressBytes": 1048576,
+      "bulkAttachmentBytes": 5242880,
+      "bulkFilePathCount": 20
     },
     "updatedAt": "2026-05-11T00:00:00.000Z"
   }
@@ -181,6 +192,9 @@ Native requirements:
 - Refresh opportunistically before runtime evaluation.
 - Cache the last valid response.
 - Never disable local enforcement if this endpoint fails.
+- Treat a missing `schemaVersion` as version `1` for backward compatibility.
+- Ignore unknown fields, but normalize known decisions, endpoint lists, and
+  privacy thresholds before using them locally.
 
 ### Cloud action evaluation
 
@@ -194,6 +208,8 @@ Request:
 
 ```json
 {
+  "schemaVersion": 1,
+  "requestId": "req_local_123",
   "sessionId": "sess_local_123",
   "agentHost": "claude-code",
   "actionType": "shell",
@@ -243,7 +259,9 @@ Request:
 {
   "events": [
     {
+      "schemaVersion": 1,
       "actionId": "act_local_123",
+      "requestId": "req_local_123",
       "sessionId": "sess_local_123",
       "agentHost": "codex",
       "actionType": "shell",
@@ -254,10 +272,30 @@ Request:
       "riskLevel": "medium",
       "reasons": [],
       "policyVersion": "runtime-v0.1",
-      "cwd": "/workspace/app",
-      "sourceSkill": "optional-skill-id",
+      "lifecycleStage": "pre_tool",
+      "coverageLevel": "partial",
+      "enforcementStatus": "enforced",
+      "canBlockCurrentAction": true,
+      "missingFacts": ["final_destination"],
+      "privacySummary": {
+        "categories": [
+          { "category": "email_address", "count": 1 }
+        ],
+        "valueCount": 1
+      },
+      "llm": {
+        "schemaVersion": 1,
+        "requestId": "req_local_123",
+        "sessionId": "sess_local_123",
+        "purpose": "conversation",
+        "lifecycleStage": "pre_tool",
+        "canBlockCurrentAction": true,
+        "credentialKind": "unknown",
+        "credentialPresent": "unknown"
+      },
       "metadata": {
-        "evaluation": "local-oss"
+        "evaluation": "local-oss",
+        "privacyRules": []
       }
     }
   ]
@@ -281,6 +319,10 @@ Limits and behavior:
 - Maximum `100` events per batch.
 - `input` should be a redacted preview, not full file content or full prompt content.
 - If upload fails, spool locally and retry later.
+- The client sends only schema-bounded, redacted facts. Cloud must still perform
+  independent validation and redaction before persistence or display.
+- Missing lifecycle facts must remain missing; the server must not infer an
+  endpoint, credential, retry, fallback, or complete payload from defaults.
 
 ### Runtime approvals
 

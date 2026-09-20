@@ -18,6 +18,7 @@ import type {
   RuntimeSeverity,
 } from './types.js';
 import { redactPreview, redactReasons } from './redaction.js';
+import { evaluateLlmPrivacy } from './privacy.js';
 
 const ONE_MINUTE_MS = 60_000;
 const TEN_MINUTES_MS = 10 * ONE_MINUTE_MS;
@@ -88,10 +89,12 @@ export async function evaluateLocalAction(
   action: RuntimeAction,
   options: LocalActionEvaluationOptions = {}
 ): Promise<RuntimeDecision> {
-  if (isAllowedByCommandPolicy(policy, action)) {
+  const privacyEvaluation = evaluateLlmPrivacy(policy, action);
+  if (isAllowedByCommandPolicy(policy, action) && privacyEvaluation.reasons.length === 0) {
     return {
       actionId: `act_local_${Date.now()}_${process.pid}`,
       decision: 'allow',
+      policyDecision: 'allow',
       riskScore: 0,
       riskLevel: 'safe',
       reasons: [],
@@ -99,7 +102,7 @@ export async function evaluateLocalAction(
     };
   }
 
-  const customReasons = customPolicyReasons(policy, action);
+  const customReasons = [...customPolicyReasons(policy, action), ...privacyEvaluation.reasons];
   const ossDecision = await evaluateWithOssActionScanner(policy, action, options);
   const ossReasons = (ossDecision?.risk_tags || []).map((tag, index) =>
     normalizeOssReason(tag, ossDecision?.evidence?.[index], action)
@@ -109,15 +112,20 @@ export async function evaluateLocalAction(
   const riskLevel = riskLevelFor(riskScore);
   const decision = shouldAutoAllowRuntimeDecision(riskScore, riskLevel)
     ? 'allow'
-    : decisionFor(policy, reasons, riskLevel, ossDecision?.decision);
+    : decisionFor(policy, reasons, riskLevel, ossDecision?.decision, action);
 
   return {
     actionId: `act_local_${Date.now()}_${process.pid}`,
     decision: policy.mode === 'observe' && decision === 'block' ? 'warn' : decision,
+    policyDecision: decision,
     riskScore,
     riskLevel,
     reasons,
     policyVersion: policy.policyVersion || 'runtime-local-v0.1',
+    coverageLevel: privacyEvaluation.coverageLevel,
+    missingFacts: privacyEvaluation.missingFacts,
+    ruleEvaluations: privacyEvaluation.rules,
+    ...(privacyEvaluation.piiSummary.valueCount > 0 ? { piiSummary: privacyEvaluation.piiSummary } : {}),
   };
 }
 
@@ -694,11 +702,12 @@ function decisionFor(
   policy: EffectiveRuntimePolicy,
   reasons: PolicyReason[],
   riskLevel: RuntimeRiskLevel,
-  ossDecision?: string
+  ossDecision?: string,
+  action?: RuntimeAction,
 ): CloudPolicyDecision {
   const policyDecisions: CloudPolicyDecision[] = [];
   for (const item of reasons) {
-    const decision = policyDecisionFor(item, policy);
+    const decision = policyDecisionFor(item, policy, action);
     if (decision) policyDecisions.push(decision);
   }
   const strongestPolicyDecision = strongestDecision(policyDecisions);
@@ -718,7 +727,11 @@ function decisionFor(
   return 'allow';
 }
 
-function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePolicy): CloudPolicyDecision | null {
+function policyDecisionFor(
+  reasonItem: PolicyReason,
+  policy: EffectiveRuntimePolicy,
+  action?: RuntimeAction,
+): CloudPolicyDecision | null {
   const code = reasonItem.code;
   if (code === 'CUSTOM_BLOCKED_COMMAND' || code === 'DESTRUCTIVE_COMMAND') return policy.decisions.destructiveCommand;
   if (code === 'DESTRUCTIVE_FILE_OPERATION') return 'require_approval';
@@ -735,6 +748,28 @@ function policyDecisionFor(reasonItem: PolicyReason, policy: EffectiveRuntimePol
   if (code === 'SECRET_ACCESS') return policy.decisions.secretAccess;
   if (code === 'DEPLOYMENT_ACTION') return policy.decisions.deployAction;
   if (code === 'ACTION_TYPE_REQUIRES_APPROVAL') return 'require_approval';
+  if (code === 'UNTRUSTED_LLM_ENDPOINT') {
+    if (reasonItem.severity === 'critical') return 'block';
+    if (reasonItem.severity === 'high') return policy.network.untrustedLlmEndpoint;
+    return 'warn';
+  }
+  if (code === 'PII_EGRESS') {
+    const tier = action?.llm?.destination?.tier ?? 'unknown';
+    if (tier === 'T0') return 'allow';
+    if (tier === 'T1' || tier === 'T2') return policy.privacy.piiEgressTrusted;
+    if (tier === 'T3') return policy.privacy.piiEgressUntrusted;
+    if (tier === 'T4') return 'block';
+    return 'warn';
+  }
+  if (code === 'LLM_ENDPOINT_HIJACK') return reasonItem.severity === 'critical' ? 'block' : 'require_approval';
+  if (code === 'RELAY_RESPONSE_TAMPERING') return reasonItem.severity === 'high' ? 'require_approval' : 'warn';
+  if (code === 'LLM_KEY_TO_UNKNOWN_HOST') return reasonItem.severity === 'critical' ? 'block' : 'warn';
+  if (code === 'WORKSPACE_BULK_EGRESS') {
+    const tier = action?.llm?.destination?.tier ?? 'unknown';
+    if (tier === 'T4') return 'block';
+    if (tier === 'T3') return 'require_approval';
+    return 'warn';
+  }
   return null;
 }
 

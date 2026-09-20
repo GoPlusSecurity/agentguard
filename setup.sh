@@ -490,22 +490,9 @@ NODE
 fi
 
 if [ "$PLATFORM" = "codex" ]; then
-  echo "  Writing Codex AgentGuard hook config..."
-  mkdir -p "$HOME/.codex"
-  cat > "$HOME/.codex/agentguard-hook.json" <<'JSON'
-{
-  "agentHost": "codex",
-  "command": "AGENTGUARD_AGENT_HOST=codex agentguard protect",
-  "actionTypes": {
-    "shell": "shell",
-    "fileRead": "file_read",
-    "fileWrite": "file_write",
-    "network": "network",
-    "mcpTool": "mcp_tool"
-  }
-}
-JSON
-  echo "  OK: Codex AgentGuard config written to $HOME/.codex/agentguard-hook.json"
+  echo "  Codex native hooks are installed per repository."
+  echo "  Run 'agentguard init --agent codex' from the repository to merge .codex/hooks.json safely."
+  echo "  Existing legacy .codex/agentguard-hook.json files are preserved but are not active Codex hook config."
 fi
 
 # ---- Done ----

@@ -9,6 +9,7 @@ Hermes loads this package and calls :func:`register` at plugin-load time.
 from __future__ import annotations
 
 import os
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,10 +21,16 @@ except ImportError:  # loaded as a top-level module (tests / ad-hoc)
     from bridge import AgentGuardBridge
 
 
+logger = logging.getLogger(__name__)
+
+
 def register(ctx: Any, bridge: Optional[AgentGuardBridge] = None) -> None:
     """Entry point invoked by Hermes. ``bridge`` is injectable for tests."""
     guard = bridge or AgentGuardBridge()
 
+    ctx.register_hook("pre_llm_call", _make_pre_llm_call(guard))
+    ctx.register_hook("pre_api_request", _make_pre_api_request(guard))
+    ctx.register_hook("post_api_request", _make_post_api_request(guard))
     ctx.register_hook("pre_tool_call", _make_pre_tool_call(guard))
     ctx.register_hook("post_tool_call", _make_post_tool_call(guard))
     ctx.register_hook("on_session_start", _make_session_start(guard))
@@ -35,6 +42,59 @@ def register(ctx: Any, bridge: Optional[AgentGuardBridge] = None) -> None:
             _make_status_command(guard),
             description="Show GoPlus AgentGuard status, recent audit report, or run a checkup.",
         )
+
+
+def _make_pre_llm_call(_guard: AgentGuardBridge):
+    def pre_llm_call(*_args: Any, **_kwargs: Any):
+        # Hermes invokes this once per user turn and interprets a return value
+        # as context injection. It is not a per-request security gate, so
+        # AgentGuard deliberately observes the lower pre_api_request hook.
+        return None
+
+    return pre_llm_call
+
+
+def _make_pre_api_request(guard: AgentGuardBridge):
+    def pre_api_request(**kwargs: Any):
+        request_id = kwargs.get("api_request_id")
+        try:
+            result = guard.observe_llm_request(**kwargs)
+            _warn_observer_decision("request", request_id, result)
+        except Exception as exc:
+            logger.warning(
+                "GoPlus AgentGuard Hermes request observer failed; model request remains observe_only: %s",
+                exc,
+            )
+        return None
+
+    return pre_api_request
+
+
+def _make_post_api_request(guard: AgentGuardBridge):
+    def post_api_request(**kwargs: Any):
+        request_id = kwargs.get("api_request_id")
+        try:
+            result = guard.observe_llm_response(**kwargs)
+            _warn_observer_decision("response", request_id, result)
+        except Exception as exc:
+            logger.warning(
+                "GoPlus AgentGuard Hermes response observer failed; response remains observe_only: %s",
+                exc,
+            )
+        return None
+
+    return post_api_request
+
+
+def _warn_observer_decision(kind: str, request_id: Any, result: Optional[Dict[str, Any]]) -> None:
+    if not result or result.get("policyDecision") not in {"block", "require_approval"}:
+        return
+    logger.warning(
+        "GoPlus AgentGuard observed a Hermes model %s policy violation "
+        "(request_id=%s, enforcement=would_block); the Hermes API hook is observe_only",
+        kind,
+        request_id or "unknown",
+    )
 
 
 def _make_pre_tool_call(guard: AgentGuardBridge):

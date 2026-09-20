@@ -1,9 +1,9 @@
 # GoPlus AgentGuard — Hermes plugin
 
 A native [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that
-runs every tool call through the [GoPlus AgentGuard](https://github.com/GoPlusSecurity/agentguard)
-decision engine and **blocks risky shell, file, and network actions** before they
-execute.
+observes supported main-loop model traffic and runs tool calls through the
+[GoPlus AgentGuard](https://github.com/GoPlusSecurity/agentguard) decision engine.
+It **blocks risky shell, file, and network actions** before they execute.
 
 Unlike the shell-hook integration (which you wire into `~/.hermes/config.yaml` by
 hand), this plugin is managed the Hermes-native way — `hermes plugins
@@ -15,8 +15,7 @@ place.
 
 - Hermes Agent (with the plugin system).
 - The AgentGuard engine reachable as the `agentguard` CLI on `PATH`
-  (`npm i -g @goplus/agentguard`), or pointed at via `AGENTGUARD_BIN` /
-  `AGENTGUARD_HERMES_HOOK`.
+  (`npm i -g @goplus/agentguard`), or pointed at via `AGENTGUARD_BIN`.
 
 ## Install
 
@@ -34,6 +33,9 @@ Or copy this directory to `~/.hermes/plugins/agentguard/` manually.
 
 | Hermes hook        | Behavior                                                        |
 |--------------------|-----------------------------------------------------------------|
+| `pre_llm_call`     | Non-mutating turn boundary; it is not a per-request gate.       |
+| `pre_api_request`  | Observes supported main-loop requests; never blocks them.       |
+| `post_api_request` | Observes and correlates main-loop responses; never blocks them. |
 | `pre_tool_call`    | Evaluates the call; returns `{"action":"block","message":...}` to veto a dangerous action. |
 | `post_tool_call`   | Audit-only; never blocks.                                       |
 | `on_session_start` | Best-effort background scan of installed skills (opt out: `AGENTGUARD_HERMES_AUTOSCAN=0`). |
@@ -51,10 +53,10 @@ Hermes `pre_tool_call` has no native "ask"/confirm decision, so AgentGuard's
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `AGENTGUARD_BIN` | — | Explicit path to the `agentguard` CLI. |
-| `AGENTGUARD_HERMES_HOOK` | — | Explicit path to `hermes-hook.js` (used instead of the CLI). |
-| `AGENTGUARD_HERMES_TIMEOUT` | `10` | Per-call engine timeout (seconds). |
+| `AGENTGUARD_HERMES_TIMEOUT` | `10` | IPC connect/read timeout (seconds). |
 | `AGENTGUARD_HERMES_FAIL_OPEN` | `0` | `1` allows tool calls when the engine can't be reached (default fails closed). |
-| `AGENTGUARD_HERMES_ALLOW_NPX` | `0` | `1` permits the `npx -y @goplus/agentguard` fallback when no local binary is found. Off by default — `npx` fetches an unpinned package over the network, which is unsafe for a security gate. |
+| `AGENTGUARD_HERMES_IPC_PORT` | per-user derived | Optional Windows authenticated-loopback port override. |
+| `AGENTGUARD_HERMES_IPC_TOKEN` | generated locally | Optional Windows IPC token override; at least 32 UTF-8 bytes. |
 | `AGENTGUARD_HERMES_AUTOSCAN` | `1` | `0` disables the session-start skill scan. |
 
 **Activation:** `agentguard init --agent hermes` installs the plugin and enables
@@ -67,6 +69,31 @@ when a mapped event arrives without its required field (e.g. `terminal` with no
 `command`) — matching the shell-hook behavior. Out-of-scope tools pass through
 without an engine call. Post-tool evaluation never blocks.
 
+The plugin starts one persistent `agentguard hermes-daemon` on demand instead
+of launching Node for each prompt. Unix uses a `0600` socket inside a `0700`
+runtime directory plus a current-user POSIX advisory file lease that serializes
+stale-lock recovery. Windows uses authenticated `127.0.0.1`
+IPC with a token kept
+under the current user's AgentGuard runtime directory. A mutual HMAC challenge
+authenticates the daemon before the client sends prompt or tool content; the
+token itself is never transmitted. Requests are capped at 1 MiB, responses at
+256 KiB, and partial frames are bounded by the timeout.
+
+## LLM traffic coverage
+
+`pre_api_request` and `post_api_request` are Hermes observers. AgentGuard maps
+their visible provider, model, base URL, messages/response, and request ID into
+local `llm_request` and `llm_response` evaluations, always with
+`canBlockCurrentAction=false`. A block-class policy result is recorded as
+`would_block`; it does not mean the provider request was stopped. If suspicious
+output induces a dangerous local action, `pre_tool_call` remains the final
+blocking boundary.
+
+Complete system/tool payloads, the final transport destination, credentials,
+exact bytes, internal retry/fallback, title generation, compression, iteration
+summaries, trajectory paths, and other auxiliary SDK calls remain incomplete or
+unsupported. A T3 base URL observation is therefore not a pre-send block.
+
 ## Development / tests
 
 ```bash
@@ -74,5 +101,6 @@ cd plugins/hermes
 python -m pytest        # no Node engine required — the bridge is stubbed
 ```
 
-Tests stub the engine via an injected runner, so they exercise the allow / block /
-confirm→block / post-audit / fail-mode contract without spawning a subprocess.
+Tests inject the legacy runner or persistent IPC transport, so they exercise the
+request/response observer, allow/block, post-audit, and fail-mode contracts
+without requiring a real Hermes installation.
