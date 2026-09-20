@@ -56,6 +56,11 @@ Then ask DSH, for example:
 Use AgentGuard to subscribe this DSH session to the threat feed every 15 minutes without automatic self-checks.
 ```
 
+Do not create a DSH schedule with the generic `agentguard subscribe --cron`
+command. A standalone CLI process cannot identify the target DSH session, so
+AgentGuard rejects that form instead of creating a scheduled poller without a
+notification binding.
+
 The tool accepts these optional arguments:
 
 - `cron`: a five-field cron expression; defaults to `0 * * * *`;

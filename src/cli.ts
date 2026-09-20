@@ -612,6 +612,12 @@ async function main() {
       const cronExpression = options.cron && !options.cronRun
         ? validateCronExpression(options.cron as string)
         : undefined;
+      if (cronExpression && cronAgentHost === 'dsh') {
+        throw new Error(
+          'DSH scheduled threat-feed subscriptions must be created from DSH with the '
+          + '`agentguard_dsh_subscribe` tool so notifications can be bound to the calling session.',
+        );
+      }
 
       let registration: AgentCredentialRegistration | null = null;
       if (!client.connected) {
