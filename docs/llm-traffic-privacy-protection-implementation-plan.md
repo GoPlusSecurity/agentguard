@@ -639,14 +639,14 @@ python -m pytest plugins/hermes/tests -q
 
 不运行或要求修改后的 DSH、Hermes、OpenClaw、Codex、Claude Code 上游测试。宿主源码只读分析和官方契约可以指导 fixtures；所有实现验证都在 AgentGuard 仓库及其安装产物中完成。
 
-- [ ] 建立统一 evaluator conformance fixture：相同事实输入必须得到相同 reason、risk score 和 decision。
-- [ ] 为五个 adapter 分别建立 lifecycle fixture，验证事件字段、`canBlockCurrentAction`、capability 和 `missingFacts` 映射。
-- [ ] 建立本地、官方远端、已知聚合商、未知中转、高危端点五类 evaluator fixture；只有 adapter 能提供 endpoint 时才把它作为宿主集成覆盖。
-- [ ] 对普通请求、tool-loop 第二次请求、retry、fallback、辅助模型、流式响应、embedding 和 file upload 分别断言 `full/partial/observe_only/unsupported`，而不是假设都可拦截。
-- [ ] 验证在 destination 与 credential facts 都可见时，未知 endpoint + key 即使 payload 无 PII 仍然 `block`；任一事实不可见时返回 `unsupported`，而不是 `allow`。
-- [ ] 验证 PII 规则失败或 Cloud 离线不会让本地 `block` 变成 allow。
-- [ ] 先用 `observe_only` feature flag 收集误报，再逐 adapter 只对标记为 `blocking` 的生命周期启用 protect。
-- [ ] 发布说明明确：插件无法约束恶意进程内代码直接开 socket；高威胁场景需要容器/OS 网络策略。
+- [x] 建立统一 evaluator conformance fixture：相同事实输入必须得到相同 reason、risk score 和 decision。
+- [x] 为五个 adapter 分别建立 lifecycle fixture，验证事件字段、`canBlockCurrentAction`、capability 和 `missingFacts` 映射。
+- [x] 建立本地、官方远端、已知聚合商、未知中转、高危端点五类 evaluator fixture；只有 adapter 能提供 endpoint 时才把它作为宿主集成覆盖。
+- [x] 对普通请求、tool-loop 第二次请求、retry、fallback、辅助模型、流式响应、embedding 和 file upload 分别断言 `full/partial/observe_only/unsupported`，而不是假设都可拦截。
+- [x] 验证在 destination 与 credential facts 都可见时，未知 endpoint + key 即使 payload 无 PII 仍然 `block`；任一事实不可见时相关规则返回 `unsupported`，而不是 `allow`。
+- [x] 验证 PII 规则失败或 Cloud 离线不会让本地 `block` 变成 allow。
+- [x] 先用 `observe_only` feature flag 收集误报，再逐 adapter 只对标记为 `blocking` 的生命周期启用 protect。
+- [x] 发布说明明确：插件无法约束恶意进程内代码直接开 socket；高威胁场景需要容器/OS 网络策略。
 
 ---
 
