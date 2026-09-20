@@ -15,8 +15,11 @@ const PRIVACY_CATEGORIES: PiiCategory[] = [
   'hardcoded_dataset',
 ];
 
+export const RUNTIME_POLICY_SCHEMA_VERSION = 1;
+
 export function getDefaultEffectiveRuntimePolicy(): EffectiveRuntimePolicy {
   return {
+    schemaVersion: RUNTIME_POLICY_SCHEMA_VERSION,
     policyVersion: 'runtime-local-v0.1',
     mode: 'balanced',
     decisions: {
@@ -110,6 +113,7 @@ export function normalizeEffectiveRuntimePolicy(value: unknown): EffectiveRuntim
   const privacy = isRecord(value.privacy) ? value.privacy : {};
 
   return {
+    schemaVersion: schemaVersionValue(value.schemaVersion) ?? RUNTIME_POLICY_SCHEMA_VERSION,
     policyVersion: stringValue(value.policyVersion) ?? defaults.policyVersion,
     mode: value.mode === 'observe' || value.mode === 'balanced' || value.mode === 'strict'
       ? value.mode
@@ -168,6 +172,10 @@ function decisionValue(value: unknown): CloudPolicyDecision | undefined {
 
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function schemaVersionValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : undefined;
 }
 
 function piiCategoryArray(value: unknown): PiiCategory[] | undefined {

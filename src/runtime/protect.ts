@@ -138,6 +138,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
       evaluation: policySource === 'cloud-decision' ? 'cloud' : 'local-oss',
       policySource,
       ...(decision.ruleEvaluations?.length ? { privacyRules: decision.ruleEvaluations } : {}),
+      ...(decision.piiSummary ? { privacySummary: decision.piiSummary } : {}),
       ...(approvedGrant
         ? {
             approvedByLocalGrant: true,

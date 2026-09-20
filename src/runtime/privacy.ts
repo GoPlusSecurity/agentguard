@@ -7,6 +7,7 @@ import type {
   LlmEndpointTier,
   MissingLlmFact,
   PolicyReason,
+  RuntimePiiSummary,
   RuntimeAction,
   RuntimePrivacyRuleEvaluation,
   RuntimeSeverity,
@@ -25,6 +26,7 @@ export interface RuntimePrivacyEvaluation {
     piiCategoryCount: number;
     piiValueCount: number;
   };
+  piiSummary: RuntimePiiSummary;
 }
 
 export function evaluateLlmPrivacy(policy: EffectiveRuntimePolicy, action: RuntimeAction): RuntimePrivacyEvaluation {
@@ -50,6 +52,7 @@ export function evaluateLlmPrivacy(policy: EffectiveRuntimePolicy, action: Runti
   }
 
   const missingFacts = uniqueMissingFacts(rules.flatMap((rule) => rule.missingFacts));
+  const piiSummary = summarizePii(pii);
   return {
     reasons,
     rules,
@@ -60,9 +63,21 @@ export function evaluateLlmPrivacy(policy: EffectiveRuntimePolicy, action: Runti
       payloadBytes: action.llm?.payloadBytes,
       attachmentBytes: action.llm?.attachmentBytes,
       filePathCount: action.llm?.filePathCount ?? metadataFilePathCount(action),
-      piiCategoryCount: pii.length,
-      piiValueCount: pii.reduce((total, item) => total + item.count, 0),
+      piiCategoryCount: piiSummary.categories.length,
+      piiValueCount: piiSummary.valueCount,
     },
+    piiSummary,
+  };
+}
+
+function summarizePii(pii: ReturnType<typeof detectPiiCategories>): RuntimePiiSummary {
+  const counts = new Map<RuntimePiiSummary['categories'][number]['category'], number>();
+  for (const item of pii) counts.set(item.category, (counts.get(item.category) ?? 0) + item.count);
+  return {
+    categories: [...counts.entries()]
+      .map(([category, count]) => ({ category, count }))
+      .sort((left, right) => left.category.localeCompare(right.category)),
+    valueCount: [...counts.values()].reduce((total, count) => total + count, 0),
   };
 }
 

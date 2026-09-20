@@ -5,7 +5,9 @@ import type {
   RuntimeAction,
   RuntimeAuditEvent,
   RuntimeDecision,
+  RuntimePiiSummary,
 } from '../runtime/types.js';
+import { normalizeEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { redactLlmMetadata, redactMetadata, redactPreview } from '../runtime/redaction.js';
 import {
   buildAuditEvent,
@@ -35,6 +37,19 @@ interface ApiMeta {
   requestId?: string;
 }
 
+export const CLOUD_RUNTIME_WIRE_SCHEMA_VERSION = 1;
+
+export type CloudActionRequestPayload = RuntimeAction & {
+  schemaVersion: typeof CLOUD_RUNTIME_WIRE_SCHEMA_VERSION;
+  requestId?: string;
+};
+
+export type CloudAuditEventPayload = RuntimeAuditEvent & {
+  schemaVersion: typeof CLOUD_RUNTIME_WIRE_SCHEMA_VERSION;
+  requestId?: string;
+  privacySummary?: RuntimePiiSummary;
+};
+
 export class AgentGuardCloudClient {
   private readonly cloudUrl: string;
   private readonly apiKey?: string;
@@ -57,14 +72,14 @@ export class AgentGuardCloudClient {
   async fetchEffectivePolicy(): Promise<EffectiveRuntimePolicy> {
     this.requireCredential();
     const body = await this.request<EffectiveRuntimePolicy>('/api/v1/policies/effective');
-    return body.data;
+    return normalizeEffectiveRuntimePolicy(body.data);
   }
 
   async evaluateAction(action: RuntimeAction): Promise<RuntimeDecision> {
     this.requireCredential();
     const body = await this.request<RuntimeDecision>('/api/v1/actions/evaluate', {
       method: 'POST',
-      body: JSON.stringify(sanitizeActionRequest(action)),
+      body: JSON.stringify(buildCloudActionRequest(action)),
     });
     return body.data;
   }
@@ -74,7 +89,7 @@ export class AgentGuardCloudClient {
     await this.request('/api/v1/events/ingest', {
       method: 'POST',
       body: JSON.stringify({
-        events: events.map((event) => buildAuditEvent(event)),
+        events: events.map((event) => buildCloudAuditEvent(event)),
       }),
     });
   }
@@ -279,9 +294,11 @@ function buildCloudRequestError(status: number, path: string, body: unknown): Cl
   return new CloudRequestError(status, path);
 }
 
-function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
+export function buildCloudActionRequest(action: RuntimeAction): CloudActionRequestPayload {
   const nativeHook = isCodexNativeHookAction(action) || isClaudeNativeHookAction(action);
   return {
+    schemaVersion: CLOUD_RUNTIME_WIRE_SCHEMA_VERSION,
+    ...(action.llm?.requestId ? { requestId: redactPreview(action.llm.requestId, 160) } : {}),
     sessionId: redactPreview(action.sessionId, 160),
     agentHost: action.agentHost,
     actionType: action.actionType,
@@ -298,5 +315,14 @@ function sanitizeActionRequest(action: RuntimeAction): RuntimeAction {
     missingFacts: action.missingFacts ? [...action.missingFacts] : undefined,
     llm: action.llm ? redactLlmMetadata(action.llm) : undefined,
     metadata: nativeHook ? nativeHookSafeMetadata(action.metadata) : redactMetadata(action.metadata),
+  };
+}
+
+export function buildCloudAuditEvent(event: RuntimeAuditEvent): CloudAuditEventPayload {
+  const sanitized = buildAuditEvent(event);
+  return {
+    schemaVersion: CLOUD_RUNTIME_WIRE_SCHEMA_VERSION,
+    ...(event.llm?.requestId ? { requestId: redactPreview(event.llm.requestId, 160) } : {}),
+    ...sanitized,
   };
 }

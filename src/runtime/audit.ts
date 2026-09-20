@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { PolicyReason, RuntimeAction, RuntimeAuditEvent, RuntimePrivacyRuleEvaluation, RuntimeSeverity } from './types.js';
+import type { PolicyReason, RuntimeAction, RuntimeAuditEvent, RuntimePiiSummary, RuntimePrivacyRuleEvaluation, RuntimeSeverity } from './types.js';
 import { redactLlmMetadata, redactMetadata, redactPreview, redactReasons } from './redaction.js';
 
 export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
@@ -25,6 +25,7 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     coverageLevel: event.coverageLevel,
     enforcementStatus: event.enforcementStatus,
     missingFacts: event.missingFacts ? [...event.missingFacts] : undefined,
+    privacySummary: event.privacySummary ? sanitizePiiSummary(event.privacySummary) : undefined,
     llm: event.llm ? redactLlmMetadata(event.llm) : undefined,
     metadata: nativeHook
       ? nativeHookSafeMetadata(event.metadata)
@@ -110,6 +111,19 @@ function codexSafePrivacyRule(value: unknown): RuntimePrivacyRuleEvaluation | nu
   };
 }
 
+function sanitizePiiSummary(value: RuntimePiiSummary): RuntimePiiSummary {
+  return {
+    categories: value.categories.slice(0, 20).filter((item) =>
+      PII_CATEGORIES.has(item.category)
+      && Number.isSafeInteger(item.count)
+      && item.count >= 0
+    ).map((item) => ({ category: item.category, count: Math.min(item.count, 1_000_000) })),
+    valueCount: Number.isSafeInteger(value.valueCount) && value.valueCount >= 0
+      ? Math.min(value.valueCount, 1_000_000)
+      : 0,
+  };
+}
+
 const CODEX_HOOK_EVENTS = new Set<unknown>([
   'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PreCompact', 'PostCompact',
 ]);
@@ -121,6 +135,10 @@ const CLAUDE_HOOK_EVENTS = new Set<unknown>([
 const CODEX_PRIVACY_RULES = new Set<unknown>([
   'UNTRUSTED_LLM_ENDPOINT', 'PII_EGRESS', 'LLM_ENDPOINT_HIJACK', 'RELAY_RESPONSE_TAMPERING',
   'LLM_KEY_TO_UNKNOWN_HOST', 'WORKSPACE_BULK_EGRESS',
+]);
+const PII_CATEGORIES = new Set<unknown>([
+  'national_id', 'bank_account', 'biometric', 'minor_data', 'health_record',
+  'location_trace', 'contact_dump', 'phone_number', 'email_address', 'hardcoded_dataset',
 ]);
 const COVERAGE_LEVELS = new Set<unknown>(['full', 'partial', 'observe_only', 'unsupported']);
 const MISSING_FACTS = new Set<unknown>([

@@ -11,7 +11,11 @@ import { actionFingerprint, approvePendingApproval, cleanupExpiredApprovals, lis
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { ProtectResult } from '../runtime/protect.js';
 import { connectAgentJwt, connectCloud, disconnectCloud, getAgentGuardPaths } from '../config.js';
-import { AgentGuardCloudClient } from '../cloud/client.js';
+import {
+  AgentGuardCloudClient,
+  buildCloudActionRequest,
+  buildCloudAuditEvent,
+} from '../cloud/client.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { RuntimeAction, RuntimeAuditEvent } from '../runtime/types.js';
 
@@ -21,6 +25,7 @@ describe('Runtime Cloud bridge', () => {
   it('provides offline privacy defaults for LLM traffic enforcement', () => {
     const policy = getDefaultEffectiveRuntimePolicy();
 
+    assert.equal(policy.schemaVersion, 1);
     assert.equal(policy.network.untrustedLlmEndpoint, 'require_approval');
     assert.deepEqual(policy.network.trustedLlmEndpoints, []);
     assert.equal(policy.privacy.piiEgressTrusted, 'warn');
@@ -55,6 +60,131 @@ describe('Runtime Cloud bridge', () => {
     const resolved = await resolveRuntimePolicy({ cachePath });
     assert.equal(resolved.source, 'cache');
     assert.deepEqual(resolved.policy.privacy, loaded.privacy);
+    assert.equal(resolved.policy.schemaVersion, 1);
+  });
+
+  it('normalizes versioned Cloud wire payloads without exporting raw LLM content', () => {
+    const rawPii = 'patient_email=private.person@invalid.test';
+    const action: RuntimeAction = {
+      sessionId: 'sess_wire_contract',
+      agentHost: 'dsh',
+      actionType: 'llm_request',
+      toolName: 'llm/stream',
+      input: rawPii,
+      lifecycleStage: 'model_request',
+      canBlockCurrentAction: true,
+      coverageLevel: 'partial',
+      enforcementStatus: 'enforced',
+      missingFacts: ['final_destination'],
+      llm: {
+        schemaVersion: 1,
+        requestId: 'req_wire_contract',
+        sessionId: 'sess_wire_contract',
+        purpose: 'conversation',
+        lifecycleStage: 'model_request',
+        canBlockCurrentAction: true,
+        credentialKind: 'unknown',
+        credentialPresent: 'unknown',
+      },
+    };
+
+    const actionPayload = buildCloudActionRequest(action);
+    assert.equal(actionPayload.schemaVersion, 1);
+    assert.equal(actionPayload.requestId, 'req_wire_contract');
+    assert.equal(actionPayload.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(actionPayload.lifecycleStage, 'model_request');
+    assert.equal(actionPayload.enforcementStatus, 'enforced');
+    assert.ok(!JSON.stringify(actionPayload).includes(rawPii));
+
+    const auditPayload = buildCloudAuditEvent({
+      ...action,
+      actionId: 'act_wire_contract',
+      decision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      reasons: [],
+      policyVersion: 'runtime-wire-v1',
+    });
+    assert.equal(auditPayload.schemaVersion, 1);
+    assert.equal(auditPayload.requestId, 'req_wire_contract');
+    assert.equal(auditPayload.canBlockCurrentAction, true);
+    assert.deepEqual(auditPayload.missingFacts, ['final_destination']);
+    assert.ok(!JSON.stringify(auditPayload).includes(rawPii));
+  });
+
+  it('exports only bounded PII category and value counts in audit payloads', async () => {
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const action: RuntimeAction = {
+      sessionId: 'sess_pii_summary',
+      agentHost: 'dsh',
+      actionType: 'llm_request',
+      toolName: 'llm/stream',
+      input: 'personal_email=private.person@corp.invalid phone_number=13812345678',
+      llm: {
+        schemaVersion: 1,
+        requestId: 'req_pii_summary',
+        sessionId: 'sess_pii_summary',
+        purpose: 'conversation',
+        lifecycleStage: 'model_request',
+        canBlockCurrentAction: true,
+        credentialKind: 'unknown',
+        credentialPresent: 'unknown',
+      },
+    };
+
+    const decision = await evaluateLocalAction(policy, action);
+    assert.deepEqual(decision.piiSummary, {
+      categories: [
+        { category: 'email_address', count: 1 },
+        { category: 'phone_number', count: 1 },
+      ],
+      valueCount: 2,
+    });
+
+    const payload = buildCloudAuditEvent({
+      ...action,
+      actionId: decision.actionId,
+      decision: decision.decision,
+      policyDecision: decision.policyDecision,
+      riskScore: decision.riskScore,
+      riskLevel: decision.riskLevel,
+      reasons: decision.reasons,
+      policyVersion: decision.policyVersion,
+      privacySummary: decision.piiSummary,
+    });
+    assert.deepEqual(payload.privacySummary, {
+      categories: [
+        { category: 'email_address', count: 1 },
+        { category: 'phone_number', count: 1 },
+      ],
+      valueCount: 2,
+    });
+    assert.ok(!JSON.stringify(payload).includes('private.person@corp.invalid'));
+  });
+
+  it('normalizes legacy policy responses at the Cloud client boundary', async () => {
+    const originalFetch = globalThis.fetch;
+    const legacyPolicy = getDefaultEffectiveRuntimePolicy() as unknown as Record<string, unknown>;
+    const legacyNetwork = { ...(legacyPolicy.network as Record<string, unknown>) };
+    delete legacyNetwork.untrustedLlmEndpoint;
+    delete legacyNetwork.trustedLlmEndpoints;
+    delete legacyPolicy.privacy;
+    delete legacyPolicy.schemaVersion;
+    legacyPolicy.network = legacyNetwork;
+
+    globalThis.fetch = (async () => jsonResponse({ success: true, data: legacyPolicy })) as typeof fetch;
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      const policy = await client.fetchEffectivePolicy();
+      assert.equal(policy.schemaVersion, 1);
+      assert.equal(policy.network.untrustedLlmEndpoint, 'require_approval');
+      assert.equal(policy.privacy.piiEgressUntrusted, 'require_approval');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('fails closed when a host cannot present an AgentGuard approval', () => {
@@ -1528,6 +1658,14 @@ describe('Runtime Cloud bridge', () => {
       assert.equal(result?.decision.decision, 'require_approval');
       assert.equal(result?.approvalChannel, 'agent');
       assert.ok(requests.some((request) => request.url.endsWith('/api/v1/events/ingest')));
+      const ingestBody = requests.find((request) => request.url.endsWith('/api/v1/events/ingest'))?.body;
+      assert.ok(ingestBody);
+      const ingestPayload = JSON.parse(ingestBody) as {
+        events?: Array<Record<string, unknown>>;
+      };
+      assert.equal(ingestPayload.events?.[0]?.schemaVersion, 1);
+      assert.equal(ingestPayload.events?.[0]?.agentHost, 'claude-code');
+      assert.equal(ingestPayload.events?.[0]?.enforcementStatus, 'unsupported');
       assert.equal(requests.some((request) => request.url.endsWith('/api/v1/approvals')), false);
       assert.ok(!requests.map((request) => request.body || '').join('\n').includes('secret-value'));
       assert.ok(requests.map((request) => request.body || '').join('\n').includes('[REDACTED]'));

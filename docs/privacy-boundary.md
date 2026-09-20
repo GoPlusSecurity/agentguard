@@ -16,6 +16,12 @@ persisted and Cloud-facing form replaces that content with
 `[LOCAL_ONLY_LLM_CONTENT]`; it retains only bounded lifecycle and coverage
 facts.
 
+Cloud runtime policy responses use `schemaVersion: 1`; older responses without
+that field are treated as version 1 and normalized locally. Cloud audit and
+action requests also carry a versioned wire envelope and, when available, a
+top-level redacted `requestId` alongside the nested LLM correlation metadata.
+Unknown fields are ignored rather than treated as local enforcement facts.
+
 ## Sent to Cloud when connected
 
 Only redacted runtime audit previews are uploaded by default:
@@ -31,6 +37,9 @@ Only redacted runtime audit previews are uploaded by default:
   `none`, or `unknown`); never a credential value, Authorization header, or
   reversible digest
 - PII category/count summaries and masked evidence; never raw matches
+
+PII summaries use only an allowlisted category name, per-category count, and a
+bounded total value count. They never contain the matched value or evidence.
 
 `payloadBytes`, when present, means the exact UTF-8 byte length of the
 serialized request body. Character counts and previews are not substitutes;

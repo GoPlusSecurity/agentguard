@@ -83,6 +83,16 @@ export interface RuntimePrivacyRuleEvaluation {
   decision?: CloudPolicyDecision;
 }
 
+export interface RuntimePiiCategoryCount {
+  category: PiiCategory;
+  count: number;
+}
+
+export interface RuntimePiiSummary {
+  categories: RuntimePiiCategoryCount[];
+  valueCount: number;
+}
+
 /**
  * Facts visible at a host lifecycle boundary. Secret values and reversible
  * credential digests are intentionally not representable by this contract.
@@ -167,6 +177,8 @@ export interface PolicyReason {
 }
 
 export interface EffectiveRuntimePolicy {
+  /** Wire schema version; omitted by legacy Cloud policies and normalized to 1. */
+  schemaVersion?: number;
   policyVersion: string;
   mode: 'observe' | 'balanced' | 'strict';
   decisions: {
@@ -230,6 +242,7 @@ export interface RuntimeDecision {
   coverageLevel?: CoverageLevel;
   missingFacts?: MissingLlmFact[];
   ruleEvaluations?: RuntimePrivacyRuleEvaluation[];
+  piiSummary?: RuntimePiiSummary;
 }
 
 export interface RuntimeAuditEvent extends RuntimeAction {
@@ -240,4 +253,5 @@ export interface RuntimeAuditEvent extends RuntimeAction {
   riskLevel: RuntimeRiskLevel;
   reasons: PolicyReason[];
   policyVersion: string;
+  privacySummary?: RuntimePiiSummary;
 }

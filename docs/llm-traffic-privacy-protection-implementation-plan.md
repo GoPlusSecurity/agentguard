@@ -596,6 +596,19 @@ Claude Code 源码和 CLI 不属于修改范围。AgentGuard 只安装官方 set
 
 Cloud 不是本地执行前置条件，但需要支持集中策略和审计。
 
+本仓库本地配合项已在 Task 10 的本地 wire contract 中完成；Cloud 服务端和
+Dashboard 仍需按 [Cloud 配合要求](./cloud-task-10-requirements.md) 实现。
+
+#### 10.0 本地配合项
+
+- [x] policy、action、audit wire payload 使用版本化 schema，并兼容缺失 schema 的旧 policy。
+- [x] action/audit 上传保留生命周期、覆盖级别、执行状态、缺失事实和 requestId 等脱敏事实，不上传原始 LLM 内容。
+- [x] Cloud policy 字段在本地归一化；Cloud 断开、超时或旧 policy 时继续使用本地/缓存策略。
+- [x] 增加 Cloud wire-contract、旧 policy、脱敏和离线回退测试，并更新 native API/隐私边界文档。
+
+Cloud 服务端配合项见 `docs/cloud-task-10-requirements.md`，以下原始清单仍表示
+Cloud 侧完成状态。
+
 **Cloud policy API:**
 
 - [ ] 支持 `network.untrustedLlmEndpoint` 和 `network.trustedLlmEndpoints`。

@@ -125,6 +125,7 @@ export async function evaluateLocalAction(
     coverageLevel: privacyEvaluation.coverageLevel,
     missingFacts: privacyEvaluation.missingFacts,
     ruleEvaluations: privacyEvaluation.rules,
+    ...(privacyEvaluation.piiSummary.valueCount > 0 ? { piiSummary: privacyEvaluation.piiSummary } : {}),
   };
 }
 
