@@ -102,7 +102,7 @@ describe('Installed OpenClaw public hook runtime contract', {
       hookRuntime.initializeGlobalHookRunner({
         hooks: [],
         typedHooks,
-        plugins: [{ id: 'agentguard', packageVersion: '1.1.30-beta.3', status: 'loaded' }],
+        plugins: [{ id: 'agentguard', packageVersion: '1.1.30-beta.4', status: 'loaded' }],
       });
       const runner = pluginRuntime.getGlobalHookRunner();
       assert.ok(runner);
