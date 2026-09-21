@@ -70,7 +70,7 @@ function writeConfig(home: string, cloudUrl: string): void {
   }));
 }
 
-function writeDshCronConfig(home: string, cloudUrl: string, selfCheck = false): void {
+function writeDshConfig(home: string, cloudUrl: string): void {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, 'config.json'), JSON.stringify({
     version: 1,
@@ -83,6 +83,10 @@ function writeDshCronConfig(home: string, cloudUrl: string, selfCheck = false): 
     auditPath: join(home, 'audit.jsonl'),
     eventSpoolPath: join(home, 'events-spool.jsonl'),
   }));
+}
+
+function writeDshCronConfig(home: string, cloudUrl: string, selfCheck = false): void {
+  writeDshConfig(home, cloudUrl);
   writeFileSync(join(home, 'dsh-threat-feed-subscription.json'), JSON.stringify({
     version: 1,
     subscriptionId: 'subscription-cli-test',
@@ -392,6 +396,45 @@ describe('CLI subscribe command modes', () => {
     }
   });
 
+  it('rejects generic DSH cron installation before Cloud or scheduler side effects', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(`${req.method} ${req.url}`);
+      res.setHeader('content-type', 'application/json');
+      if (req.method === 'POST' && req.url === '/api/v1/feed/subscribe') {
+        res.end(JSON.stringify({ success: true, data: { id: 'sub_test', status: 'active' } }));
+        return;
+      }
+      if (req.method === 'GET' && req.url?.startsWith('/api/v1/feed/advisories')) {
+        res.end(JSON.stringify({ success: true, data: { advisories: [] } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const cloudUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-dsh-generic-cron-'));
+      writeDshConfig(home, cloudUrl);
+
+      const result = await runCliNoConfigWrite(
+        ['subscribe', '--json', '--cron', '0 * * * *'],
+        home,
+        { PATH: resolve(process.execPath, '..') },
+      );
+
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /DSH.*agentguard_dsh_subscribe/i);
+      assert.deepEqual(requests, []);
+      assert.equal(existsSync(join(home, 'dsh-threat-feed-subscription.json')), false);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
   it('DSH cron notification is queued before the advisory is saved as seen', async () => {
     await withFeedServer([advisory], async (cloudUrl) => {
       const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-dsh-notice-'));
@@ -430,6 +473,20 @@ describe('CLI subscribe command modes', () => {
 
       assert.equal(result.exitCode, 1);
       assert.equal(existsSync(join(home, 'feed-state.json')), false);
+    });
+  });
+
+  it('DSH cron with missing subscription state fails without saving the advisory as seen', async () => {
+    await withFeedServer([advisory], async (cloudUrl) => {
+      const home = mkdtempSync(join(tmpdir(), 'ag-cli-subscribe-dsh-missing-state-'));
+      writeDshConfig(home, cloudUrl);
+
+      const result = await runCliNoConfigWrite(['subscribe', '--json', '--cron-run'], home);
+
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /DSH threat-feed subscription state is missing/);
+      assert.equal(existsSync(join(home, 'feed-state.json')), false);
+      assert.equal(existsSync(join(home, 'dsh-feed-notifications')), false);
     });
   });
 

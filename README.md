@@ -90,8 +90,10 @@ agentguard subscribe --quiet
 # you to review newly published advisories. Auto uses the agent host saved by
 # `agentguard init`: OpenClaw uses native OpenClaw cron with Gateway
 # fallback at 127.0.0.1:18789, QClaw uses QClaw Gateway at 127.0.0.1:28789,
-# Hermes uses native Hermes cron. Claude Code, Codex, and DSH use system
-# crontab on Unix-like hosts and native Windows Task Scheduler on Windows.
+# Hermes uses native Hermes cron. Claude Code and Codex use system crontab on
+# Unix-like hosts and native Windows Task Scheduler on Windows. DSH schedules
+# must be created with the native agentguard_dsh_subscribe tool so notification
+# delivery is bound to the exact calling DSH session.
 # OpenClaw cron jobs keep runner delivery internal, then resolve the latest
 # deliverable session route at runtime and send notifications directly there.
 # QClaw cron jobs still use last-route announce delivery; no-notification runs
@@ -103,6 +105,10 @@ agentguard subscribe --quiet
 # If no agent host is saved, run `agentguard init --agent <agent>` first or
 # pass --cron-target explicitly.
 agentguard subscribe --cron "0 * * * *"
+
+# For DSH, ask the active session to invoke agentguard_dsh_subscribe instead.
+# The generic --cron form is rejected when DSH is the saved agent host because
+# a standalone CLI process cannot determine the target DSH session id.
 
 # Override cron backend selection when needed.
 agentguard subscribe --cron "0 * * * *" --cron-target system
