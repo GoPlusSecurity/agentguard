@@ -8,6 +8,24 @@ const SECRET_VALUE_PATTERN =
 const SENSITIVE_KEY_PATTERN =
   /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret|signature|sig)/i;
 
+/**
+ * Prose identifiers the field-anchored rules do not reach.
+ *
+ * Deliberately narrow. Redaction is destructive and runs over audit logs, so a
+ * false positive here silently deletes operational evidence. Only shapes that
+ * are specific enough to be unambiguous are listed: a bare 15-19 digit run, for
+ * instance, is left alone because build ids and timestamps share it.
+ */
+const PROSE_PII_PATTERNS: Array<[RegExp, (match: string) => string]> = [
+  // Area 000/666/9xx, group 00 and serial 0000 are never issued, so excluding
+  // them keeps ordinary dashed number triples (durations, part numbers) intact.
+  [/(?<![\d-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\d-])/g, () => '[REDACTED:PII_NATIONAL_ID]'],
+  [
+    /[\u4e00-\u9fa5]{2,10}(?:省|市|区|县|镇|街道|路|街|巷)[\u4e00-\u9fa5\d]{0,20}(?:\d+号院?|\d+号楼|\d+室|\d+单元)[\u4e00-\u9fa5\d]{0,10}/g,
+    () => '[REDACTED:PII_LOCATION_TRACE]',
+  ],
+];
+
 const REDACTION_PATTERNS: Array<[RegExp, (match: string) => string]> = [
   [/\bag_live_[A-Za-z0-9_-]{12,}\b/g, () => REDACTED],
   [/\bsk-or-v1-[A-Za-z0-9_-]{12,}\b/g, () => REDACTED],
@@ -28,6 +46,9 @@ const REDACTION_PATTERNS: Array<[RegExp, (match: string) => string]> = [
 
 export function redactText(value: unknown): string {
   let redacted = redactPiiText(String(value ?? ''));
+  for (const [pattern, replacement] of PROSE_PII_PATTERNS) {
+    redacted = redacted.replace(pattern, replacement);
+  }
   for (const [pattern, replacement] of REDACTION_PATTERNS) {
     redacted = redacted.replace(pattern, replacement);
   }

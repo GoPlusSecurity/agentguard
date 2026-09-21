@@ -33,6 +33,16 @@ import { readFileSync } from 'node:fs';
 // ---------------------------------------------------------------------------
 
 const RULES = [
+  { id: 'PII_NATIONAL_ID',        name: 'Personal Identifier',            severity: 'HIGH',     description: 'Semantic pass confirmed a national id, passport or SSN belonging to a natural person.' },
+  { id: 'PII_BANK_ACCOUNT',       name: 'Personal Financial Account',     severity: 'HIGH',     description: 'Semantic pass confirmed a bank or payment account belonging to a natural person.' },
+  { id: 'PII_PHONE_NUMBER',       name: 'Personal Phone Number',          severity: 'MEDIUM',   description: 'Semantic pass confirmed a phone number belonging to a natural person.' },
+  { id: 'PII_EMAIL_ADDRESS',      name: 'Personal Email Address',         severity: 'LOW',      description: 'Semantic pass confirmed a personal email address.' },
+  { id: 'PII_HEALTH_RECORD',      name: 'Health Disclosure',              severity: 'HIGH',     description: 'Semantic pass found a health disclosure. Located to a sentence; no extractable span exists.' },
+  { id: 'PII_LOCATION_TRACE',     name: 'Location or Residence',          severity: 'HIGH',     description: 'Semantic pass confirmed a residence or movement trace for a natural person.' },
+  { id: 'PII_BIOMETRIC',          name: 'Biometric Data',                 severity: 'HIGH',     description: 'Semantic pass confirmed biometric or genetic data.' },
+  { id: 'PII_MINOR_DATA',         name: 'Data Concerning a Minor',        severity: 'HIGH',     description: 'Semantic pass found information concerning a child.' },
+  { id: 'PII_CONTACT_DUMP',       name: 'Contact List',                   severity: 'HIGH',     description: 'Semantic pass confirmed a bulk contact or customer list.' },
+  { id: 'PII_HARDCODED_DATASET',  name: 'Inline Personal Dataset',        severity: 'HIGH',     description: 'Semantic pass confirmed inline records describing real people.' },
   { id: 'SHELL_EXEC',             name: 'Shell Command Execution',        severity: 'HIGH',     description: 'Detects capabilities to execute shell commands (child_process, subprocess, os.system).' },
   { id: 'AUTO_UPDATE',            name: 'Auto-Update / Download-Execute', severity: 'CRITICAL', description: 'Detects scheduled self-update or download-and-execute patterns (curl|bash, wget|sh).' },
   { id: 'REMOTE_LOADER',          name: 'Remote Code Loader',             severity: 'CRITICAL', description: 'Detects dynamic code loading from remote sources (dynamic import, eval(fetch(...))).' },
@@ -102,6 +112,20 @@ function readInput() {
 
 function buildSarif(input) {
   const findings = input.findings || [];
+
+  // Semantic privacy findings arrive under `privacy` from `agentguard scan --json`.
+  // Without this they would be silently dropped from SARIF, and a SARIF-gated CI
+  // pipeline would pass a scan that did report personal data.
+  for (const finding of input.privacy?.findings || []) {
+    findings.push({
+      rule_id: `PII_${String(finding.category || 'unknown').toUpperCase()}`,
+      severity: finding.localization === 'chunk' ? 'MEDIUM' : 'HIGH',
+      file: finding.file,
+      line: 1,
+      // Already masked upstream; never the raw value.
+      evidence: `${finding.evidence} (p=${Number(finding.probability ?? 0).toFixed(2)}, ${finding.localization})`,
+    });
+  }
 
   // Collect which rules actually fired (for the driver.rules array)
   const firedRuleIds = new Set(findings.map(f => f.rule_id));

@@ -86,3 +86,44 @@ decision is applied. An observer that detects a block-class policy result
 records `would_block`; it must not report that the model request was stopped.
 Unavailable transport facts remain absent and are listed in `missingFacts`, so
 missing visibility never becomes an implicit `allow`.
+
+## Optional: enhanced privacy mode (off by default)
+
+Deterministic rules detect personal data written as `field: value`. They recall
+very little from prose, which is the shape prompts and chat logs take. Enhanced
+mode adds a semantic judgment step to close that gap.
+
+It is **off by default** and must be turned on explicitly:
+
+```bash
+agentguard privacy status            # what is active, and what it would send
+agentguard privacy enable --yes      # confirm the data-boundary change
+agentguard privacy disable           # return every judgment to this machine
+```
+
+### What enhanced mode sends
+
+When enabled, AgentGuard sends the following to TypeSafe (`api.typesafe.ai`):
+
+- extracted candidate spans — an id number, a phone number, an address
+- the sentence each span appears in, so intent can be judged
+- every sentence of the analysed text, so disclosures carrying no extractable
+  span (a described illness, a stated salary) are still seen
+
+### What it never sends
+
+- whole files, whole prompts, or command output
+- credentials, private keys, or tokens
+- anything at all during runtime enforcement
+
+Enhanced mode runs only in on-demand scans. It is never applied to live prompts,
+because asking a third party whether a prompt contains medical information would
+disclose the very data the check exists to protect.
+
+### Failure behaviour
+
+If the provider is unreachable, rate limited, or overloaded, coverage degrades to
+`partial` or `observe_only` and the error is reported. A scan that could not be
+completed is never presented as a clean one. If enhanced mode is enabled but no
+API key is available, `status` reports `ENABLED BUT INACTIVE` rather than
+silently running local-only.

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added an opt-in semantic privacy enhancement that closes the prose recall gap in personal-data detection. Deterministic rules require a `field: value` anchor and recall almost nothing from prose; the new layer extracts candidate spans locally, judges them semantically, and falls back to sentence-level handling for disclosures that have no extractable span. Off by default, enabled with `agentguard privacy enable`, and never applied to live prompts.
 - Added local-first LLM traffic privacy protection with PII and relay detection rules 1–19, capability-aware enforcement across DSH, Hermes, OpenClaw, Codex, and Claude Code, and redacted Cloud policy/audit synchronization.
 - Added native Windows Task Scheduler support for AgentGuard scheduled jobs.
 - Added native DSH threat-feed subscription management, advisory self-check discovery, and queued delivery of cron notifications to active DSH sessions.

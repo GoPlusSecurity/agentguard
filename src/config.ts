@@ -18,10 +18,33 @@ export interface AgentGuardConfig {
   connectedAt?: string;
   threatFeedCronName?: string;
   threatFeedCronInstalledAt?: string;
+  privacy?: PrivacyEnhancementConfig;
   policyCachePath: string;
   auditPath: string;
   eventSpoolPath: string;
   approvalStorePath?: string;
+}
+
+/**
+ * Opt-in semantic privacy enhancement.
+ *
+ * Off by default: the local guard must keep working with no account and no
+ * network. Turning this on changes what leaves the machine, so it is an
+ * explicit, recorded decision rather than an inferred default.
+ */
+export interface PrivacyEnhancementConfig {
+  /** `off` keeps every judgment local; `jev` sends extracted spans to TypeSafe. */
+  mode: 'off' | 'jev';
+  /** Prefer the TYPESAFE_API_KEY environment variable; this is the fallback. */
+  apiKey?: string;
+  model?: string;
+  endpoint?: string;
+  /** Probability at or above which a span counts as personal data. */
+  threshold?: number;
+  /** Input-token ceiling for one command invocation. Guards runaway scans. */
+  tokenBudget?: number;
+  /** Recorded so the consent decision stays auditable. */
+  enabledAt?: string;
 }
 
 export interface AgentGuardPaths {

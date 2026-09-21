@@ -39,7 +39,8 @@
     "benchmark:dsh:update": "node scripts/dsh-benchmark.mjs --update",
     "test:cloud-live": "node --test dist/tests/cloud-live.test.js",
     "postinstall": "node dist/postinstall.js || true",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test:privacy-live": "node --test dist/tests/privacy-jev-live.test.js"
   },
   "keywords": [
     "claude-code-skill",

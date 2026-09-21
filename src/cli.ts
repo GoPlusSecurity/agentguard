@@ -20,6 +20,10 @@ import {
   normalizeCloudUrl,
   saveConfig,
 } from './config.js';
+import { describePrivacyMode, resolvePrivacyMode } from './privacy/resolve.js';
+import { scanSurfaces, type SurfaceScanResult } from './privacy/surfaces.js';
+import { MemoryVerdictCache } from './privacy/adjudicator.js';
+import { walkDirectoryWithCoverage } from './scanner/file-walker.js';
 import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
 import { SkillScanner } from './scanner/index.js';
 import type { DirectoryScanSnapshot } from './scanner/file-walker.js';
@@ -274,6 +278,7 @@ async function main() {
       console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
       console.log(`Policy cache: ${config.policyCachePath}`);
       console.log(`Audit log: ${config.auditPath}`);
+      console.log(`Privacy enhancement: ${describePrivacyMode(config)}`);
       printInitGuidanceIfNeeded(config);
     });
 
@@ -374,6 +379,97 @@ async function main() {
       if (networkWarning) console.log(`! ${networkWarning}`);
     });
 
+  const privacy = program
+    .command('privacy')
+    .description('Manage the opt-in semantic privacy enhancement');
+
+  privacy
+    .command('status')
+    .description('Show whether semantic privacy enhancement is active and what it sends')
+    .option('--json', 'Print JSON output')
+    .action((options: { json?: boolean }) => {
+      const config = ensureConfig();
+      const resolved = resolvePrivacyMode(config);
+      if (options.json) {
+        console.log(JSON.stringify({
+          mode: resolved.requestedMode,
+          active: resolved.adjudicator.name !== 'offline',
+          provider: resolved.adjudicator.name,
+          threshold: resolved.options.threshold,
+          endpoint: config.privacy?.endpoint ?? null,
+          enabledAt: config.privacy?.enabledAt ?? null,
+          warning: resolved.warning ?? null,
+        }, null, 2));
+        return;
+      }
+      console.log(`Mode: ${describePrivacyMode(config)}`);
+      console.log(`Threshold: ${resolved.options.threshold}`);
+      if (config.privacy?.enabledAt) console.log(`Enabled at: ${config.privacy.enabledAt}`);
+      if (resolved.warning) console.log(`\nWarning: ${resolved.warning}`);
+      if (resolved.requestedMode === 'off') {
+        console.log('\nLocal rules detect personal data in structured `field: value` form.');
+        console.log('They recall very little from prose, which is the shape prompts take.');
+        console.log('Run `agentguard privacy enable` to add semantic judgment.');
+      }
+    });
+
+  privacy
+    .command('enable')
+    .description('Enable semantic privacy enhancement (sends extracted spans to TypeSafe)')
+    .option('--api-key <key>', 'TypeSafe API key; prefer the TYPESAFE_API_KEY environment variable')
+    .option('--model <model>', 'Override the model id')
+    .option('--endpoint <url>', 'Override the API endpoint')
+    .option('--threshold <value>', 'Probability at or above which a span counts as personal data')
+    .option('--yes', 'Skip the data-boundary confirmation')
+    .action((options: { apiKey?: string; model?: string; endpoint?: string; threshold?: string; yes?: boolean }) => {
+      const config = ensureConfig();
+      const threshold = options.threshold === undefined ? undefined : Number(options.threshold);
+      if (threshold !== undefined && (!Number.isFinite(threshold) || threshold <= 0 || threshold >= 1)) {
+        console.error('Threshold must be a number between 0 and 1.');
+        process.exitCode = 1;
+        return;
+      }
+
+      // Enabling moves data off the machine, so the boundary change is stated
+      // before it takes effect rather than buried in documentation.
+      console.log('Enhanced privacy mode sends the following to TypeSafe (api.typesafe.ai):');
+      console.log('  - extracted candidate spans (an id number, a phone number, an address)');
+      console.log('  - the sentence each span appears in, so intent can be judged');
+      console.log('  - every sentence of the analysed text, so disclosures with no');
+      console.log('    extractable span (a described illness, a stated salary) are still seen');
+      console.log('It does NOT send whole files, prompts, command output, or credentials.');
+      console.log('It is never used on live prompts at runtime, only on on-demand scans.');
+      if (!options.yes) {
+        console.log('\nRe-run with --yes to confirm this data boundary change.');
+        return;
+      }
+
+      saveConfig({
+        ...config,
+        privacy: {
+          mode: 'jev',
+          apiKey: options.apiKey ?? config.privacy?.apiKey,
+          model: options.model ?? config.privacy?.model,
+          endpoint: options.endpoint ?? config.privacy?.endpoint,
+          threshold: threshold ?? config.privacy?.threshold,
+          enabledAt: new Date().toISOString(),
+        },
+      });
+      const resolved = resolvePrivacyMode(ensureConfig());
+      console.log('\nEnhanced privacy mode enabled.');
+      if (resolved.warning) console.log(`Warning: ${resolved.warning}`);
+    });
+
+  privacy
+    .command('disable')
+    .description('Disable semantic privacy enhancement and keep every judgment local')
+    .action(() => {
+      const config = ensureConfig();
+      saveConfig({ ...config, privacy: { ...config.privacy, mode: 'off' } });
+      console.log('Enhanced privacy mode disabled. All judgments stay on this machine.');
+      console.log('Prose coverage now reports as unsupported rather than clean.');
+    });
+
   program
     .command('doctor')
     .description('Check local AgentGuard setup')
@@ -383,6 +479,12 @@ async function main() {
       console.log(`✓ Home: ${paths.home}`);
       console.log(`✓ Config: ${paths.configPath}`);
       console.log(`✓ Node: ${process.version}`);
+      const privacyMode = resolvePrivacyMode(config);
+      if (privacyMode.warning) {
+        console.log(`! Privacy enhancement: ${privacyMode.warning}`);
+      } else {
+        console.log(`✓ Privacy enhancement: ${describePrivacyMode(config)}`);
+      }
       const client = new AgentGuardCloudClient(config);
       if (client.connected) {
         try {
@@ -411,13 +513,22 @@ async function main() {
       try {
         const scanner = new SkillScanner({ useExternalScanner: false });
         const result = await scanner.quickScan(source.rootDir);
+        // Source code carries no prose worth judging, so only extracted spans
+        // are sent. Shipping every line of a repository would cost roughly an
+        // order of magnitude more and buy nothing the rules do not already see.
+        const privacyScan = await runSemanticPrivacyScan(source.rootDir);
         if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({
+            ...result,
+            privacy: privacyScan ? { ...privacyScan.result, warning: privacyScan.warning } : undefined,
+          }, null, 2));
         } else {
           console.log(`${result.risk_level.toUpperCase()}: ${result.summary}`);
           if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
+          printSemanticPrivacyScan(privacyScan);
         }
-        process.exitCode = result.risk_level === 'critical' ? 2 : 0;
+        const privacyCritical = (privacyScan?.result?.findings.length ?? 0) > 0;
+        process.exitCode = result.risk_level === 'critical' || privacyCritical ? 2 : 0;
       } finally {
         await source.cleanup();
       }
@@ -1311,6 +1422,96 @@ interface HealthCheckupReport {
   recommendations: CheckupFinding[];
 }
 
+/**
+ * Run the opt-in semantic privacy pass over a directory.
+ *
+ * Returns null when enhancement is off, so callers print nothing rather than a
+ * misleading "no personal data found" line for a check that never ran.
+ */
+async function runSemanticPrivacyScan(rootDir: string): Promise<SemanticPrivacyScan | null> {
+  const config = ensureConfig();
+  const resolved = resolvePrivacyMode(config);
+  // A misconfigured enhancement must be reported, but never on stderr: `scan`
+  // is consumed by CI and by `--json`, and a stray warning there breaks the
+  // output contract. It travels with the result instead.
+  if (resolved.adjudicator.name === 'offline') {
+    return resolved.warning ? { warning: resolved.warning } : null;
+  }
+  const snapshot = await walkDirectoryWithCoverage(rootDir, { includeGeneratedRuntime: false });
+
+  // Scope follows the file, not the command. A repository holds both source,
+  // where only extracted spans are worth judging, and documentation, which is
+  // prose and carries disclosures that have no span at all.
+  const prose: string[] = [];
+  const code: string[] = [];
+  for (const file of snapshot.files) {
+    (PROSE_EXTENSIONS.has(file.extension) ? prose : code).push(file.path);
+  }
+
+  const shared = {
+    adjudicator: resolved.adjudicator,
+    settings: resolved.options,
+    budget: resolved.budget,
+    cache: new MemoryVerdictCache(),
+  };
+  const codeScan = await scanSurfaces(code, { ...shared, scope: 'candidates' });
+  const proseScan = await scanSurfaces(prose, { ...shared, scope: 'filtered' });
+  return { result: mergeSurfaceScans(codeScan, proseScan) };
+}
+
+/** Either a completed pass, or the reason no pass ran. Never both absent. */
+interface SemanticPrivacyScan {
+  result?: SurfaceScanResult;
+  warning?: string;
+}
+
+const PROSE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.rst']);
+
+function mergeSurfaceScans(left: SurfaceScanResult, right: SurfaceScanResult): SurfaceScanResult {
+  const order: SurfaceScanResult['coverage'][] = ['full', 'partial', 'observe_only', 'unsupported'];
+  return {
+    findings: [...left.findings, ...right.findings],
+    filesExamined: left.filesExamined + right.filesExamined,
+    filesSkipped: left.filesSkipped + right.filesSkipped,
+    coverage: order[Math.max(order.indexOf(left.coverage), order.indexOf(right.coverage))] ?? left.coverage,
+    budgetExhausted: left.budgetExhausted || right.budgetExhausted,
+    chunksSkipped: left.chunksSkipped + right.chunksSkipped,
+    usage: {
+      inputTokens: left.usage.inputTokens + right.usage.inputTokens,
+      outputTokens: left.usage.outputTokens + right.usage.outputTokens,
+      requests: left.usage.requests + right.usage.requests,
+    },
+    errors: [...left.errors, ...right.errors],
+  };
+}
+
+function printSemanticPrivacyScan(scan: SemanticPrivacyScan | null): void {
+  if (!scan) return;
+  if (scan.warning) {
+    console.log(`Privacy: ${scan.warning}`);
+    return;
+  }
+  const result = scan.result;
+  if (!result) return;
+  printSurfaceScan(result);
+}
+
+function printSurfaceScan(scan: SurfaceScanResult): void {
+  if (scan.findings.length === 0) {
+    console.log(`Privacy: no personal data found in ${scan.filesExamined} file(s).`);
+  } else {
+    console.log(`Privacy: ${scan.findings.length} personal-data finding(s) in ${scan.filesExamined} file(s).`);
+    for (const finding of scan.findings.slice(0, 20)) {
+      console.log(`  [${finding.category}] ${finding.file} — ${finding.evidence} (p=${finding.probability.toFixed(2)})`);
+    }
+    if (scan.findings.length > 20) console.log(`  ... and ${scan.findings.length - 20} more`);
+  }
+  // An incomplete pass must never read as a clean one.
+  if (scan.coverage !== 'full') console.log(`  Coverage: ${scan.coverage}`);
+  if (scan.budgetExhausted) console.log('  Token budget exhausted; some files were not analysed.');
+  if (scan.errors.length) console.log(`  Provider errors: ${scan.errors.slice(0, 3).join('; ')}`);
+}
+
 async function runLocalHealthCheckup(config: AgentGuardConfig): Promise<HealthCheckupReport> {
   const skillRoots = [
     join(homedir(), '.claude', 'skills'),
@@ -1659,12 +1860,54 @@ async function checkCredentialSafety(skillDirs: string[], collection: PatrolFile
   if (collection.truncated || collection.traversalErrors > 0) {
     findings.push(patrolFinding(2, 'MEDIUM', 'Credential scanning coverage was incomplete because one or more agent files could not be enumerated within safety limits.'));
   }
+
+  // Agent memory, logs and chat transcripts are prose, so the field-anchored
+  // rules above recall almost nothing from them. The opt-in semantic pass
+  // covers that surface; when it is off, nothing is added and nothing is
+  // claimed about it.
+  findings.push(...await checkProsePersonalData(patrolFiles));
+
   score -= findingScoreDeduction(findings);
   return {
     score: clampScore(score),
     findings,
     details: findings.length ? `${findings.length} credential hygiene issue(s) found.` : 'Credential permissions and scanned manifests look clean.',
   };
+}
+
+/**
+ * Semantic pass over agent memory, logs and transcripts.
+ *
+ * Returns no findings when enhancement is disabled. It deliberately does not
+ * emit an "all clear" in that case: a check that never ran must not contribute
+ * evidence of cleanliness.
+ */
+async function checkProsePersonalData(patrolFiles: PatrolFile[]): Promise<CheckupFinding[]> {
+  const resolved = resolvePrivacyMode(ensureConfig());
+  if (resolved.adjudicator.name === 'offline') return [];
+
+  const candidates = patrolFiles
+    .filter((file) => isSecurityRelevantPatrolFile(file.path) && !isInsideManagedAgentGuardSkill(file.path))
+    .map((file) => file.path);
+  if (candidates.length === 0) return [];
+
+  const scan = await scanSurfaces(candidates, {
+    scope: 'filtered',
+    adjudicator: resolved.adjudicator,
+    settings: resolved.options,
+    budget: resolved.budget,
+  });
+
+  const findings: CheckupFinding[] = [];
+  const byFile = new Map<string, number>();
+  for (const finding of scan.findings) byFile.set(finding.file, (byFile.get(finding.file) ?? 0) + 1);
+  for (const [file, count] of byFile) {
+    findings.push(patrolFinding(2, 'HIGH', `${count} personal-data disclosure(s) detected in ${file}.`));
+  }
+  if (scan.coverage !== 'full' || scan.budgetExhausted) {
+    findings.push(patrolFinding(2, 'MEDIUM', `Semantic personal-data coverage was ${scan.coverage}${scan.budgetExhausted ? ' (token budget exhausted)' : ''}; some agent files were not analysed.`));
+  }
+  return findings;
 }
 
 function isInsideManagedAgentGuardSkill(path: string): boolean {
