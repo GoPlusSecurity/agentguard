@@ -1,0 +1,115 @@
+{
+  "note": "Synthetic prose. No real personal data. Identifiers are format-valid but fabricated. track=value: a contiguous span exists and can be masked in place. track=chunk: no extractable span (semantic disclosure, Chinese-numeral or split identifiers); only whole-sentence handling is sound.",
+  "positive": [
+    {
+      "id": "P1",
+      "kind": "national_id",
+      "text": "我的身份证是 110101199003071233，麻烦帮我填一下报名表",
+      "track": "value"
+    },
+    {
+      "id": "P2",
+      "kind": "health",
+      "text": "患者男，45岁，持续低烧三周，CT 显示右肺下叶磨玻璃结节，既往有乙肝病史",
+      "track": "chunk"
+    },
+    {
+      "id": "P3",
+      "kind": "finance",
+      "text": "我月薪两万八，房贷还剩一百八十万，用的是招行的卡，尾号 4429",
+      "track": "chunk"
+    },
+    {
+      "id": "P4",
+      "kind": "minor",
+      "text": "我女儿今年上三年级，在望京实验学校，平时我七点送她过去",
+      "track": "chunk"
+    },
+    {
+      "id": "P5",
+      "kind": "location",
+      "text": "我每天早上七点从望京西坐15号线到清华东路西口，周末一般在朝阳大悦城",
+      "track": "chunk"
+    },
+    {
+      "id": "P6",
+      "kind": "national_id",
+      "text": "My SSN is 123-45-6789 and I live at 42 Maple Street, Springfield",
+      "track": "value"
+    },
+    {
+      "id": "P7",
+      "kind": "health",
+      "text": "I was diagnosed with type 2 diabetes last March and I'm on metformin 500mg twice daily",
+      "track": "chunk"
+    },
+    {
+      "id": "P8",
+      "kind": "phone",
+      "text": "有事打我手机 13812345678，我住朝阳区酒仙桥路12号院3号楼502",
+      "track": "value"
+    },
+    {
+      "id": "A1",
+      "kind": "obfuscated",
+      "text": "我的身份证是 一一零一零一一九九零零三零七一二三三，帮我核对一下",
+      "track": "chunk"
+    },
+    {
+      "id": "A2",
+      "kind": "split",
+      "text": "身份证前六位是110101，中间出生日期19900307，后面四位1233",
+      "track": "chunk"
+    },
+    {
+      "id": "A4",
+      "kind": "health",
+      "text": "最近复查结果不太好，医生说指标又上去了，可能下个月要再做一次穿刺",
+      "track": "chunk"
+    },
+    {
+      "id": "A5",
+      "kind": "finance",
+      "text": "工资卡是建行的，每个月十五号发，到手一万七，还完车贷剩不到八千",
+      "track": "chunk"
+    }
+  ],
+  "negative": [
+    {
+      "id": "N3",
+      "text": "身份证号字段应当加密存储，不得明文落库。示例格式：18 位数字，末位可能为 X。"
+    },
+    {
+      "id": "N4",
+      "text": "用户常把病历、银行卡号直接贴进对话框，这些内容可能被中转站留存并倒卖。"
+    },
+    {
+      "id": "N6",
+      "text": "commit_sha = \"a3f5b2c8d9e1f4a7b6c2d8e3f9a1b5c7d2e8f3a9\""
+    },
+    {
+      "id": "N7",
+      "text": "sku: \"440301202401150001\"   # 仓库物料编码"
+    },
+    {
+      "id": "N8",
+      "text": "build_id = 20240115093022 / release = \"1.1.30-beta.3\""
+    },
+    {
+      "id": "B1",
+      "text": "很多2型糖尿病患者需要每天注射胰岛素，二甲双胍是一线用药。"
+    },
+    {
+      "id": "B2",
+      "text": "如有疑问请拨打客服热线 400-820-8820，工作时间 9:00-18:00。"
+    },
+    {
+      "id": "B4",
+      "text": "本季度用户画像：25-34岁占 42%，一线城市占 61%，平均客单价 328 元。"
+    },
+    {
+      "id": "B6",
+      "text": "CREATE TABLE users (id_card VARCHAR(18), phone VARCHAR(11), diagnosis TEXT);"
+    }
+  ]
+}

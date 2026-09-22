@@ -97,6 +97,9 @@ Supported CLI commands and options:
 
 | CLI command | Options | Notes |
 |---|---|---|
+| `agentguard privacy status` | `--json` | Reports whether the opt-in semantic privacy enhancement is active and what it sends |
+| `agentguard privacy enable` | `--api-key <key>`, `--model <model>`, `--endpoint <url>`, `--threshold <value>`, `--yes` | Enables semantic personal-data detection for prose. Changes what leaves the machine, so `--yes` is required to confirm |
+| `agentguard privacy disable` | — | Returns every judgment to the local machine |
 | `agentguard init` | `--level <level>`, `--agent <agent>`, `--cloud <url>`, `--force` | Creates local config, persists the selected agent host, and optionally installs templates for `claude-code`, `codex`, `openclaw`, `hermes`, or `qclaw` |
 | `agentguard connect` | `--key <key>`, `--api-key <key>`, `--url <url>`, `--cloud <url>` | API-key auth and Agent JWT auth are alternatives; configure only one. Prefer `AGENTGUARD_API_KEY` over passing secrets in flags |
 | `agentguard disconnect` | none | Removes local Cloud credentials, pending event spool, cached Cloud policy, and the managed `agentguard-threat-feed` subscribe cron job; keeps Cloud URL, audit log, and installed hooks/templates |

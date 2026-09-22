@@ -14,6 +14,7 @@ This project provides a unified Claude Code skill: `/agentguard`
 /agentguard report               — View security event audit log
 /agentguard config <level>       — Set protection level (strict/balanced/permissive)
 /agentguard checkup              — Run agent health checkup with visual HTML report
+/agentguard privacy <cmd>        — Opt-in semantic privacy enhancement (status/enable/disable)
 ```
 
 ## Project Structure

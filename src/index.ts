@@ -197,3 +197,31 @@ export function createAgentGuard(options?: {
 
 // Default export
 export default createAgentGuard;
+
+// Export semantic privacy adjudication (opt-in; offline by default)
+export {
+  analyzePrivacy,
+  maskFindings,
+  MemoryVerdictCache,
+  PROMPT_VERSION as PRIVACY_PROMPT_VERSION,
+  type AnalyzeOptions,
+  type PrivacyFinding,
+  type SemanticPrivacyReport,
+  type VerdictCache,
+} from './privacy/adjudicator.js';
+export { extractCandidates, DEFAULT_MAX_CANDIDATES } from './privacy/candidates.js';
+export { splitChunks, chunkLocator } from './privacy/chunks.js';
+export { hasSoftSignal, softSignalGroups, isStructuredNoise, SOFT_SIGNAL_GROUPS } from './privacy/soft-signals.js';
+export { resolvePrivacyMode, describePrivacyMode, type ResolvedPrivacyMode } from './privacy/resolve.js';
+export { JevAdjudicator, estimateTokens, splitByTokenBudget } from './privacy/providers/jev.js';
+export { OfflineAdjudicator } from './privacy/providers/offline.js';
+export type {
+  AdjudicateOptions,
+  AdjudicationRequest,
+  AdjudicationResult,
+  AdjudicationVerdict,
+  PiiCandidate,
+  PiiChunk,
+  PiiLocalization,
+  PrivacyAdjudicator,
+} from './privacy/types.js';

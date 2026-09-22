@@ -212,6 +212,25 @@ This installs the skill, configures hooks, and sets your protection level.
 
 </details>
 
+### Optional: enhanced privacy mode
+
+AgentGuard's deterministic rules find personal data written as `field: value`.
+They recall very little from prose — which is the shape prompts, chat logs and
+agent memory take. Enhanced mode adds a semantic judgment step for that surface.
+
+```bash
+agentguard privacy status      # what is active, and what it would send
+agentguard privacy enable --yes
+agentguard privacy disable
+```
+
+It is **off by default** and requires an explicit confirmation, because turning
+it on changes what leaves the machine. `scan` sends extracted spans only for
+source files and adds filtered prose for documentation; `checkup` analyses agent
+memory and logs. Live prompts are never analysed this way. If the provider is
+unreachable, coverage degrades to `partial` and is reported as such rather than
+presented as clean. See [Privacy and data boundary](docs/privacy-boundary.md).
+
 See also:
 
 - [Connect OSS AgentGuard to Cloud](docs/cloud-connect.md)

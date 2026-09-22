@@ -86,3 +86,57 @@ decision is applied. An observer that detects a block-class policy result
 records `would_block`; it must not report that the model request was stopped.
 Unavailable transport facts remain absent and are listed in `missingFacts`, so
 missing visibility never becomes an implicit `allow`.
+
+## Optional: enhanced privacy mode (off by default)
+
+Deterministic rules detect personal data written as `field: value`. They recall
+very little from prose, which is the shape prompts and chat logs take. Enhanced
+mode adds a semantic judgment step to close that gap.
+
+It is **off by default** and must be turned on explicitly:
+
+```bash
+agentguard privacy status            # what is active, and what it would send
+agentguard privacy enable --yes      # confirm the data-boundary change
+agentguard privacy disable           # return every judgment to this machine
+```
+
+### What enhanced mode sends
+
+When enabled, AgentGuard sends the following to TypeSafe (`api.typesafe.ai`):
+
+- extracted candidate spans — an id number, a phone number, an address
+- a bounded window of surrounding text, 60 characters either side, redacted
+  before it is cut so that judgement has context without shipping the whole line
+- sentences of the analysed text, redacted and length-capped, so that disclosures
+  carrying no extractable span (a described illness, a stated salary) are seen
+
+### What it never sends
+
+- whole files, whole prompts, or command output
+- credentials, private keys, or tokens
+
+Credentials are excluded by three independent mechanisms, because path-based
+exclusion alone cannot cover a key pasted into an ordinary note:
+
+1. Credential stores (`.env*`, `id_rsa`, `*.pem`, `.npmrc`, `credentials`,
+   `authorized_keys`) are never read for analysis.
+2. Context is redacted before it is narrowed. Narrowing first would slice a
+   secret in half, leaving a fragment the redaction patterns no longer match.
+3. The exact serialized request is checked immediately before dispatch, and a
+   payload matching a credential shape is dropped rather than sent. Failing a
+   scan is recoverable; disclosing a key is not.
+
+Nothing is sent at all during runtime enforcement.
+
+Enhanced mode runs only in on-demand scans. It is never applied to live prompts,
+because asking a third party whether a prompt contains medical information would
+disclose the very data the check exists to protect.
+
+### Failure behaviour
+
+If the provider is unreachable, rate limited, or overloaded, coverage degrades to
+`partial` or `observe_only` and the error is reported. A scan that could not be
+completed is never presented as a clean one. If enhanced mode is enabled but no
+API key is available, `status` reports `ENABLED BUT INACTIVE` rather than
+silently running local-only.
