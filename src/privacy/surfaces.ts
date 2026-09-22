@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import type { CoverageLevel, PiiCategory } from '../runtime/types.js';
 import { analyzePrivacy, MemoryVerdictCache, type SemanticPrivacyReport, type VerdictCache } from './adjudicator.js';
 import { splitChunks } from './chunks.js';
+import { isCredentialStore } from './redact-outbound.js';
 import type { AdjudicateOptions, PiiLocalization, PrivacyAdjudicator, PrivacyScope, TokenBudget } from './types.js';
 
 /** Largest file sent for semantic analysis; larger files are reported as skipped. */
@@ -10,6 +11,8 @@ export const MAX_SURFACE_FILE_BYTES = 512 * 1024;
 export interface SurfaceFinding {
   file: string;
   category: PiiCategory;
+  /** 1-based line, so consumers can point at the finding instead of the file. */
+  line: number;
   localization: PiiLocalization;
   /** Always masked. The raw value must never reach a report, log or console. */
   evidence: string;
@@ -54,6 +57,7 @@ function describeFinding(report: SemanticPrivacyReport, text: string, chunks = s
     if (finding.span) {
       return {
         category: finding.category,
+        line: finding.line,
         localization: finding.localization,
         evidence: maskValue(finding.span.value),
         probability: finding.probability,
@@ -64,6 +68,7 @@ function describeFinding(report: SemanticPrivacyReport, text: string, chunks = s
     const chunk = chunks[finding.chunkIndex];
     return {
       category: finding.category,
+      line: finding.line,
       localization: finding.localization,
       evidence: `sentence ${finding.chunkIndex + 1}${chunk ? ` (${chunk.text.length} chars)` : ''}`,
       probability: finding.probability,
@@ -94,6 +99,12 @@ export async function scanSurfaces(files: string[], options: SurfaceScanOptions)
   };
 
   for (const file of files) {
+    // Credential stores hold no personal disclosure a judge could rule on, and
+    // every byte of them is sensitive. Excluded outright rather than redacted.
+    if (isCredentialStore(file)) {
+      result.filesSkipped += 1;
+      continue;
+    }
     let text: string;
     try {
       if (statSync(file).size > maxBytes) {

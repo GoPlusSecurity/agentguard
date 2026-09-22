@@ -106,6 +106,18 @@ export class TokenBudget {
     this.spent += amount;
     return true;
   }
+
+  /**
+   * Correct a reservation against the provider's reported usage.
+   *
+   * Reservations are made from a character-based estimate, which can undercount.
+   * Without reconciliation those errors accumulate and the ceiling drifts above
+   * what was configured, so the actual figure replaces the estimate — even when
+   * that pushes the budget over, which then stops subsequent requests.
+   */
+  reconcile(estimated: number, actual: number): void {
+    this.spent += Math.max(0, actual - estimated);
+  }
 }
 
 export interface AdjudicateOptions {

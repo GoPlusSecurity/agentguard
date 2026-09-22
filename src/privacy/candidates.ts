@@ -1,5 +1,6 @@
 import type { PiiCategory } from '../runtime/types.js';
 import type { PiiCandidate } from './types.js';
+import { outboundContext } from './redact-outbound.js';
 
 interface Extractor {
   kind: string;
@@ -66,13 +67,21 @@ function base64LooksLikeIdentifier(value: string): boolean {
   }
 }
 
-/** Resolve the absolute offset of a capture group inside its match. */
+/**
+ * Resolve the absolute offset of a capture group inside its match.
+ *
+ * Uses the regex `d` flag so the engine reports exact capture indices. Deriving
+ * the offset by searching for the captured text instead is wrong whenever that
+ * text repeats inside the match, and a wrong offset here masks the wrong span —
+ * leaving the real personal data in place while destroying something else.
+ */
 function groupOffset(match: RegExpMatchArray, group: number): number {
-  const whole = match[0];
-  const captured = match[group];
-  if (!captured) return -1;
-  const relative = whole.lastIndexOf(captured);
-  return relative < 0 ? -1 : (match.index ?? 0) + relative;
+  const indices = (match as RegExpMatchArray & { indices?: Array<[number, number] | undefined> }).indices;
+  const span = indices?.[group];
+  if (span) return span[0];
+  // No `d` support: refuse rather than guess, since a guessed offset silently
+  // redacts the wrong text.
+  return -1;
 }
 
 export interface ExtractCandidatesOptions {
@@ -95,7 +104,8 @@ export function extractCandidates(
   const found: PiiCandidate[] = [];
 
   for (const extractor of EXTRACTORS) {
-    const pattern = new RegExp(extractor.pattern.source, extractor.pattern.flags);
+    // `d` yields exact capture indices; see groupOffset.
+    const pattern = new RegExp(extractor.pattern.source, `${extractor.pattern.flags}d`);
     for (const match of text.matchAll(pattern)) {
       const group = extractor.group ?? 0;
       const value = group === 0 ? match[0] : match[group];
@@ -114,7 +124,10 @@ export function extractCandidates(
         start,
         end: start + value.length,
         chunkIndex: chunk.index,
-        context: chunk.text,
+        // A bounded, redacted window rather than the whole sentence: the
+        // sentence a span sits in may carry unrelated secrets, and every extra
+        // character is data leaving the machine.
+        context: outboundContext(text, start, start + value.length),
       });
       if (found.length >= max * 4) break;
     }

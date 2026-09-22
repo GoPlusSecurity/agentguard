@@ -117,15 +117,25 @@ describe('Shared token budget', () => {
   });
 
   it('is shared across calls so a directory scan cannot multiply the ceiling', async () => {
-    const budget = new TokenBudget(400);
+    // Sized so several files fit and later ones do not, which is the property
+    // under test: the ceiling belongs to the invocation, not to each call.
+    const limit = 4_000;
+    const budget = new TokenBudget(limit);
     const adjudicator = new RecordingAdjudicator();
-    let exhaustedAt = -1;
+    let sent = 0;
+    let refused = 0;
     for (let i = 0; i < 12; i++) {
       const report = await analyzePrivacy(`${MIXED}${i}`, { adjudicator, budget });
-      if (report.budgetExhausted && exhaustedAt < 0) exhaustedAt = i;
+      if (report.budgetExhausted) refused += 1;
+      else sent += 1;
     }
-    assert.ok(exhaustedAt >= 0, 'a shared budget must eventually stop a repeated scan');
-    assert.equal(budget.exhausted || budget.remaining < 400, true);
+    assert.ok(sent > 0, 'the budget must allow the first files through');
+    assert.ok(refused > 0, 'a shared budget must eventually stop a repeated scan');
+    assert.ok(
+      limit - budget.remaining <= limit,
+      'total spend across every call must stay within the single ceiling',
+    );
+    assert.ok(budget.remaining < limit, 'spending must actually be recorded against the shared budget');
   });
 
   it('reports remaining budget so callers can pace a large scan', () => {

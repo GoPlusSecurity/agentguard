@@ -434,10 +434,14 @@ async function main() {
       // before it takes effect rather than buried in documentation.
       console.log('Enhanced privacy mode sends the following to TypeSafe (api.typesafe.ai):');
       console.log('  - extracted candidate spans (an id number, a phone number, an address)');
-      console.log('  - the sentence each span appears in, so intent can be judged');
-      console.log('  - every sentence of the analysed text, so disclosures with no');
-      console.log('    extractable span (a described illness, a stated salary) are still seen');
-      console.log('It does NOT send whole files, prompts, command output, or credentials.');
+      console.log('  - a bounded window of surrounding text (60 characters either side),');
+      console.log('    redacted, so intent can be judged without shipping the whole line');
+      console.log('  - sentences of the analysed text, redacted and length-capped, so that');
+      console.log('    disclosures with no extractable span (a described illness, a stated');
+      console.log('    salary) are still seen');
+      console.log('It does NOT send whole files, prompts, or command output. Credential');
+      console.log('stores (.env, id_rsa, *.pem, .npmrc, credentials) are never analysed,');
+      console.log('and any payload still matching a credential shape is dropped unsent.');
       console.log('It is never used on live prompts at runtime, only on on-demand scans.');
       if (!options.yes) {
         console.log('\nRe-run with --yes to confirm this data boundary change.');
@@ -527,8 +531,19 @@ async function main() {
           if (result.risk_tags.length) console.log(`Tags: ${result.risk_tags.join(', ')}`);
           printSemanticPrivacyScan(privacyScan);
         }
-        const privacyCritical = (privacyScan?.result?.findings.length ?? 0) > 0;
-        process.exitCode = result.risk_level === 'critical' || privacyCritical ? 2 : 0;
+        const privacyResult = privacyScan?.result;
+        const privacyCritical = (privacyResult?.findings.length ?? 0) > 0;
+        // 3 marks an incomplete scan, distinct from 2 (findings) and 0 (clean).
+        // A caller gating on exit status must be able to tell "nothing found"
+        // from "not everything was examined".
+        const privacyIncomplete = Boolean(
+          privacyResult && (privacyResult.coverage !== 'full' || privacyResult.budgetExhausted),
+        );
+        process.exitCode = result.risk_level === 'critical' || privacyCritical
+          ? 2
+          : privacyIncomplete
+            ? 3
+            : 0;
       } finally {
         await source.cleanup();
       }
@@ -1497,8 +1512,15 @@ function printSemanticPrivacyScan(scan: SemanticPrivacyScan | null): void {
 }
 
 function printSurfaceScan(scan: SurfaceScanResult): void {
+  const incomplete = scan.coverage !== 'full' || scan.budgetExhausted;
   if (scan.findings.length === 0) {
-    console.log(`Privacy: no personal data found in ${scan.filesExamined} file(s).`);
+    // "Nothing found" and "did not finish looking" are different statements,
+    // and conflating them is the failure this layer exists to avoid.
+    console.log(
+      incomplete
+        ? `Privacy: scan incomplete — ${scan.filesExamined} file(s) examined, ${scan.filesSkipped} not analysed. No conclusion.`
+        : `Privacy: no personal data found in ${scan.filesExamined} file(s).`,
+    );
   } else {
     console.log(`Privacy: ${scan.findings.length} personal-data finding(s) in ${scan.filesExamined} file(s).`);
     for (const finding of scan.findings.slice(0, 20)) {

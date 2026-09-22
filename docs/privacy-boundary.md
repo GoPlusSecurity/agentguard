@@ -106,15 +106,28 @@ agentguard privacy disable           # return every judgment to this machine
 When enabled, AgentGuard sends the following to TypeSafe (`api.typesafe.ai`):
 
 - extracted candidate spans — an id number, a phone number, an address
-- the sentence each span appears in, so intent can be judged
-- every sentence of the analysed text, so disclosures carrying no extractable
-  span (a described illness, a stated salary) are still seen
+- a bounded window of surrounding text, 60 characters either side, redacted
+  before it is cut so that judgement has context without shipping the whole line
+- sentences of the analysed text, redacted and length-capped, so that disclosures
+  carrying no extractable span (a described illness, a stated salary) are seen
 
 ### What it never sends
 
 - whole files, whole prompts, or command output
 - credentials, private keys, or tokens
-- anything at all during runtime enforcement
+
+Credentials are excluded by three independent mechanisms, because path-based
+exclusion alone cannot cover a key pasted into an ordinary note:
+
+1. Credential stores (`.env*`, `id_rsa`, `*.pem`, `.npmrc`, `credentials`,
+   `authorized_keys`) are never read for analysis.
+2. Context is redacted before it is narrowed. Narrowing first would slice a
+   secret in half, leaving a fragment the redaction patterns no longer match.
+3. The exact serialized request is checked immediately before dispatch, and a
+   payload matching a credential shape is dropped rather than sent. Failing a
+   scan is recoverable; disclosing a key is not.
+
+Nothing is sent at all during runtime enforcement.
 
 Enhanced mode runs only in on-demand scans. It is never applied to live prompts,
 because asking a third party whether a prompt contains medical information would

@@ -116,15 +116,32 @@ function buildSarif(input) {
   // Semantic privacy findings arrive under `privacy` from `agentguard scan --json`.
   // Without this they would be silently dropped from SARIF, and a SARIF-gated CI
   // pipeline would pass a scan that did report personal data.
-  for (const finding of input.privacy?.findings || []) {
+  const privacyFindings = input.privacy?.findings || [];
+  const unknownCategories = new Set();
+  for (const finding of privacyFindings) {
+    const ruleId = `PII_${String(finding.category || '').toUpperCase()}`;
+    // An undeclared rule id produces a SARIF result that no consumer can
+    // resolve, which reads as a tooling glitch rather than a finding. Collect
+    // these and fail rather than emitting them silently.
+    if (!RULE_INDEX.has(ruleId)) {
+      unknownCategories.add(String(finding.category));
+      continue;
+    }
     findings.push({
-      rule_id: `PII_${String(finding.category || 'unknown').toUpperCase()}`,
+      rule_id: ruleId,
       severity: finding.localization === 'chunk' ? 'MEDIUM' : 'HIGH',
       file: finding.file,
-      line: 1,
+      line: Number.isInteger(finding.line) && finding.line > 0 ? finding.line : 1,
       // Already masked upstream; never the raw value.
       evidence: `${finding.evidence} (p=${Number(finding.probability ?? 0).toFixed(2)}, ${finding.localization})`,
     });
+  }
+  if (unknownCategories.size > 0) {
+    console.error(
+      `scan-to-sarif: unknown privacy categories with no declared rule: ${[...unknownCategories].join(', ')}. ` +
+        'Add them to RULES or correct the scanner output.',
+    );
+    process.exit(1);
   }
 
   // Collect which rules actually fired (for the driver.rules array)

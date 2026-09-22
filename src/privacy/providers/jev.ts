@@ -1,5 +1,6 @@
 import type { CoverageLevel } from '../../runtime/types.js';
 import { redactText } from '../../runtime/redaction.js';
+import { findForbiddenOutbound, outboundChunk } from '../redact-outbound.js';
 import type {
   AdjudicateOptions,
   AdjudicationRequest,
@@ -13,6 +14,13 @@ import type {
 const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const DEFAULT_MODEL = 'jev-latest';
 const MAX_RESPONSE_BYTES = 2_000_000;
+/**
+ * Hard ceiling on the serialized request.
+ *
+ * The shared token budget reserves against an estimate; this bounds the actual
+ * bytes, so an underestimate cannot turn into unbounded egress.
+ */
+const MAX_REQUEST_BYTES = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 45_000;
 /** 429 and 529 are documented as retryable; anything else fails the batch. */
 const MAX_ATTEMPTS = 3;
@@ -169,6 +177,16 @@ export class JevAdjudicator implements PrivacyAdjudicator {
       questions,
     });
 
+    // Last gate before the socket. Narrowing and redaction run upstream; this
+    // catches whatever slipped through, on the exact bytes about to be sent.
+    const forbidden = findForbiddenOutbound(body);
+    if (forbidden !== null) {
+      throw new Error(`refused to send: outbound payload matched credential pattern #${forbidden}`);
+    }
+    if (body.length > MAX_REQUEST_BYTES) {
+      throw new Error(`refused to send: serialized request is ${body.length} bytes, over the ${MAX_REQUEST_BYTES} cap`);
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     signal?.addEventListener('abort', () => controller.abort(), { once: true });
@@ -217,7 +235,7 @@ function candidateInstructions(candidate: PiiCandidate): string {
 function chunkInstructions(chunk: PiiChunk): string {
   return (
     `下面这句话本身是否携带了可识别到具体自然人的敏感个人信息（身份证号、银行账户、` +
-    `医疗健康状况、生物识别、行踪轨迹、精确住址、未成年人信息、个人财务状况）？句子：「${chunk.text}」`
+    `医疗健康状况、生物识别、行踪轨迹、精确住址、未成年人信息、个人财务状况）？句子：「${outboundChunk(chunk.text)}」`
   );
 }
 

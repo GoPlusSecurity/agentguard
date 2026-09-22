@@ -22,6 +22,13 @@ import {
  */
 export const PROMPT_VERSION = 1;
 
+/** 1-based line number for an absolute character offset. */
+function lineAt(text: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset && i < text.length; i++) if (text[i] === '\n') line++;
+  return line;
+}
+
 /** Rough pre-flight estimate used only to reserve budget before sending. */
 function estimateRequestTokens(candidates: PiiCandidate[], chunks: PiiChunk[]): number {
   let total = 0;
@@ -32,6 +39,8 @@ function estimateRequestTokens(candidates: PiiCandidate[], chunks: PiiChunk[]): 
 
 export interface PrivacyFinding {
   category: PiiCategory;
+  /** 1-based line in the analysed text; pinning findings to line 1 hides where they are. */
+  line: number;
   /** Present only for value-level findings; semantic findings have no span. */
   span?: { start: number; end: number; value: string };
   chunkIndex: number;
@@ -158,6 +167,7 @@ export async function analyzePrivacy(text: string, options: AnalyzeOptions = {})
     if (!candidate) continue;
     findings.push({
       category: candidate.category,
+      line: lineAt(text, candidate.start),
       span: { start: candidate.start, end: candidate.end, value: candidate.value },
       chunkIndex: candidate.chunkIndex,
       localization: 'value',
@@ -175,11 +185,17 @@ export async function analyzePrivacy(text: string, options: AnalyzeOptions = {})
     if (!Number.isInteger(index) || chunksWithValue.has(index)) continue;
     findings.push({
       category: 'health_record',
+      line: lineAt(text, chunks[index]?.start ?? 0),
       chunkIndex: index,
       localization: 'chunk',
       probability: verdict.probability,
       source: 'semantic',
     });
+  }
+
+  // Charge any undercount back to the shared ceiling before the next file.
+  if (settings.budget && result.usage) {
+    settings.budget.reconcile(estimated, result.usage.inputTokens);
   }
 
   const valueCount = findings.filter((f) => f.localization === 'value').length;

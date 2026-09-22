@@ -5,6 +5,15 @@ const REDACTED = '[REDACTED]';
 
 const SECRET_VALUE_PATTERN =
   /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret)=([^&\s'"`]+)/gi;
+/**
+ * The same secret keys in YAML/JSON form, where the separator is `:`.
+ *
+ * Quotes and a minimum length are required so that ordinary prose such as
+ * `authorization: required` is left alone; only a quoted value long enough to
+ * be a credential is redacted.
+ */
+const SECRET_COLON_PATTERN =
+  /((?:token|api[_-]?key|secret[_-]?(?:access[_-]?)?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi;
 const SENSITIVE_KEY_PATTERN =
   /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret|signature|sig)/i;
 
@@ -35,6 +44,7 @@ const REDACTION_PATTERNS: Array<[RegExp, (match: string) => string]> = [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     () => REDACTED,
   ],
+  [SECRET_COLON_PATTERN, (match) => `${match.split(':')[0]}: ${REDACTED}`],
   [
     SECRET_VALUE_PATTERN,
     (match) => {
