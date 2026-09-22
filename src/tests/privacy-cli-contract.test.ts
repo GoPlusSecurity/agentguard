@@ -75,6 +75,31 @@ describe('Privacy enhancement CLI contract', () => {
     assert.ok(parsed.privacy?.warning, 'the warning must survive into machine-readable output');
   });
 
+  /**
+   * `checkup` has always exited 0 and several long-standing checks emit
+   * informational coverage notes on an ordinary run. Only the opt-in semantic
+   * pass may move the exit status, or every existing caller changes behaviour.
+   */
+  it('leaves checkup exit status untouched when enhancement is off', () => {
+    const offHome = seedHome('off');
+    try {
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [CLI, 'checkup', '--json'], {
+          env: { ...process.env, AGENTGUARD_HOME: offHome, TYPESAFE_API_KEY: '' },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 600_000,
+        });
+      } catch (error) {
+        status = (error as { status?: number }).status ?? 0;
+      }
+      assert.equal(status, 0, 'a disabled enhancement must not change checkup exit status');
+    } finally {
+      rmSync(offHome, { recursive: true, force: true });
+    }
+  });
+
   it('says nothing about privacy when enhancement is off', () => {
     const offHome = seedHome('off');
     try {

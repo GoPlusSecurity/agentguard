@@ -223,6 +223,8 @@ interface QuestionItem {
   id: string;
   instructions: string;
   tokens: number;
+  /** Serialized size contributed to the request body. */
+  bytes: number;
 }
 
 function candidateInstructions(candidate: PiiCandidate): string {
@@ -239,15 +241,21 @@ function chunkInstructions(chunk: PiiChunk): string {
   );
 }
 
+/** Bytes a question adds to the serialized body, including JSON overhead. */
+function questionBytes(id: string, instructions: string): number {
+  return Buffer.byteLength(JSON.stringify({ [id]: { type: 'noul', instructions, criteria: CRITERIA } }), 'utf8');
+}
+
 function buildQuestionItems(request: AdjudicationRequest): QuestionItem[] {
   const items: QuestionItem[] = [];
   for (const candidate of request.candidates) {
     const instructions = candidateInstructions(candidate);
-    items.push({ id: candidate.id, instructions, tokens: estimateTokens(instructions) });
+    items.push({ id: candidate.id, instructions, tokens: estimateTokens(instructions), bytes: questionBytes(candidate.id, instructions) });
   }
   for (const chunk of request.chunks) {
     const instructions = chunkInstructions(chunk);
-    items.push({ id: `s${chunk.index}`, instructions, tokens: estimateTokens(instructions) });
+    const id = `s${chunk.index}`;
+    items.push({ id, instructions, tokens: estimateTokens(instructions), bytes: questionBytes(id, instructions) });
   }
   return items;
 }
@@ -260,19 +268,29 @@ function buildQuestionItems(request: AdjudicationRequest): QuestionItem[] {
  * span judged in a batch of 20 and a batch of 400 returns the same verdict.
  */
 export function splitByTokenBudget(items: QuestionItem[], budget: number, sharedContext?: string): QuestionItem[][] {
-  const overhead = sharedContext ? estimateTokens(sharedContext) : 0;
+  const tokenOverhead = sharedContext ? estimateTokens(sharedContext) : 0;
+  const byteOverhead = sharedContext ? Buffer.byteLength(sharedContext, 'utf8') + 256 : 256;
   const batches: QuestionItem[][] = [];
   let current: QuestionItem[] = [];
-  let used = overhead;
+  let usedTokens = tokenOverhead;
+  let usedBytes = byteOverhead;
 
   for (const item of items) {
-    if (current.length > 0 && used + item.tokens > budget) {
+    // Both limits are applied here, not only at dispatch. Enforcing the byte
+    // cap solely before sending turns an oversized batch into a *failed* batch,
+    // losing coverage for every question in it; splitting on the same limit
+    // keeps those questions answerable.
+    const overTokens = usedTokens + item.tokens > budget;
+    const overBytes = usedBytes + item.bytes > MAX_REQUEST_BYTES;
+    if (current.length > 0 && (overTokens || overBytes)) {
       batches.push(current);
       current = [];
-      used = overhead;
+      usedTokens = tokenOverhead;
+      usedBytes = byteOverhead;
     }
     current.push(item);
-    used += item.tokens;
+    usedTokens += item.tokens;
+    usedBytes += item.bytes;
   }
   if (current.length) batches.push(current);
   return batches;

@@ -153,3 +153,19 @@ function degrade(current: CoverageLevel, next: CoverageLevel): CoverageLevel {
   const order: CoverageLevel[] = ['full', 'partial', 'observe_only', 'unsupported'];
   return order[Math.max(order.indexOf(current), order.indexOf(next))] ?? current;
 }
+
+/**
+ * Scope per scannable extension, enumerated rather than inferred.
+ *
+ * An implicit "anything not prose is code" default silently gives reduced
+ * analysis to any extension added later. Listing every entry in
+ * `SCANNABLE_EXTENSIONS` forces that decision to be made, and anything missing
+ * is counted and surfaced instead of quietly taking the narrow path.
+ */
+export const SCOPE_BY_EXTENSION: Record<string, 'candidates' | 'filtered'> = {
+  '.js': 'candidates', '.ts': 'candidates', '.jsx': 'candidates', '.tsx': 'candidates',
+  '.mjs': 'candidates', '.cjs': 'candidates', '.py': 'candidates', '.sol': 'candidates',
+  '.sh': 'candidates', '.bash': 'candidates',
+  '.json': 'candidates', '.yaml': 'candidates', '.yml': 'candidates', '.toml': 'candidates',
+  '.md': 'filtered',
+};

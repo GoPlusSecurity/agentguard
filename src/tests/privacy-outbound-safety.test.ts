@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { scanSurfaces } from '../privacy/surfaces.js';
+import { scanSurfaces, SCOPE_BY_EXTENSION } from '../privacy/surfaces.js';
 import { JevAdjudicator } from '../privacy/providers/jev.js';
 import { DEFAULT_ADJUDICATE_OPTIONS, TokenBudget } from '../privacy/types.js';
 import { extractCandidates } from '../privacy/candidates.js';
@@ -156,5 +156,30 @@ describe('Shared budget reconciliation', () => {
     budget.tryConsume(500);
     budget.reconcile(500, 100);
     assert.equal(budget.remaining, 500, 'reconciliation must not refund');
+  });
+});
+
+describe('Scope classification', () => {
+  /**
+   * The map is enumerated rather than defaulted precisely so that adding a
+   * scannable extension forces a scope decision. This test is the mechanism
+   * that makes that true: a new extension with no mapping fails here rather
+   * than silently receiving the narrower analysis.
+   */
+  it('assigns a scope to every scannable extension', async () => {
+    const { SCANNABLE_EXTENSIONS } = await import('../scanner/file-walker.js');
+    const unmapped = SCANNABLE_EXTENSIONS.filter((ext) => !(ext in SCOPE_BY_EXTENSION));
+    assert.deepEqual(
+      unmapped,
+      [],
+      `these scannable extensions have no privacy scope mapping: ${unmapped.join(', ')}`,
+    );
+  });
+
+  it('routes documentation to prose analysis and source to spans only', () => {
+    assert.equal(SCOPE_BY_EXTENSION['.md'], 'filtered');
+    for (const ext of ['.ts', '.py', '.json', '.yaml', '.sh']) {
+      assert.equal(SCOPE_BY_EXTENSION[ext], 'candidates', `${ext} should send spans only`);
+    }
   });
 });

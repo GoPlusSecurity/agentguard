@@ -21,7 +21,7 @@ import {
   saveConfig,
 } from './config.js';
 import { describePrivacyMode, resolvePrivacyMode } from './privacy/resolve.js';
-import { scanSurfaces, type SurfaceScanResult } from './privacy/surfaces.js';
+import { scanSurfaces, SCOPE_BY_EXTENSION, type SurfaceScanResult } from './privacy/surfaces.js';
 import { MemoryVerdictCache } from './privacy/adjudicator.js';
 import { walkDirectoryWithCoverage } from './scanner/file-walker.js';
 import type { AgentGuardAgentHost, AgentGuardConfig } from './config.js';
@@ -1125,7 +1125,10 @@ async function main() {
           printInitGuidanceIfNeeded(config);
         }
         appendCheckupAudit(config.auditPath, report);
-        process.exitCode = 0;
+        // Mirrors `scan`: 3 means the checkup did not finish examining
+        // everything, which a caller gating on exit status must distinguish
+        // from a clean result.
+        process.exitCode = checkupCoverageIncomplete(report) ? 3 : 0;
         return;
       }
 
@@ -1459,8 +1462,12 @@ async function runSemanticPrivacyScan(rootDir: string): Promise<SemanticPrivacyS
   // prose and carries disclosures that have no span at all.
   const prose: string[] = [];
   const code: string[] = [];
+  const unclassified: string[] = [];
   for (const file of snapshot.files) {
-    (PROSE_EXTENSIONS.has(file.extension) ? prose : code).push(file.path);
+    const scope = SCOPE_BY_EXTENSION[file.extension];
+    if (scope === 'filtered') prose.push(file.path);
+    else if (scope === 'candidates') code.push(file.path);
+    else unclassified.push(file.path);
   }
 
   const shared = {
@@ -1471,7 +1478,13 @@ async function runSemanticPrivacyScan(rootDir: string): Promise<SemanticPrivacyS
   };
   const codeScan = await scanSurfaces(code, { ...shared, scope: 'candidates' });
   const proseScan = await scanSurfaces(prose, { ...shared, scope: 'filtered' });
-  return { result: mergeSurfaceScans(codeScan, proseScan) };
+  const merged = mergeSurfaceScans(codeScan, proseScan);
+  if (unclassified.length > 0) {
+    merged.filesSkipped += unclassified.length;
+    merged.coverage = merged.coverage === 'full' ? 'partial' : merged.coverage;
+    merged.errors.push(`${unclassified.length} file(s) had no scope mapping and were not analysed`);
+  }
+  return { result: merged };
 }
 
 /** Either a completed pass, or the reason no pass ran. Never both absent. */
@@ -1480,7 +1493,6 @@ interface SemanticPrivacyScan {
   warning?: string;
 }
 
-const PROSE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.rst']);
 
 function mergeSurfaceScans(left: SurfaceScanResult, right: SurfaceScanResult): SurfaceScanResult {
   const order: SurfaceScanResult['coverage'][] = ['full', 'partial', 'observe_only', 'unsupported'];
@@ -1904,6 +1916,24 @@ async function checkCredentialSafety(skillDirs: string[], collection: PatrolFile
  * emit an "all clear" in that case: a check that never ran must not contribute
  * evidence of cleanliness.
  */
+
+/** Marker used to tie the exit status to the semantic pass specifically. */
+const SEMANTIC_COVERAGE_MARKER = 'Semantic personal-data coverage was';
+
+/**
+ * True when the semantic personal-data pass did not examine everything.
+ *
+ * Deliberately narrow. `checkup` has always exited 0, and several long-standing
+ * checks emit informational coverage notes on an ordinary run; keying the exit
+ * status off those would change the result for every existing caller. Only the
+ * newly added pass, which is opt-in, can move the exit code.
+ */
+function checkupCoverageIncomplete(report: HealthCheckupReport): boolean {
+  return Object.values(report.dimensions).some((dimension) =>
+    dimension.findings.some((finding) => finding.text.includes(SEMANTIC_COVERAGE_MARKER)),
+  );
+}
+
 async function checkProsePersonalData(patrolFiles: PatrolFile[]): Promise<CheckupFinding[]> {
   const resolved = resolvePrivacyMode(ensureConfig());
   if (resolved.adjudicator.name === 'offline') return [];
@@ -1927,7 +1957,7 @@ async function checkProsePersonalData(patrolFiles: PatrolFile[]): Promise<Checku
     findings.push(patrolFinding(2, 'HIGH', `${count} personal-data disclosure(s) detected in ${file}.`));
   }
   if (scan.coverage !== 'full' || scan.budgetExhausted) {
-    findings.push(patrolFinding(2, 'MEDIUM', `Semantic personal-data coverage was ${scan.coverage}${scan.budgetExhausted ? ' (token budget exhausted)' : ''}; some agent files were not analysed.`));
+    findings.push(patrolFinding(2, 'MEDIUM', `${SEMANTIC_COVERAGE_MARKER} ${scan.coverage}${scan.budgetExhausted ? ' (token budget exhausted)' : ''}; some agent files were not analysed.`));
   }
   return findings;
 }

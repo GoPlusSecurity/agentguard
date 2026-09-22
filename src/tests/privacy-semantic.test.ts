@@ -106,7 +106,7 @@ describe('Jev batching', () => {
   });
 
   it('splits by token budget rather than question count', () => {
-    const items = Array.from({ length: 50 }, (_, i) => ({ id: `q${i}`, instructions: 'x', tokens: 100 }));
+    const items = Array.from({ length: 50 }, (_, i) => ({ id: `q${i}`, instructions: 'x', tokens: 100, bytes: 64 }));
     const batches = splitByTokenBudget(items, 1000);
     assert.ok(batches.length >= 5, `expected several batches, got ${batches.length}`);
     assert.equal(batches.flat().length, 50, 'no question may be dropped while batching');
@@ -116,8 +116,23 @@ describe('Jev batching', () => {
     }
   });
 
+  /**
+   * The byte cap must split batches, not merely reject them at dispatch: a
+   * rejected batch loses coverage for every question it carried.
+   */
+  it('splits on serialized bytes even when the token budget is ample', () => {
+    const items = Array.from({ length: 40 }, (_, i) => ({ id: `q${i}`, instructions: 'x', tokens: 10, bytes: 20 * 1024 }));
+    const batches = splitByTokenBudget(items, 1_000_000);
+    assert.ok(batches.length > 1, 'an ample token budget must not defeat the byte cap');
+    assert.equal(batches.flat().length, 40, 'no question may be dropped while splitting');
+    for (const batch of batches) {
+      const bytes = batch.reduce((sum, item) => sum + item.bytes, 0);
+      assert.ok(bytes <= 256 * 1024 || batch.length === 1, 'batch exceeded the byte cap');
+    }
+  });
+
   it('reserves budget for shared context', () => {
-    const items = Array.from({ length: 10 }, (_, i) => ({ id: `q${i}`, instructions: 'x', tokens: 100 }));
+    const items = Array.from({ length: 10 }, (_, i) => ({ id: `q${i}`, instructions: 'x', tokens: 100, bytes: 64 }));
     const withContext = splitByTokenBudget(items, 600, '口径'.repeat(100));
     const without = splitByTokenBudget(items, 600);
     assert.ok(withContext.length > without.length, 'shared context must consume budget');
