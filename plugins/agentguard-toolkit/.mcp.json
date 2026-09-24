@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentguard": {
+      "command": "npx",
+      "args": ["-y", "--package", "@goplus/agentguard", "agentguard-mcp"]
+    }
+  }
+}
