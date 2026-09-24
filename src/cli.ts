@@ -131,6 +131,7 @@ async function main() {
           for (const failure of results.failed) {
             console.error(`! Failed to initialize ${failure.agent}: ${failure.error}`);
           }
+          printPrivacyEnhancementHint(config);
           return;
         }
         if (!SUPPORTED_AGENT_INSTALLERS.includes(normalizedAgent as AgentInstaller)) {
@@ -152,6 +153,7 @@ async function main() {
         if (agent === 'hermes' && !shellHooks) {
           printHermesNativePluginEnabled();
         }
+        printPrivacyEnhancementHint(config);
       }
     });
 
@@ -280,6 +282,7 @@ async function main() {
       console.log(`Audit log: ${config.auditPath}`);
       console.log(`Privacy enhancement: ${describePrivacyMode(config)}`);
       printInitGuidanceIfNeeded(config);
+      printPrivacyEnhancementHint(config);
     });
 
   const policy = program
@@ -1298,6 +1301,36 @@ function printHermesNativePluginEnabled(): void {
   console.log('Hermes native plugin enabled in config.yaml.');
   console.log('It takes effect on the next Hermes session.');
   console.log('Use `hermes plugins list` to verify, or re-run with --shell-hooks for the legacy shell-hook flow.');
+}
+
+
+/**
+ * Tell the user the semantic privacy layer exists, and what turning it on costs.
+ *
+ * Without this the feature is invisible: nothing in install or init mentions it,
+ * so the only people who find it are the ones who already knew to look. The hint
+ * is deliberately informational — enabling changes what leaves the machine, so
+ * it must read as an option rather than a pending task.
+ */
+function printPrivacyEnhancementHint(config: AgentGuardConfig): void {
+  const resolved = resolvePrivacyMode(config);
+
+  // Already working; nothing to say.
+  if (resolved.adjudicator.name !== 'offline') return;
+
+  console.log('');
+  if (resolved.requestedMode === 'jev') {
+    // Enabled but unusable is the state most worth interrupting for: the user
+    // believes it is on, and a clean scan would read as a cleared one.
+    console.log('Enhanced privacy detection is enabled but INACTIVE — no TypeSafe API key found.');
+    console.log('  export TYPESAFE_API_KEY=<key>        (recommended; not written to disk)');
+    console.log('  agentguard privacy enable --api-key <key>');
+    return;
+  }
+  console.log('Optional: enhanced privacy detection is available but off.');
+  console.log('  Local rules find personal data written as `field: value`. They miss most');
+  console.log('  of it in prose, which is the shape prompts and chat logs take.');
+  console.log('  agentguard privacy status            see what enabling it would send');
 }
 
 function printInitGuidanceIfNeeded(config: AgentGuardConfig): void {

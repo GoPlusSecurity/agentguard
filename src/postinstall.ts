@@ -8,6 +8,9 @@ const NEXT_STEPS = [
   'Next step:',
   '  agentguard init',
   '',
+  'Optional, after init:',
+  '  agentguard privacy status    enhanced detection for personal data in prose',
+  '',
 ].join('\n');
 
 function printNextSteps(): void {
