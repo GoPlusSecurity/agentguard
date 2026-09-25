@@ -135,11 +135,13 @@ describe('Privacy enhancement onboarding', () => {
       });
       // `init` stays the one required step; the enhancement is presented as optional.
       assert.match(stdout, /Next step:\n {2}agentguard init\n/);
-      assert.match(stdout, /Optional, after init:/);
-      assert.match(stdout, /agentguard privacy status/);
+      assert.match(stdout, /Optional, after init/);
+      // The very first thing a user sees after install must name the command
+      // that acts, not one that only explains.
+      assert.match(stdout, /agentguard privacy enable/);
 
       const nextSteps = readFileSync(join(home, 'next-steps.txt'), 'utf8');
-      assert.match(nextSteps, /agentguard privacy status/);
+      assert.match(nextSteps, /agentguard privacy enable/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
