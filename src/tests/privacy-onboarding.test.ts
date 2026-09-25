@@ -49,7 +49,7 @@ describe('Privacy enhancement onboarding', () => {
     try {
       const out = runStatus(home);
       assert.match(out, /Optional: enhanced privacy detection/);
-      assert.match(out, /agentguard privacy status/);
+      assert.match(out, /agentguard privacy enable/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -66,6 +66,35 @@ describe('Privacy enhancement onboarding', () => {
       assert.match(out, /INACTIVE/);
       assert.match(out, /TYPESAFE_API_KEY/);
       assert.match(out, /privacy enable --api-key/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Agent hosts reformat CLI output into their own tables, keeping the status
+   * value and dropping the prose around it. A user then sees that the feature
+   * is off with no way to find out how to turn it on, which is exactly what was
+   * reported. The command therefore has to live on the status line itself.
+   */
+  it('puts the actionable command on the status line, not only in the block below', () => {
+    const home = seedHome();
+    try {
+      const line = runStatus(home).split('\n').find((l) => l.startsWith('Privacy enhancement:'));
+      assert.ok(line, 'status must report the privacy enhancement state');
+      assert.match(line, /agentguard privacy enable/, 'the status line must carry the command that acts on it');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('puts the fix on the status line when enabled without a key', () => {
+    const home = seedHome({ mode: 'jev' });
+    try {
+      const line = runStatus(home).split('\n').find((l) => l.startsWith('Privacy enhancement:'));
+      assert.ok(line);
+      assert.match(line, /INACTIVE/);
+      assert.match(line, /TYPESAFE_API_KEY|--api-key/, 'the status line must say how to supply the key');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
