@@ -6,13 +6,106 @@ import { tmpdir } from 'node:os';
 import { evaluateLocalAction } from '../runtime/evaluator.js';
 import { evaluateLlmPrivacy } from '../runtime/privacy.js';
 import { buildAuditEvent, writeAuditLog } from '../runtime/audit.js';
-import { redactText } from '../runtime/redaction.js';
+import { redactText, summarizeSensitiveData } from '../runtime/redaction.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { AgentGuardConfig } from '../config.js';
 import type { LlmEndpointTier, RuntimeAction, RuntimeAuditEvent } from '../runtime/types.js';
 
 describe('Runtime LLM privacy evaluation', () => {
+  it('builds fixed-mask summaries without retaining token or email characters', () => {
+    const token = 'sk-live-private-token-1234567890';
+    const email = 'private.person@corp.invalid';
+    const summary = summarizeSensitiveData(`api_key=${token} personal_email=${email}`);
+
+    assert.deepEqual(summary.map((item) => [item.kind, item.maskedValue]), [
+      ['openai_api_token', 'sk-****'],
+      ['email_address', '***@***'],
+    ]);
+    assert.doesNotMatch(JSON.stringify(summary), /private-token|private\.person|corp\.invalid/);
+  });
+
+  it('reports a friendly blocked exposure reason without changing the audit wire shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-friendly-privacy-event-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    const token = 'sk-live-private-token-1234567890';
+    const email = 'private.person@corp.invalid';
+    const result = await protectAction({
+      config,
+      agentHost: 'openclaw',
+      actionType: 'llm_request',
+      toolName: 'openclaw.before_agent_run',
+      rawInput: {
+        input: `api_key=${token} personal_email=${email}`,
+        sessionId: 'sess_friendly_privacy',
+        lifecycleStage: 'run_start',
+        canBlockCurrentAction: true,
+        coverageLevel: 'partial',
+      },
+    });
+
+    assert.ok(result);
+    assert.equal(result.decision.decision, 'block');
+    assert.equal(result.event.enforcementStatus, 'enforced');
+    const reason = result.decision.reasons.find((item) => item.code === 'PII_EGRESS');
+    assert.match(reason?.title ?? '', /exposure blocked/i);
+    assert.match(reason?.description ?? '', /API token.*email address.*current action was blocked/i);
+    assert.equal(reason?.evidence, 'types=openai_api_token,email_address;masked=sk-****,***@***');
+
+    const event = buildAuditEvent(result.event);
+    assert.equal(event.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.deepEqual(event.privacySummary, {
+      categories: [{ category: 'email_address', count: 1 }],
+      valueCount: 1,
+    });
+    assert.equal(event.metadata?.privacySummary, undefined);
+    assert.deepEqual(
+      Object.keys(JSON.parse(JSON.stringify(event))).sort(),
+      Object.keys(JSON.parse(JSON.stringify(result.event))).sort(),
+    );
+    const serialized = JSON.stringify(event);
+    assert.match(serialized, /sk-\*\*\*\*/);
+    assert.match(serialized, /\*\*\*@\*\*\*/);
+    assert.doesNotMatch(serialized, /private-token|private\.person|corp\.invalid/);
+  });
+
+  it('does not claim an observer-only privacy finding was blocked', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-friendly-privacy-observer-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    const result = await protectAction({
+      config,
+      agentHost: 'openclaw',
+      actionType: 'llm_request',
+      toolName: 'openclaw.llm_input',
+      rawInput: {
+        input: 'personal_email=private.person@corp.invalid',
+        sessionId: 'sess_friendly_observer',
+        lifecycleStage: 'model_request',
+        canBlockCurrentAction: false,
+        coverageLevel: 'observe_only',
+      },
+      auditSafe: true,
+    });
+
+    assert.ok(result);
+    const reason = result.decision.reasons.find((item) => item.code === 'PII_EGRESS');
+    assert.match(reason?.title ?? '', /exposure detected/i);
+    assert.match(reason?.description ?? '', /observe-only and did not block/i);
+    assert.doesNotMatch(reason?.description ?? '', /was blocked/);
+  });
+
   it('maps visible PII through T0-T4 without auto-allowing medium-severity findings', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     const expected = new Map<LlmEndpointTier, string>([
