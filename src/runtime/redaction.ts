@@ -3,6 +3,30 @@ import { redactPiiText } from '../scanner/rules/privacy.js';
 
 const REDACTED = '[REDACTED]';
 
+export type SensitiveDataKind =
+  | 'agentguard_api_token'
+  | 'openai_api_token'
+  | 'bearer_token'
+  | 'private_key'
+  | 'credential'
+  | 'national_id'
+  | 'bank_account'
+  | 'biometric'
+  | 'minor_data'
+  | 'health_record'
+  | 'location_trace'
+  | 'contact_dump'
+  | 'phone_number'
+  | 'email_address'
+  | 'hardcoded_dataset';
+
+export interface SensitiveDataSummaryItem {
+  kind: SensitiveDataKind;
+  label: string;
+  maskedValue: string;
+  count: number;
+}
+
 const SECRET_VALUE_PATTERN =
   /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret)=([^&\s'"`]+)/gi;
 /**
@@ -63,6 +87,58 @@ export function redactText(value: unknown): string {
     redacted = redacted.replace(pattern, replacement);
   }
   return redactUrlSecrets(redacted);
+}
+
+/**
+ * Describe sensitive values without retaining any characters from the match.
+ *
+ * The result is safe for audit reasons and Cloud timelines: masks are fixed
+ * placeholders such as `sk-****` and `***@***`, never partial raw values or
+ * reversible hashes. Detection happens locally against the original content.
+ */
+export function summarizeSensitiveData(value: unknown): SensitiveDataSummaryItem[] {
+  const text = String(value ?? '');
+  const summaries = new Map<SensitiveDataKind, SensitiveDataSummaryItem>();
+  const add = (kind: SensitiveDataKind, label: string, maskedValue: string, count = 1): void => {
+    const existing = summaries.get(kind);
+    if (existing) {
+      existing.count += count;
+      return;
+    }
+    summaries.set(kind, { kind, label, maskedValue, count });
+  };
+
+  if (/\bag_live_[A-Za-z0-9_-]{12,}\b/.test(text)) {
+    add('agentguard_api_token', 'AgentGuard API token', 'ag_live_****');
+  }
+  if (/\bsk-(?:or-v1-)?[A-Za-z0-9_-]{12,}\b/.test(text)) {
+    add('openai_api_token', 'OpenAI-compatible API token', 'sk-****');
+  }
+  if (/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/i.test(text)) {
+    add('bearer_token', 'Bearer token', 'Bearer ****');
+  }
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/.test(text)) {
+    add('private_key', 'private key', '-----BEGIN **** PRIVATE KEY-----');
+  }
+  if ((SECRET_VALUE_PATTERN.test(text) || SECRET_COLON_PATTERN.test(text))
+      && !summaries.has('agentguard_api_token')
+      && !summaries.has('openai_api_token')
+      && !summaries.has('bearer_token')) {
+    add('credential', 'credential', 'credential=****');
+  }
+  SECRET_VALUE_PATTERN.lastIndex = 0;
+  SECRET_COLON_PATTERN.lastIndex = 0;
+
+  const piiText = redactPiiText(text);
+  for (const [marker, kind, label, maskedValue] of PII_SUMMARY_MARKERS) {
+    const count = piiText.split(marker).length - 1;
+    if (count > 0) add(kind, label, maskedValue, count);
+  }
+
+  if (summaries.size === 0 && redactText(text) !== text) {
+    add('credential', 'sensitive credential', 'credential=****');
+  }
+  return [...summaries.values()];
 }
 
 export function redactPreview(value: unknown, maxLength = 2000): string {
@@ -173,3 +249,16 @@ function redactUrlSecrets(value: string): string {
     }
   });
 }
+
+const PII_SUMMARY_MARKERS: ReadonlyArray<readonly [string, SensitiveDataKind, string, string]> = [
+  ['[REDACTED:PII_EMAIL_ADDRESS]', 'email_address', 'email address', '***@***'],
+  ['[REDACTED:PII_PHONE_NUMBER]', 'phone_number', 'phone number', '***-***-****'],
+  ['[REDACTED:PII_NATIONAL_ID]', 'national_id', 'national ID', 'ID-****'],
+  ['[REDACTED:PII_BANK_ACCOUNT]', 'bank_account', 'bank account', 'account-****'],
+  ['[REDACTED:PII_BIOMETRIC]', 'biometric', 'biometric data', 'biometric-****'],
+  ['[REDACTED:PII_MINOR_DATA]', 'minor_data', 'minor data', 'minor-data-****'],
+  ['[REDACTED:PII_HEALTH_RECORD]', 'health_record', 'health record', 'health-record-****'],
+  ['[REDACTED:PII_LOCATION_TRACE]', 'location_trace', 'location trace', 'location-****'],
+  ['[REDACTED:PII_CONTACT_DUMP]', 'contact_dump', 'contact list', 'contacts-****'],
+  ['[REDACTED:PII_HARDCODED_DATASET]', 'hardcoded_dataset', 'personal-data dataset', 'dataset-****'],
+];

@@ -41,6 +41,13 @@ Only redacted runtime audit previews are uploaded by default:
 PII summaries use only an allowlisted category name, per-category count, and a
 bounded total value count. They never contain the matched value or evidence.
 
+When a locally visible model payload contains a credential or personal-data
+value, the existing audit `reasons` fields carry a human-readable exposure
+summary and the actual enforcement outcome. Evidence uses fixed masks such as
+`sk-****` and `***@***`; it never contains characters copied from the matched
+value. Observer-only hooks explicitly say that the model call was not blocked.
+This does not add fields or change the version-1 Cloud wire envelope.
+
 `payloadBytes`, when present, means the exact UTF-8 byte length of the
 serialized request body. Character counts and previews are not substitutes;
 adapters leave the field absent and report `exact_payload_bytes` as missing

@@ -7,7 +7,7 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
-import { redactText } from './redaction.js';
+import { redactText, summarizeSensitiveData } from './redaction.js';
 import type {
   CoverageLevel,
   CredentialKind,
@@ -119,6 +119,9 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     || isClaudeObserverEvent(claudeHookEvent);
   if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
+  const enforcementStatus = action.enforcementStatus ?? enforcementStatusFor(action, decision);
+  decision = withFriendlySensitiveDataReason(action, decision, enforcementStatus);
+
   const event: RuntimeAuditEvent = {
     ...action,
     actionId: decision.actionId,
@@ -128,17 +131,17 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     riskLevel: decision.riskLevel,
     reasons: decision.reasons,
     policyVersion: decision.policyVersion,
+    ...(decision.piiSummary ? { privacySummary: decision.piiSummary } : {}),
     coverageLevel: decision.ruleEvaluations?.length
       ? mergeCoverage(action.coverageLevel, decision.coverageLevel)
       : action.coverageLevel ?? decision.coverageLevel,
-    enforcementStatus: action.enforcementStatus ?? enforcementStatusFor(action, decision),
+    enforcementStatus,
     missingFacts: uniqueMissingFacts([...(action.missingFacts ?? []), ...(decision.missingFacts ?? [])]),
     metadata: {
       ...(action.metadata || {}),
       evaluation: policySource === 'cloud-decision' ? 'cloud' : 'local-oss',
       policySource,
       ...(decision.ruleEvaluations?.length ? { privacyRules: decision.ruleEvaluations } : {}),
-      ...(decision.piiSummary ? { privacySummary: decision.piiSummary } : {}),
       ...(approvedGrant
         ? {
             approvedByLocalGrant: true,
@@ -193,7 +196,13 @@ function enforceNativeHookDecision(
     || claudeEvent === 'UserPromptSubmit' || claudeEvent === 'PostToolUse'
     || claudeEvent === 'PostToolBatch' || claudeEvent === 'PostToolUseFailure'
     || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange';
-  const containsSensitiveContent = scansVisibleContent
+  const blockingVisibleModelInput = action.actionType === 'llm_request'
+    && action.canBlockCurrentAction !== false
+    && (action.lifecycleStage === 'user_prompt'
+      || action.lifecycleStage === 'run_start'
+      || action.lifecycleStage === 'model_request'
+      || action.lifecycleStage === 'post_tool_batch');
+  const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
     && (redactText(action.input) !== action.input || action.metadata?.configSensitive === true);
   const untrustedExpansion = claudeEvent === 'UserPromptExpansion'
     && isUntrustedClaudePromptExpansion(action.metadata);
@@ -240,6 +249,68 @@ function enforceNativeHookDecision(
       evidence: '[REDACTED]',
     }],
   };
+}
+
+function withFriendlySensitiveDataReason(
+  action: RuntimeAction,
+  decision: RuntimeDecision,
+  enforcementStatus: EnforcementStatus,
+): RuntimeDecision {
+  const relevantLifecycle = action.actionType === 'llm_request'
+    || action.actionType === 'llm_response'
+    || decision.reasons.some((reason) => reason.code === 'PII_EGRESS');
+  if (!relevantLifecycle) return decision;
+
+  const summaries = summarizeSensitiveData(action.input).slice(0, 3);
+  if (summaries.length === 0) return decision;
+
+  const labels = summaries.map((item) => item.label);
+  const subject = labels.length === 1 ? labels[0] : 'sensitive data';
+  const outcome = sensitiveDataOutcome(enforcementStatus, decision.decision);
+  const reasonIndex = decision.reasons.findIndex((reason) => reason.code === 'PII_EGRESS');
+  const friendlyReason = {
+    code: 'PII_EGRESS',
+    severity: reasonIndex >= 0 ? decision.reasons[reasonIndex].severity : 'critical' as const,
+    title: `${capitalize(subject)} exposure ${outcome.title}`,
+    description: `Detected ${formatList(labels)} in content visible to the model; ${outcome.description}.`,
+    evidence: `types=${summaries.map((item) => item.kind).join(',')};masked=${summaries.map((item) => item.maskedValue).join(',')}`,
+  };
+  const reasons = [...decision.reasons];
+  if (reasonIndex >= 0) reasons[reasonIndex] = friendlyReason;
+  else reasons.unshift(friendlyReason);
+  return { ...decision, reasons };
+}
+
+function sensitiveDataOutcome(
+  enforcementStatus: EnforcementStatus,
+  decision: RuntimeDecision['decision'],
+): { title: string; description: string } {
+  if (enforcementStatus === 'enforced' && decision === 'block') {
+    return { title: 'blocked', description: 'the current action was blocked' };
+  }
+  if (enforcementStatus === 'enforced' && decision === 'require_approval') {
+    return { title: 'held for approval', description: 'the current action was held for user approval' };
+  }
+  if (enforcementStatus === 'display_only') {
+    return { title: 'detected', description: 'only the displayed text could be masked; the model response was not blocked' };
+  }
+  if (enforcementStatus === 'would_block' || enforcementStatus === 'observed') {
+    return { title: 'detected', description: 'this lifecycle event was observe-only and did not block the model call' };
+  }
+  if (enforcementStatus === 'unsupported') {
+    return { title: 'detected', description: 'the host did not expose a supported blocking point' };
+  }
+  return { title: 'detected', description: 'the event was recorded without claiming that the model call was blocked' };
+}
+
+function formatList(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? 'sensitive data';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
 function isUntrustedClaudePromptExpansion(metadata: Record<string, unknown> | undefined): boolean {
