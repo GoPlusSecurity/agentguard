@@ -77,9 +77,12 @@ Malformed hook JSON and catchable evaluator/process errors cause the installed
 wrapper to exit `2` with a generic, non-sensitive reason. If Codex forcibly
 terminates the hook or the process cannot return an exit code, Codex's host
 behavior applies; this integration does not claim those timeouts fail closed.
-Hook stdout, stderr, audit, and Cloud events contain only bounded rule ids,
-risk, action ids, coverage facts, and redacted reasons—not prompt text, tool
-output, credentials, or PII.
+Hook stdout and stderr contain only bounded rule ids, risk, action ids, coverage
+facts, and redacted reasons. Audit and Cloud events do not contain prompt text,
+tool output, credentials, or PII; a protected-file tool action may retain only
+a bounded, validated explanation such as `cat .env` or
+`cat .ssh/id_ed25519.pub`, without its absolute path, remaining arguments, or
+command tail.
 
 ## Coverage and known gaps
 

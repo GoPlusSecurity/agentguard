@@ -14,6 +14,7 @@ import {
   isClaudeNativeHookAction,
   isCodexNativeHookAction,
   nativeHookSafeMetadata,
+  shouldReportAuditEventToCloud,
 } from '../runtime/audit.js';
 import type { Advisory, SelfCheckMatch } from '../feed/types.js';
 
@@ -86,10 +87,12 @@ export class AgentGuardCloudClient {
 
   async ingestEvents(events: RuntimeAuditEvent[]): Promise<void> {
     this.requireCredential();
+    const reportableEvents = events.filter((event) => shouldReportAuditEventToCloud(event));
+    if (reportableEvents.length === 0) return;
     await this.request('/api/v1/events/ingest', {
       method: 'POST',
       body: JSON.stringify({
-        events: events.map((event) => buildCloudAuditEvent(event)),
+        events: reportableEvents.map((event) => buildCloudAuditEvent(event)),
       }),
     });
   }
