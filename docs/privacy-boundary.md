@@ -28,10 +28,11 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
 
 - `sessionId`, `agentHost`, `actionType`, `toolName`
 - Redacted `input` preview, capped at 2,000 characters
-- For native tool hooks, raw arguments remain local. Protected-file access may
-  include only a bounded, validated target summary such as `cat .env` or
-  `cat .ssh/id_ed25519.pub`; absolute paths, additional arguments, and command
-  tails are omitted.
+- Native shell hooks may retain a redacted command preview so operational
+  context remains visible; recognized credential and PII values are masked.
+  Protected-file access uses only a bounded, validated target summary such as
+  `cat .env` or `cat .ssh/id_ed25519.pub`; absolute paths, additional
+  arguments, redirects, substitutions, and command tails are omitted.
 - Decision, risk score, risk level, reasons, and policy version
 - Lifecycle stage, coverage level, enforcement status, missing-fact names, and
   request correlation IDs
