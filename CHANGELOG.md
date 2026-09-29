@@ -3,19 +3,9 @@
 ## Unreleased
 
 ### Added
-- Added an opt-in semantic privacy enhancement that closes the prose recall gap in personal-data detection. Deterministic rules require a `field: value` anchor and recall almost nothing from prose; the new layer extracts candidate spans locally, judges them semantically, and falls back to sentence-level handling for disclosures that have no extractable span. Off by default, enabled with `agentguard privacy enable`, and never applied to live prompts.
-- Added local-first LLM traffic privacy protection with PII and relay detection rules 1–19, capability-aware enforcement across DSH, Hermes, OpenClaw, Codex, and Claude Code, and redacted Cloud policy/audit synchronization.
-- Added native Windows Task Scheduler support for AgentGuard scheduled jobs.
-- Added native DSH threat-feed subscription management, advisory self-check discovery, and queued delivery of cron notifications to active DSH sessions.
-- Added HTTPS GitHub repository support to `agentguard scan`, including `--ref` selection for branches, tags, fully qualified refs, and full commit SHAs, with bounded non-interactive Git acquisition.
-- Added direct DSH profile plugin discovery and DSH-specific risk scanning to the standard `agentguard checkup` workflow.
-
-### Fixed
-- Preserved bounded, validated protected-file summaries such as `cat .env` and `cat .ssh/id_ed25519.pub` in native-hook audit and Cloud event records while continuing to suppress absolute paths, extra arguments, command tails, and unsafe filenames.
-- Kept routine model-request records and all model-response records out of Cloud event ingest while preserving redacted local audit; confirmed PII-bearing requests are reported only when they were not stopped before model egress.
-- Fixed Windows and system-cron patrols to run the existing eight-check `agentguard checkup --json` flow while keeping SessionStart lightweight.
-- Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.
-- Fixed `checkup` to recursively scan plugins referenced by DSH bundles, wait for all DSH scans before report generation, and include per-plugin results in JSON and HTML reports.
+- Added opt-in, local-first LLM traffic privacy protection with PII and relay detection, semantic prose analysis, capability-aware enforcement across supported agents, and redacted Cloud synchronization. Enable semantic analysis with `agentguard privacy enable`; it is off by default and never applies to live prompts.
+- Added native Windows scheduled jobs and DSH threat-feed subscriptions, self-checks, and active-session notifications.
+- Expanded scanning to support HTTPS GitHub repositories with `--ref`, plus DSH profile plugin discovery and risk scanning in `agentguard checkup`.
 
 ## [1.1.29] - 2026-08-26
 
