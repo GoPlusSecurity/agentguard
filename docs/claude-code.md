@@ -52,6 +52,6 @@ An `@file` path without an explicit exact deny is `unsupported` and is not count
 
 ## Privacy and coverage
 
-Raw prompts, command arguments, tool output, failure text, configuration content, credentials, and PII are evaluated locally. Native Claude hook audit and Cloud records replace raw hook content with `[LOCAL_ONLY_LLM_CONTENT]` and retain only bounded rule IDs, masks, counts, action IDs, coverage, and enforcement metadata. For protected-file tool actions, they may retain only a bounded, validated explanation such as `cat .env` or `cat .ssh/id_ed25519.pub`, without the absolute path, remaining arguments, or command tail. Hook stdout/stderr never echoes raw input.
+Raw prompts, command arguments, tool output, failure text, configuration content, credentials, and PII are evaluated locally. Native Claude hook audit and Cloud records keep prompts and tool output local, while shell actions may retain a redacted command preview. Protected-file actions retain only a bounded, validated explanation such as `cat .env` or `cat .ssh/id_ed25519.pub`, without the absolute path, remaining arguments, redirects, substitutions, or command tail. Hook stdout/stderr never echoes raw input.
 
 Claude Code provides strong staged prompt/tool/context protection, but it does not expose the final model HTTP destination, Authorization credential, complete assembled payload, full response, all retries/fallbacks, or auxiliary model calls. Model-transport rules therefore remain `partial` or `unsupported`; AgentGuard does not claim complete model-traffic interception.

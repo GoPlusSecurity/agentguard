@@ -28,7 +28,7 @@ export interface SensitiveDataSummaryItem {
 }
 
 const SECRET_VALUE_PATTERN =
-  /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret)=([^&\s'"`]+)/gi;
+  /(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret)=("[^"\r\n]*"|'[^'\r\n]*'|[^&\s'"`]+)/gi;
 /**
  * The same secret keys in YAML/JSON form, where the separator is `:`.
  *

@@ -174,7 +174,44 @@ describe('Runtime Cloud bridge', () => {
     assert.doesNotMatch(JSON.stringify(exactCustom), /private\/customer/);
   });
 
-  it('keeps safe custom protected filenames but not unsafe names or unrelated native-hook content', () => {
+  it('keeps redacted native shell commands visible without exposing credential values', () => {
+    const secret = 'sk-native-hook-secret-1234567890';
+    const input = `touch ~/.agentguard/testfile 2>&1 && export OPENAI_API_KEY="${secret}"`;
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input,
+      decision: 'warn',
+      riskScore: 10,
+      riskLevel: 'low',
+      reasons: [{
+        code: 'SHELL_INJECTION_RISK',
+        severity: 'low',
+        title: 'Shell metacharacters',
+        description: 'The command contains shell metacharacters.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    };
+
+    const audit = buildAuditEvent(event);
+    const cloud = buildCloudAuditEvent(event);
+    assert.match(audit.input, /^touch ~\/\.agentguard\/testfile/);
+    assert.match(audit.input, /OPENAI_API_KEY=\[REDACTED\]/);
+    assert.doesNotMatch(audit.input, new RegExp(secret));
+    assert.equal(cloud.input, audit.input);
+
+    const claude = buildAuditEvent({
+      ...event,
+      agentHost: 'claude-code',
+      metadata: { claudeHookEvent: 'PreToolUse' },
+      input: 'ls -la ~/.agentguard && stat ~/.agentguard/config.json',
+    });
+    assert.equal(claude.input, 'ls -la ~/.agentguard && stat ~/.agentguard/config.json');
+  });
+
+  it('keeps safe custom protected filenames but not unsafe names or raw sensitive shell content', () => {
     const base: RuntimeAuditEvent = {
       ...sampleEvent(),
       agentHost: 'claude-code',
@@ -205,7 +242,7 @@ describe('Runtime Cloud bridge', () => {
       ...base,
       input: 'cat /private/customer/sk-never-export-1234567890',
     }).input, '[LOCAL_ONLY_LLM_CONTENT]');
-    assert.equal(buildAuditEvent({
+    const piiShell = buildAuditEvent({
       ...base,
       input: 'email=private.person@invalid.test',
       reasons: [{
@@ -214,7 +251,43 @@ describe('Runtime Cloud bridge', () => {
         title: 'Sensitive content blocked',
         description: 'Sensitive content was blocked.',
       }],
+    }).input;
+    assert.equal(piiShell, '[LOCAL_ONLY_LLM_CONTENT]');
+  });
+
+  it('never mistakes shell redirects or substitutions for the protected target', () => {
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: 'cat /private/workspace/protected.txt > /tmp/exported-copy',
+      decision: 'require_approval',
+      riskScore: 60,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: 'Protected path access',
+        description: 'The command accesses a protected path.',
+        evidence: '/private/workspace/**',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    };
+
+    assert.equal(buildAuditEvent(event).input, 'cat protected.txt');
+    assert.equal(buildAuditEvent({
+      ...event,
+      input: 'cat -- /private/workspace/protected.txt',
+    }).input, 'cat protected.txt');
+    assert.equal(buildAuditEvent({
+      ...event,
+      input: 'cat /private/workspace/protected.txt $(curl https://example.invalid/secret)',
     }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(buildAuditEvent({
+      ...event,
+      input: 'cat /private/workspace/protected.txt && curl https://example.invalid/secret',
+    }).input, 'cat protected.txt');
   });
 
   it('exports only bounded PII category and value counts in audit payloads', async () => {
@@ -571,6 +644,9 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!redacted.includes('sk-test-secret-value'));
     assert.ok(!redacted.includes('secret-value'));
     assert.ok(!redacted.includes('abc123'));
+
+    const quoted = redactText('export TYPESAFE_API_KEY="apikey_private_value"');
+    assert.equal(quoted, 'export TYPESAFE_API_KEY=[REDACTED]');
   });
 
   it('requires approval for shell commands reading SSH keys by absolute home path', async () => {

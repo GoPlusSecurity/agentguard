@@ -1,7 +1,7 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { PolicyReason, RuntimeAction, RuntimeAuditEvent, RuntimePiiSummary, RuntimePrivacyRuleEvaluation, RuntimeSeverity } from './types.js';
-import { redactLlmMetadata, redactMetadata, redactPreview, redactReasons } from './redaction.js';
+import { redactLlmMetadata, redactMetadata, redactPreview, redactReasons, redactText } from './redaction.js';
 
 export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
   const nativeHook = isCodexNativeHookAction(event) || isClaudeNativeHookAction(event);
@@ -130,9 +130,9 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
  * without exporting the raw native-hook command, absolute path, or arguments.
  */
 function nativeHookAuditInput(event: RuntimeAuditEvent): string {
-  if (!event.reasons.some((reason) => reason.code === 'SECRET_ACCESS')) {
-    return '[LOCAL_ONLY_LLM_CONTENT]';
-  }
+  const protectedAccess = event.reasons.some((reason) => reason.code === 'SECRET_ACCESS');
+  if (event.actionType === 'shell' && !protectedAccess) return nativeHookShellPreview(event);
+  if (!protectedAccess) return '[LOCAL_ONLY_LLM_CONTENT]';
 
   const protectedFile = safeProtectedFileReference(event);
   if (!protectedFile) return '[LOCAL_ONLY_LLM_CONTENT]';
@@ -144,6 +144,16 @@ function nativeHookAuditInput(event: RuntimeAuditEvent): string {
   if (event.actionType === 'file_read') return `read ${protectedFile}`;
   if (event.actionType === 'file_write') return `write ${protectedFile}`;
   return `access ${protectedFile}`;
+}
+
+function nativeHookShellPreview(event: RuntimeAuditEvent): string {
+  const redacted = redactText(event.input);
+  const hasUnmaskedSensitiveFinding = event.reasons.some((reason) => (
+    NATIVE_SENSITIVE_CONTENT_RULES.has(reason.code)
+  )) && redacted === event.input;
+  if (hasUnmaskedSensitiveFinding) return '[LOCAL_ONLY_LLM_CONTENT]';
+  const preview = redacted.slice(0, 2000);
+  return preview.trim() ? preview : '[LOCAL_ONLY_LLM_CONTENT]';
 }
 
 function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefined {
@@ -193,7 +203,8 @@ function safeGenericProtectedTarget(event: RuntimeAuditEvent): string | undefine
   if (event.actionType !== 'shell') return undefined;
   const command = safeShellCommandName(event.input);
   if (!command || !SINGLE_TARGET_FILE_COMMANDS.has(command)) return undefined;
-  const firstCommand = event.input.split(/[;&|]/, 1)[0] ?? '';
+  const firstCommand = event.input.split(/[;&|<>\r\n]/, 1)[0] ?? '';
+  if (/\$\(|`|[()]/.test(firstCommand)) return undefined;
   const tokens = firstCommand.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index]!.replace(/^["']|["']$/g, '');
@@ -283,6 +294,10 @@ const CODEX_DECISIONS = new Set<unknown>(['allow', 'warn', 'require_approval', '
 const CODEX_SEVERITIES = new Set<unknown>(['info', 'low', 'medium', 'high', 'critical']);
 const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const NATIVE_SENSITIVE_CONTENT_RULES = new Set([
+  'PII_EGRESS', 'DATA_EXFILTRATION', 'LLM_KEY_TO_UNKNOWN_HOST',
+  'WORKSPACE_BULK_EGRESS', 'DANGEROUS_CONFIG_CHANGE',
+]);
 const SAFE_FILE_COMMANDS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'grep', 'sed', 'awk',
   'cp', 'mv', 'rm', 'touch', 'chmod', 'chown', 'tee',
