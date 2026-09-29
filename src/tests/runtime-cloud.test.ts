@@ -6,7 +6,12 @@ import { homedir, tmpdir } from 'node:os';
 import { __resetNetworkBehaviorForTests, evaluateLocalAction } from '../runtime/evaluator.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, resolveRuntimePolicy } from '../runtime/policy.js';
 import { redactText } from '../runtime/redaction.js';
-import { buildAuditEvent, flushEventSpool, spoolEvent } from '../runtime/audit.js';
+import {
+  buildAuditEvent,
+  flushEventSpool,
+  shouldReportAuditEventToCloud,
+  spoolEvent,
+} from '../runtime/audit.js';
 import { actionFingerprint, approvePendingApproval, cleanupExpiredApprovals, listPendingApprovals } from '../runtime/approvals.js';
 import { exitCodeForDecision, formatProtectResult, protectAction } from '../runtime/protect.js';
 import type { ProtectResult } from '../runtime/protect.js';
@@ -112,6 +117,106 @@ describe('Runtime Cloud bridge', () => {
     assert.ok(!JSON.stringify(auditPayload).includes(rawPii));
   });
 
+  it('keeps a safe protected filename in native-hook audit copy without exporting the raw command', () => {
+    const rawCommand = 'cat /private/workspace/.env && printf token=sk-never-export-1234567890';
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: rawCommand,
+      decision: 'require_approval',
+      riskScore: 60,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: 'Protected path access',
+        description: 'The agent attempted to access a protected path.',
+        evidence: '**/.env*',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    };
+
+    const audit = buildAuditEvent(event);
+    const cloud = buildCloudAuditEvent(event);
+
+    assert.equal(audit.input, 'cat .env');
+    assert.equal(audit.reasons[0]?.title, 'Protected path access');
+    assert.equal(audit.reasons[0]?.evidence, '[REDACTED]');
+    assert.equal(cloud.input, 'cat .env');
+    assert.doesNotMatch(JSON.stringify(cloud), /private\/workspace|never-export|1234567890/);
+
+    const ssh = buildAuditEvent({
+      ...event,
+      input: 'cat /Users/private-user/.ssh/id_ed25519.pub && printf hidden-tail',
+      reasons: [{ ...event.reasons[0]!, evidence: '~/.ssh/**' }],
+    });
+    assert.equal(ssh.input, 'cat .ssh/id_ed25519.pub');
+    assert.doesNotMatch(JSON.stringify(ssh), /private-user|hidden-tail/);
+
+    const aws = buildAuditEvent({
+      ...event,
+      actionType: 'file_read',
+      toolName: 'Read',
+      input: '/Users/private-user/.aws/credentials',
+      reasons: [{ ...event.reasons[0]!, evidence: '~/.aws/**' }],
+    });
+    assert.equal(aws.input, 'read .aws/credentials');
+    assert.doesNotMatch(JSON.stringify(aws), /private-user/);
+
+    const exactCustom = buildAuditEvent({
+      ...event,
+      input: 'cat /private/customer/quarterly-plan.txt',
+      reasons: [{ ...event.reasons[0]!, evidence: '/private/customer/quarterly-plan.txt' }],
+    });
+    assert.equal(exactCustom.input, 'cat quarterly-plan.txt');
+    assert.doesNotMatch(JSON.stringify(exactCustom), /private\/customer/);
+  });
+
+  it('keeps safe custom protected filenames but not unsafe names or unrelated native-hook content', () => {
+    const base: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'claude-code',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: 'cat /private/customer/secret-plan.txt',
+      decision: 'require_approval',
+      riskScore: 60,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: 'Protected path access',
+        description: 'The agent attempted to access a protected path.',
+        evidence: '/private/customer/**',
+      }],
+      metadata: { claudeHookEvent: 'PreToolUse' },
+    };
+
+    const custom = buildAuditEvent(base);
+    assert.equal(custom.input, 'cat secret-plan.txt');
+    assert.doesNotMatch(JSON.stringify(custom), /private\/customer/);
+    assert.equal(buildAuditEvent({
+      ...base,
+      input: 'cat /private/customer/private.person@invalid.test',
+    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(buildAuditEvent({
+      ...base,
+      input: 'cat /private/customer/sk-never-export-1234567890',
+    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(buildAuditEvent({
+      ...base,
+      input: 'email=private.person@invalid.test',
+      reasons: [{
+        code: 'PII_EGRESS',
+        severity: 'critical',
+        title: 'Sensitive content blocked',
+        description: 'Sensitive content was blocked.',
+      }],
+    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+  });
+
   it('exports only bounded PII category and value counts in audit payloads', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     const action: RuntimeAction = {
@@ -160,6 +265,166 @@ describe('Runtime Cloud bridge', () => {
       valueCount: 2,
     });
     assert.ok(!JSON.stringify(payload).includes('private.person@corp.invalid'));
+  });
+
+  it('keeps routine model traffic and every model response out of Cloud ingest', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body?: string }> = [];
+    const routineRequest: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      actionId: 'act_model_routine',
+      actionType: 'llm_request',
+      toolName: 'openclaw.model_call_started',
+      input: 'routine model request',
+      decision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      canBlockCurrentAction: false,
+    };
+    const piiResponse: RuntimeAuditEvent = {
+      ...routineRequest,
+      actionId: 'act_model_response',
+      actionType: 'llm_response',
+      toolName: 'openclaw.llm_output',
+      privacySummary: {
+        categories: [{ category: 'email_address', count: 1 }],
+        valueCount: 1,
+      },
+    };
+    const blockedPiiRequest: RuntimeAuditEvent = {
+      ...routineRequest,
+      actionId: 'act_model_blocked_pii',
+      input: 'personal_email=blocked.person@corp.invalid',
+      decision: 'block',
+      riskScore: 95,
+      riskLevel: 'critical',
+      canBlockCurrentAction: true,
+      privacySummary: {
+        categories: [{ category: 'email_address', count: 1 }],
+        valueCount: 1,
+      },
+    };
+    const observedPiiRequest: RuntimeAuditEvent = {
+      ...blockedPiiRequest,
+      actionId: 'act_model_observed_pii',
+      input: 'personal_email=sent.person@corp.invalid',
+      canBlockCurrentAction: false,
+    };
+
+    assert.equal(shouldReportAuditEventToCloud(routineRequest), false);
+    assert.equal(shouldReportAuditEventToCloud(piiResponse), false);
+    assert.equal(shouldReportAuditEventToCloud(blockedPiiRequest), false);
+    assert.equal(shouldReportAuditEventToCloud(observedPiiRequest), true);
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push({ url: String(input), body: typeof init?.body === 'string' ? init.body : undefined });
+      return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents([routineRequest, piiResponse, blockedPiiRequest]);
+      assert.equal(requests.length, 0);
+
+      await client.ingestEvents([routineRequest, observedPiiRequest, piiResponse]);
+      assert.equal(requests.length, 1);
+      const payload = JSON.parse(requests[0]!.body || '{}') as { events?: RuntimeAuditEvent[] };
+      assert.deepEqual(payload.events?.map((event) => event.actionId), ['act_model_observed_pii']);
+      assert.deepEqual(payload.events?.[0]?.privacySummary, {
+        categories: [{ category: 'email_address', count: 1 }],
+        valueCount: 1,
+      });
+      assert.doesNotMatch(requests[0]!.body || '', /sent\.person@corp\.invalid/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps ordinary OpenClaw model observations local but uploads a PII egress summary', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-model-cloud-boundary-'));
+    const policy = getDefaultEffectiveRuntimePolicy();
+    const requests: Array<{ url: string; body?: string }> = [];
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, body: typeof init?.body === 'string' ? init.body : undefined });
+      if (url.endsWith('/api/v1/policies/effective')) {
+        return jsonResponse({ success: true, data: policy });
+      }
+      if (url.endsWith('/api/v1/events/ingest')) {
+        return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+      }
+      return jsonResponse({ success: false, error: { message: 'not found' } }, 404);
+    }) as typeof fetch;
+
+    try {
+      const config: AgentGuardConfig = {
+        version: 1,
+        level: 'balanced',
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+        policyCachePath: join(dir, 'policy.json'),
+        auditPath: join(dir, 'audit.jsonl'),
+        eventSpoolPath: join(dir, 'spool.jsonl'),
+      };
+      const rawInput = {
+        input: 'routine model request',
+        lifecycleStage: 'model_request',
+        canBlockCurrentAction: false,
+        coverageLevel: 'observe_only',
+        missingFacts: [],
+        llm: {
+          schemaVersion: 1,
+          requestId: 'openclaw:call-cloud-boundary',
+          sessionId: 'sess_cloud_boundary',
+          purpose: 'conversation',
+          lifecycleStage: 'model_request',
+          canBlockCurrentAction: false,
+          destination: { scheme: 'https', host: 'api.openai.com', tier: 'T1' },
+          credentialKind: 'none',
+          credentialPresent: false,
+          payloadBytes: 21,
+          attachmentBytes: 0,
+          filePathCount: 0,
+        },
+      };
+
+      const routine = await protectAction({
+        config,
+        agentHost: 'openclaw',
+        actionType: 'llm_request',
+        toolName: 'openclaw.llm_input',
+        sessionId: 'sess_cloud_boundary',
+        rawInput,
+        auditSafe: true,
+      });
+      assert.ok(routine);
+      assert.equal(existsSync(config.auditPath), true);
+      assert.equal(requests.some((request) => request.url.endsWith('/api/v1/events/ingest')), false);
+
+      const rawPii = 'personal_email=sent.person@corp.invalid';
+      const pii = await protectAction({
+        config,
+        agentHost: 'openclaw',
+        actionType: 'llm_request',
+        toolName: 'openclaw.llm_input',
+        sessionId: 'sess_cloud_boundary',
+        rawInput: { ...rawInput, input: rawPii },
+        auditSafe: true,
+      });
+      assert.ok(pii?.event.privacySummary?.valueCount);
+      const ingest = requests.find((request) => request.url.endsWith('/api/v1/events/ingest'));
+      assert.ok(ingest?.body);
+      assert.match(ingest.body, /"privacySummary"/);
+      assert.doesNotMatch(ingest.body, /sent\.person@corp\.invalid/);
+      assert.doesNotMatch(readFileSync(config.auditPath, 'utf8'), /sent\.person@corp\.invalid/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('normalizes legacy policy responses at the Cloud client boundary', async () => {
@@ -1133,6 +1398,40 @@ describe('Runtime Cloud bridge', () => {
 
     assert.deepEqual(result, { flushed: 1, remaining: 0 });
     assert.equal(batches[0][0].actionId, 'act_test');
+  });
+
+  it('drops historical routine model records when draining the Cloud spool', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-model-spool-filter-'));
+    const spool = join(dir, 'events.jsonl');
+    const requests: string[] = [];
+    spoolEvent(spool, {
+      ...sampleEvent(),
+      actionId: 'act_old_model_record',
+      actionType: 'llm_request',
+      toolName: 'openclaw.model_call_ended.request',
+      decision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      canBlockCurrentAction: false,
+    });
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      const result = await flushEventSpool(spool, (events) => client.ingestEvents(events));
+      assert.deepEqual(result, { flushed: 1, remaining: 0 });
+      assert.equal(existsSync(spool), false);
+      assert.deepEqual(requests, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('protectAction falls back to cached policy and writes local audit', async () => {

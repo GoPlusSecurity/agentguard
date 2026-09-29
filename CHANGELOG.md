@@ -11,6 +11,8 @@
 - Added direct DSH profile plugin discovery and DSH-specific risk scanning to the standard `agentguard checkup` workflow.
 
 ### Fixed
+- Preserved bounded, validated protected-file summaries such as `cat .env` and `cat .ssh/id_ed25519.pub` in native-hook audit and Cloud event records while continuing to suppress absolute paths, extra arguments, command tails, and unsafe filenames.
+- Kept routine model-request records and all model-response records out of Cloud event ingest while preserving redacted local audit; confirmed PII-bearing requests are reported only when they were not stopped before model egress.
 - Fixed Windows and system-cron patrols to run the existing eight-check `agentguard checkup --json` flow while keeping SessionStart lightweight.
 - Improved DSH subscription cleanup and artifact discovery, and made system cron status failures explicit.
 - Fixed `checkup` to recursively scan plugins referenced by DSH bundles, wait for all DSH scans before report generation, and include per-plugin results in JSON and HTML reports.

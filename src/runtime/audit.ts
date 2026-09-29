@@ -11,7 +11,11 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     agentHost: event.agentHost,
     actionType: event.actionType,
     toolName: redactPreview(event.toolName, 160),
-    input: isLlmTrafficEvent(event) || nativeHook ? '[LOCAL_ONLY_LLM_CONTENT]' : redactPreview(event.input),
+    input: isLlmTrafficEvent(event)
+      ? '[LOCAL_ONLY_LLM_CONTENT]'
+      : nativeHook
+        ? nativeHookAuditInput(event)
+        : redactPreview(event.input),
     decision: event.decision,
     policyDecision: event.policyDecision,
     riskScore: clampRiskScore(event.riskScore),
@@ -34,6 +38,34 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
           evaluation: redactPreview(event.metadata?.evaluation || 'local-oss', 120),
         },
   };
+}
+
+/**
+ * Keep model traffic private while still reporting confirmed PII egress.
+ *
+ * Model responses never leave the machine. Routine model requests also stay
+ * local; a request is Cloud-reportable only when local evaluation found PII
+ * and the request was not stopped at a blocking gate.
+ */
+export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
+  if (event.actionType === 'llm_response') return false;
+  if (event.actionType !== 'llm_request') return true;
+
+  const piiDetected = Boolean(
+    event.privacySummary
+    && Number.isSafeInteger(event.privacySummary.valueCount)
+    && event.privacySummary.valueCount > 0
+    && event.privacySummary.categories.some((item) => (
+      PII_CATEGORIES.has(item.category)
+      && Number.isSafeInteger(item.count)
+      && item.count > 0
+    ))
+  );
+  if (!piiDetected) return false;
+
+  const stoppedBeforeEgress = event.canBlockCurrentAction !== false
+    && (event.decision === 'block' || event.decision === 'require_approval');
+  return !stoppedBeforeEgress;
 }
 
 export function isCodexNativeHookAction(action: Pick<RuntimeAction, 'agentHost' | 'metadata'>): boolean {
@@ -86,11 +118,112 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
   return reasons.slice(0, 20).map((reason) => ({
     code: SAFE_RULE_ID.test(reason.code) ? reason.code : 'POLICY',
     severity: CODEX_SEVERITIES.has(reason.severity) ? reason.severity as RuntimeSeverity : 'info',
-    title: 'Policy rule matched',
+    title: reason.code === 'SECRET_ACCESS' ? 'Protected path access' : 'Policy rule matched',
     description: '[REDACTED]',
     evidence: reason.evidence === undefined ? undefined : '[REDACTED]',
     remediation: reason.remediation === undefined ? undefined : '[REDACTED]',
   }));
+}
+
+/**
+ * Preserve a minimal explanation for protected-file access
+ * without exporting the raw native-hook command, absolute path, or arguments.
+ */
+function nativeHookAuditInput(event: RuntimeAuditEvent): string {
+  if (!event.reasons.some((reason) => reason.code === 'SECRET_ACCESS')) {
+    return '[LOCAL_ONLY_LLM_CONTENT]';
+  }
+
+  const protectedFile = safeProtectedFileReference(event);
+  if (!protectedFile) return '[LOCAL_ONLY_LLM_CONTENT]';
+
+  if (event.actionType === 'shell') {
+    const command = safeShellCommandName(event.input);
+    return `${command ?? 'access'} ${protectedFile}`;
+  }
+  if (event.actionType === 'file_read') return `read ${protectedFile}`;
+  if (event.actionType === 'file_write') return `write ${protectedFile}`;
+  return `access ${protectedFile}`;
+}
+
+function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefined {
+  const input = event.input;
+  const ssh = input.match(/\.ssh[\\/]([A-Za-z0-9._-]{1,128})(?=$|[\s"';&|)\]},:])/i)?.[1];
+  if (ssh && isSafeProtectedFileName(ssh)) return `.ssh/${ssh}`;
+
+  const aws = input.match(/\.aws[\\/]([A-Za-z0-9._-]{1,128})(?=$|[\s"';&|)\]},:])/i)?.[1];
+  if (aws && isSafeProtectedFileName(aws)) return `.aws/${aws}`;
+
+  const environment = input.match(
+    /(?:^|[\s"'=([{,:])(?:[A-Za-z]:[\\/])?[\\/]?(?:[A-Za-z0-9_~.-]+[\\/])*(\.env(?:\.[A-Za-z0-9_-]{1,64})?)(?=$|[\s"';&|)\]},:])/i
+  )?.[1];
+  if (environment && isSafeProtectedFileName(environment)) return environment;
+
+  const genericTarget = safeGenericProtectedTarget(event);
+  if (genericTarget) return genericTarget;
+
+  const credentials = input.match(
+    /(?:^|[\\/\s"'=([{,:])(credentials[A-Za-z0-9._-]{0,96})(?=$|[\s"';&|)\]},:])/i
+  )?.[1];
+  if (credentials && isSafeProtectedFileName(credentials)) return credentials;
+
+  const namedSecret = input.match(
+    /(?:^|[\\/\s"'=([{,:])([A-Za-z0-9._-]{0,96}(?:private-key|seed)[A-Za-z0-9._-]{0,96})(?=$|[\s"';&|)\]},:])/i
+  )?.[1];
+  if (namedSecret && isSafeProtectedFileName(namedSecret)) return namedSecret;
+
+  for (const reason of event.reasons) {
+    if (reason.code !== 'SECRET_ACCESS' || !reason.evidence || /[*?\[\]]/.test(reason.evidence)) continue;
+    const exactName = reason.evidence.split(/[\\/]/).at(-1);
+    if (event.input.includes(reason.evidence) && exactName && isSafeProtectedFileName(exactName)) return exactName;
+  }
+  return undefined;
+}
+
+function safeGenericProtectedTarget(event: RuntimeAuditEvent): string | undefined {
+  if (event.actionType === 'file_read') return safePathBasename(event.input);
+
+  if (event.actionType === 'file_write') {
+    const path = event.input.match(
+      /["'](?:file_path|filePath|path|target)["']\s*:\s*["']([^"']+)["']/
+    )?.[1];
+    return path ? safePathBasename(path) : undefined;
+  }
+
+  if (event.actionType !== 'shell') return undefined;
+  const command = safeShellCommandName(event.input);
+  if (!command || !SINGLE_TARGET_FILE_COMMANDS.has(command)) return undefined;
+  const firstCommand = event.input.split(/[;&|]/, 1)[0] ?? '';
+  const tokens = firstCommand.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index]!.replace(/^["']|["']$/g, '');
+    if (token.startsWith('-') || /^\d+$/.test(token)) continue;
+    const name = safePathBasename(token);
+    if (name && name.toLowerCase() !== command) return name;
+  }
+  return undefined;
+}
+
+function safePathBasename(value: string): string | undefined {
+  const normalized = value.trim().replace(/^["']|["']$/g, '').replace(/[\\/]+$/, '');
+  const name = normalized.split(/[\\/]/).at(-1);
+  return name && isSafeProtectedFileName(name) ? name : undefined;
+}
+
+function isSafeProtectedFileName(value: string): boolean {
+  return value !== '.'
+    && value !== '..'
+    && value.length <= 128
+    && /^[A-Za-z0-9._-]+$/.test(value)
+    && redactPreview(value, 128) === value;
+}
+
+function safeShellCommandName(input: string): string | undefined {
+  const match = input.match(
+    /^\s*(?:(?:sudo|env)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:\/[^\s/]+\/)*([A-Za-z][A-Za-z0-9_-]*)\b/
+  );
+  const command = match?.[1]?.toLowerCase();
+  return command && SAFE_FILE_COMMANDS.has(command) ? command : undefined;
 }
 
 function codexSafePrivacyRule(value: unknown): RuntimePrivacyRuleEvaluation | null {
@@ -150,6 +283,13 @@ const CODEX_DECISIONS = new Set<unknown>(['allow', 'warn', 'require_approval', '
 const CODEX_SEVERITIES = new Set<unknown>(['info', 'low', 'medium', 'high', 'critical']);
 const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const SAFE_FILE_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'grep', 'sed', 'awk',
+  'cp', 'mv', 'rm', 'touch', 'chmod', 'chown', 'tee',
+]);
+const SINGLE_TARGET_FILE_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'rm', 'touch', 'chmod', 'chown',
+]);
 
 function isLlmTrafficEvent(event: RuntimeAuditEvent): boolean {
   return event.actionType === 'llm_request'

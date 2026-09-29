@@ -47,9 +47,9 @@ AgentGuard registers only OpenClaw's existing public plugin hooks:
 | Hook | AgentGuard behavior | Boundary |
 | --- | --- | --- |
 | `before_agent_run` | Blocking gate over the initial prompt, loaded history, and system prompt | Runs once at the supported run boundary; it is not a gate for every model call |
-| `llm_input` | Redacted semantic request audit | Observer only |
-| `llm_output` | Redacted partial response audit | Observer only |
-| `model_call_started` / `model_call_ended` | Correlates `runId` / `callId` and records provider, model, and supplied byte statistics | Observer only |
+| `llm_input` | Redacted local semantic request audit; only confirmed, non-blocked PII egress is Cloud-reportable | Observer only |
+| `llm_output` | Redacted local partial response audit; never Cloud-reportable | Observer only |
+| `model_call_started` / `model_call_ended` | Locally correlates `runId` / `callId` and records provider, model, and supplied byte statistics; routine records are never Cloud-reportable | Observer only |
 | `before_tool_call` | Blocks dangerous commands and sensitive actions or returns native OpenClaw approval | Blocking |
 | `after_tool_call` | Audits tool outcomes and visible response-poisoning evidence | Observer only |
 

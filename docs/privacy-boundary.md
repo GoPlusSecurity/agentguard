@@ -11,10 +11,10 @@ AgentGuard OSS protects your machine without requiring a Cloud account.
 - Local audit file at `~/.agentguard/audit.jsonl`
 - Cached policy at `~/.agentguard/policy-cache.json`
 
-LLM request and response content is evaluated only in local process memory. The
-persisted and Cloud-facing form replaces that content with
-`[LOCAL_ONLY_LLM_CONTENT]`; it retains only bounded lifecycle and coverage
-facts.
+LLM request and response content is evaluated only in local process memory.
+Redacted request and response observations may be written to the local audit
+file, but routine model-request records and all model-response records are not
+uploaded to Cloud.
 
 Cloud runtime policy responses use `schemaVersion: 1`; older responses without
 that field are treated as version 1 and normalized locally. Cloud audit and
@@ -24,10 +24,14 @@ Unknown fields are ignored rather than treated as local enforcement facts.
 
 ## Sent to Cloud when connected
 
-Only redacted runtime audit previews are uploaded by default:
+Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
 
 - `sessionId`, `agentHost`, `actionType`, `toolName`
 - Redacted `input` preview, capped at 2,000 characters
+- For native tool hooks, raw arguments remain local. Protected-file access may
+  include only a bounded, validated target summary such as `cat .env` or
+  `cat .ssh/id_ed25519.pub`; absolute paths, additional arguments, and command
+  tails are omitted.
 - Decision, risk score, risk level, reasons, and policy version
 - Lifecycle stage, coverage level, enforcement status, missing-fact names, and
   request correlation IDs
@@ -36,6 +40,8 @@ Only redacted runtime audit previews are uploaded by default:
 - Credential kind and presence only (`api_key`, `oauth`, `aws`, `ambient`,
   `none`, or `unknown`); never a credential value, Authorization header, or
   reversible digest
+- For model traffic, only a confirmed PII-bearing request that was not stopped
+  before egress; routine requests and every response stay local
 - PII category/count summaries and masked evidence; never raw matches
 
 PII summaries use only an allowlisted category name, per-category count, and a
@@ -67,7 +73,11 @@ Cloud endpoints also apply server-side redaction, but clients should not rely on
 
 ## Offline behavior
 
-If Cloud is unreachable, AgentGuard continues local enforcement and spools redacted audit events for later retry. It must never fail open for local `block` decisions.
+If Cloud is unreachable, AgentGuard continues local enforcement and spools
+Cloud-eligible redacted audit events for later retry. Routine model requests and
+model responses are filtered again at the Cloud client boundary, including
+when an older spool is drained. It must never fail open for local `block`
+decisions.
 
 Local policies are normalized when loaded, so caches written before the LLM
 privacy fields existed inherit the bundled privacy defaults. Cloud availability
