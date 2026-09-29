@@ -1,15 +1,11 @@
 # Changelog
 
-## Unreleased
+## [1.2.1] - 2026-09-29
 
 ### Added
 - Added opt-in, local-first LLM traffic privacy protection with PII and relay detection, semantic prose analysis, capability-aware enforcement across supported agents, and redacted Cloud synchronization. Enable semantic analysis with `agentguard privacy enable`; it is off by default and never applies to live prompts.
 - Added native Windows scheduled jobs and DSH threat-feed subscriptions, self-checks, and active-session notifications.
 - Expanded scanning to support HTTPS GitHub repositories with `--ref`, plus DSH profile plugin discovery and risk scanning in `agentguard checkup`.
-
-### Fixed
-- Restored redacted native shell-command previews in local audit and Cloud events so safe operational context remains visible, while keeping prompts, tool output, credentials, PII, and unsafe protected-file targets private.
-- Prevented protected-file summaries from mistaking redirect destinations or command substitutions for the accessed file.
 
 ## [1.1.29] - 2026-08-26
 
