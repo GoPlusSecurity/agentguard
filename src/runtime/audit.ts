@@ -48,24 +48,62 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
  * and the request was not stopped at a blocking gate.
  */
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
+  if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
   if (event.actionType === 'llm_response') return false;
   if (event.actionType !== 'llm_request') return true;
 
-  const piiDetected = Boolean(
-    event.privacySummary
-    && Number.isSafeInteger(event.privacySummary.valueCount)
-    && event.privacySummary.valueCount > 0
-    && event.privacySummary.categories.some((item) => (
-      PII_CATEGORIES.has(item.category)
-      && Number.isSafeInteger(item.count)
-      && item.count > 0
-    ))
-  );
+  const piiDetected = hasPiiSummary(event.privacySummary);
   if (!piiDetected) return false;
 
   const stoppedBeforeEgress = event.canBlockCurrentAction !== false
     && (event.decision === 'block' || event.decision === 'require_approval');
   return !stoppedBeforeEgress;
+}
+
+/**
+ * Routine post-tool observations duplicate the already reported pre-tool
+ * action and stay in the local audit. Upload a separate post-tool event only
+ * when the result adds a material security or execution signal.
+ */
+function shouldReportNativePostToolEvent(event: RuntimeAuditEvent): boolean {
+  if (event.metadata?.claudeHookEvent === 'PostToolUseFailure') return true;
+  if (event.metadata?.toolFailed === true) return true;
+
+  const responseStatus = firstSafeInteger(
+    event.metadata?.responseStatusCode,
+    event.metadata?.statusCode,
+  );
+  if (responseStatus !== undefined && responseStatus >= 400) return true;
+
+  if (event.decision !== 'allow' || (event.policyDecision && event.policyDecision !== 'allow')) return true;
+  if (event.riskScore >= 20 || MATERIAL_POST_RISK_LEVELS.has(event.riskLevel)) return true;
+  if (event.enforcementStatus === 'would_block' || event.enforcementStatus === 'unsupported') return true;
+  if (hasPiiSummary(event.privacySummary)) return true;
+
+  return event.reasons.some((reason) => (
+    reason.code !== 'SHELL_INJECTION_RISK' || MATERIAL_POST_SEVERITIES.has(reason.severity)
+  ));
+}
+
+function isNativePostToolEvent(event: RuntimeAuditEvent): boolean {
+  return event.metadata?.codexHookEvent === 'PostToolUse'
+    || event.metadata?.claudeHookEvent === 'PostToolUse'
+    || event.metadata?.claudeHookEvent === 'PostToolUseFailure';
+}
+
+function hasPiiSummary(summary: RuntimePiiSummary | undefined): boolean {
+  return Boolean(summary
+    && Number.isSafeInteger(summary.valueCount)
+    && summary.valueCount > 0
+    && summary.categories.some((item) => (
+      PII_CATEGORIES.has(item.category)
+      && Number.isSafeInteger(item.count)
+      && item.count > 0
+    )));
+}
+
+function firstSafeInteger(...values: unknown[]): number | undefined {
+  return values.find((value): value is number => Number.isSafeInteger(value));
 }
 
 export function isCodexNativeHookAction(action: Pick<RuntimeAction, 'agentHost' | 'metadata'>): boolean {
@@ -95,7 +133,7 @@ export function nativeHookSafeMetadata(metadata: Record<string, unknown> | undef
   }
   for (const key of [
     'responseStatusCode', 'statusCode', 'responseBodyBytes', 'responseBytes', 'contentLength',
-    'filePathCount', 'serializedResultBytes', 'redactedBytes', 'contextTokens',
+    'filePathCount', 'serializedResultBytes', 'redactedBytes', 'contextTokens', 'exitCode',
   ]) {
     const value = metadata[key];
     if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) result[key] = value;
@@ -107,7 +145,7 @@ export function nativeHookSafeMetadata(metadata: Record<string, unknown> | undef
   if (metadata.approvalOnce === true) result.approvalOnce = true;
   for (const key of [
     'configDiskRollback', 'modelIdIsEndpoint', 'outputReplaceable', 'displayOnly', 'transcriptModified',
-    'continuationBlockedOnly', 'resumeRetransmissionGuaranteed',
+    'continuationBlockedOnly', 'resumeRetransmissionGuaranteed', 'toolFailed',
   ]) {
     if (typeof metadata[key] === 'boolean') result[key] = metadata[key];
   }
@@ -292,6 +330,8 @@ const MISSING_FACTS = new Set<unknown>([
 ]);
 const CODEX_DECISIONS = new Set<unknown>(['allow', 'warn', 'require_approval', 'block']);
 const CODEX_SEVERITIES = new Set<unknown>(['info', 'low', 'medium', 'high', 'critical']);
+const MATERIAL_POST_RISK_LEVELS = new Set<unknown>(['medium', 'high', 'critical']);
+const MATERIAL_POST_SEVERITIES = new Set<unknown>(['medium', 'high', 'critical']);
 const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const NATIVE_SENSITIVE_CONTENT_RULES = new Set([

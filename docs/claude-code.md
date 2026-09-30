@@ -34,6 +34,8 @@ Hook execution is bounded to 30 seconds. Claude Code may continue the original a
 
 `PostToolUse` scans `tool_response`. AgentGuard uses `updatedToolOutput` only for verified response shapes: Read, Bash/PowerShell, WebFetch/WebSearch, and MCP content results. Redaction preserves the verified string/object/array shape. Unknown output schemas are not guessed or destructively rewritten; sensitive unknown output is marked `partial`/`would_block`, and `PostToolBatch` remains the continuation gate.
 
+Routine successful `PostToolUse` observations remain in the local audit and are not uploaded. Failures, elevated risks, anomalous results, and other material new findings are uploaded as separate Cloud events containing only redacted summaries and bounded status metadata.
+
 `PostToolUseFailure` records only redacted failure type/summary and coverage. It cannot replace or block a failed tool's output. Whether a particular Claude Code version includes failed results in a following `PostToolBatch.tool_calls[].tool_response` is `unverified` until tested on that version; if absent, the failure-output path is `unsupported`.
 
 `PostToolBatch` scans each official `tool_calls[].tool_response` result Claude is about to use, records bounded file-path, byte, and redaction counts, and can stop the agentic loop before the next model call. Tool reads and side effects have already occurred. Existing transcript content is not removed, and a resumed session is not guaranteed to suppress retransmission.
@@ -53,5 +55,7 @@ An `@file` path without an explicit exact deny is `unsupported` and is not count
 ## Privacy and coverage
 
 Raw prompts, command arguments, tool output, failure text, configuration content, credentials, and PII are evaluated locally. Native Claude hook audit and Cloud records keep prompts and tool output local, while shell actions may retain a redacted command preview. Protected-file actions retain only a bounded, validated explanation such as `cat .env` or `cat .ssh/id_ed25519.pub`, without the absolute path, remaining arguments, redirects, substitutions, or command tail. Hook stdout/stderr never echoes raw input.
+
+`PreToolUse` is the primary Cloud action record. Raw stdout and stderr are never uploaded from either lifecycle stage; reportable Post events carry only the redacted risk summary and necessary status fields.
 
 Claude Code provides strong staged prompt/tool/context protection, but it does not expose the final model HTTP destination, Authorization credential, complete assembled payload, full response, all retries/fallbacks, or auxiliary model calls. Model-transport rules therefore remain `partial` or `unsupported`; AgentGuard does not claim complete model-traffic interception.

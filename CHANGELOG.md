@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Native `PreToolUse` actions remain the primary Cloud records, while routine successful `PostToolUse` observations now stay local and only failures, elevated risks, anomalous results, or material new findings are uploaded as separate redacted events.
+
 ## [1.2.1] - 2026-09-29
 
 ### Added

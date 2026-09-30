@@ -416,6 +416,91 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('reports pre-tool actions but keeps routine post-tool observations local', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const preTool: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      actionId: 'act_pre_tool',
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: 'printf hello',
+      decision: 'allow',
+      policyDecision: 'allow',
+      riskScore: 10,
+      riskLevel: 'low',
+      lifecycleStage: 'pre_tool',
+      reasons: [{
+        code: 'SHELL_INJECTION_RISK', severity: 'low', title: 'Shell metacharacters', description: 'Low-risk shell syntax.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    };
+    const routinePost: RuntimeAuditEvent = {
+      ...preTool,
+      actionId: 'act_post_routine',
+      actionType: 'other',
+      input: 'hello',
+      lifecycleStage: 'post_tool',
+      metadata: { codexHookEvent: 'PostToolUse', exitCode: 0 },
+    };
+    const failedPost: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_post_failed',
+      input: 'private failure output',
+      metadata: { codexHookEvent: 'PostToolUse', exitCode: 1, toolFailed: true },
+    };
+    const riskyPost: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_post_risky',
+      input: 'private tool output containing a secret',
+      decision: 'block',
+      policyDecision: 'block',
+      riskScore: 80,
+      riskLevel: 'high',
+      enforcementStatus: 'would_block',
+      reasons: [{
+        code: 'DATA_EXFILTRATION', severity: 'high', title: 'Sensitive output', description: 'Sensitive output detected.',
+      }],
+    };
+    const claudeFailure: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_claude_failure',
+      agentHost: 'claude-code',
+      metadata: { claudeHookEvent: 'PostToolUseFailure', toolFailed: true },
+    };
+
+    assert.equal(shouldReportAuditEventToCloud(preTool), true);
+    assert.equal(shouldReportAuditEventToCloud(routinePost), false);
+    assert.equal(shouldReportAuditEventToCloud(failedPost), true);
+    assert.equal(shouldReportAuditEventToCloud(riskyPost), true);
+    assert.equal(shouldReportAuditEventToCloud(claudeFailure), true);
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(typeof init?.body === 'string' ? init.body : '');
+      return jsonResponse({ success: true, data: { accepted: 4, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents([preTool, routinePost, failedPost, riskyPost, claudeFailure]);
+      assert.equal(requests.length, 1);
+      const payload = JSON.parse(requests[0]!) as { events?: RuntimeAuditEvent[] };
+      assert.deepEqual(payload.events?.map((event) => event.actionId), [
+        'act_pre_tool', 'act_post_failed', 'act_post_risky', 'act_claude_failure',
+      ]);
+      for (const post of payload.events?.filter((event) => event.lifecycleStage === 'post_tool') ?? []) {
+        assert.equal(post.input, '[LOCAL_ONLY_LLM_CONTENT]');
+      }
+      assert.doesNotMatch(requests[0]!, /private failure output|private tool output/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('keeps ordinary OpenClaw model observations local but uploads a PII egress summary', async () => {
     const originalFetch = globalThis.fetch;
     const dir = mkdtempSync(join(tmpdir(), 'agentguard-model-cloud-boundary-'));

@@ -116,6 +116,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
   const auditSafe = options.auditSafe || codexHookEvent === 'PermissionRequest'
     || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
+    || codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse'
     || isClaudeObserverEvent(claudeHookEvent);
   if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
@@ -740,6 +742,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...(claudeHookEvent ? { claudeHookEvent } : {}),
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
       ...pickNetworkMetadata(raw, toolInput),
+      ...pickPostToolOutcomeMetadata(codexHookEvent, claudeHookEvent, raw),
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
@@ -1395,6 +1398,39 @@ function pickNetworkMetadata(
     ...definedMetadata('responseBodyBytes', toolInput?.responseBodyBytes, response?.bodyBytes, response?.bytes, raw?.responseBodyBytes),
     ...definedMetadata('responseBytes', toolInput?.responseBytes, raw?.responseBytes),
     ...definedMetadata('contentLength', toolInput?.contentLength, response?.contentLength, raw?.contentLength),
+  };
+}
+
+function pickPostToolOutcomeMetadata(
+  codexHookEvent: CodexHookEvent | undefined,
+  claudeHookEvent: ClaudeHookEvent | undefined,
+  raw: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const postTool = codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUseFailure';
+  if (!postTool || !raw) return {};
+
+  const response = firstRecord(
+    raw.tool_response,
+    raw.toolResponse,
+    raw.tool_output,
+    raw.toolOutput,
+    raw.response,
+    raw.result,
+    raw.output,
+  );
+  const exitCode = nonNegativeInteger(
+    response?.exit_code ?? response?.exitCode ?? raw.exit_code ?? raw.exitCode,
+  );
+  const failed = claudeHookEvent === 'PostToolUseFailure'
+    || (exitCode !== undefined && exitCode !== 0)
+    || response?.success === false
+    || response?.is_error === true
+    || response?.isError === true;
+  return {
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(failed ? { toolFailed: true } : {}),
   };
 }
 
