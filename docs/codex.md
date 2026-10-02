@@ -89,6 +89,9 @@ absolute path, remaining arguments, redirects, substitutions, or command tail.
 Raw stdout and stderr are never uploaded. `PreToolUse` remains the primary
 Cloud action record, while only material `PostToolUse` findings are uploaded as
 separate events.
+Web-fetch Pre events may retain only a bounded destination preview; URL
+credentials, fragments, query values, and sensitive or opaque path segments
+are removed.
 
 ## Coverage and known gaps
 

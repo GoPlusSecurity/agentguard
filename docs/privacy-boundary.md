@@ -33,6 +33,9 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
   Protected-file access uses only a bounded, validated target summary such as
   `cat .env` or `cat .ssh/id_ed25519.pub`; absolute paths, additional
   arguments, redirects, substitutions, and command tails are omitted.
+- Native web-fetch Pre events retain only a bounded `http`/`https` destination.
+  URL credentials, fragments, query values, sensitive path segments, and
+  opaque token-like path segments are removed; safe query names may remain.
 - Native `PreToolUse` events are the primary Cloud action records. Routine
   successful `PostToolUse` observations stay in the local audit. A post-tool
   event is uploaded separately only when it adds a failure, elevated risk,

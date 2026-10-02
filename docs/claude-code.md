@@ -58,4 +58,6 @@ Raw prompts, command arguments, tool output, failure text, configuration content
 
 `PreToolUse` is the primary Cloud action record. Raw stdout and stderr are never uploaded from either lifecycle stage; reportable Post events carry only the redacted risk summary and necessary status fields.
 
+WebFetch Pre events may retain only a bounded destination preview. URL credentials, fragments, query values, and sensitive or opaque path segments are removed before Cloud sync.
+
 Claude Code provides strong staged prompt/tool/context protection, but it does not expose the final model HTTP destination, Authorization credential, complete assembled payload, full response, all retries/fallbacks, or auxiliary model calls. Model-transport rules therefore remain `partial` or `unsupported`; AgentGuard does not claim complete model-traffic interception.

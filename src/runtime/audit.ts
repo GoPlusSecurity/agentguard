@@ -170,6 +170,9 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
 function nativeHookAuditInput(event: RuntimeAuditEvent): string {
   const protectedAccess = event.reasons.some((reason) => reason.code === 'SECRET_ACCESS');
   if (event.actionType === 'shell' && !protectedAccess) return nativeHookShellPreview(event);
+  if ((event.actionType === 'network' || event.actionType === 'browser') && !protectedAccess) {
+    return nativeHookNetworkPreview(event) ?? '[LOCAL_ONLY_LLM_CONTENT]';
+  }
   if (!protectedAccess) return '[LOCAL_ONLY_LLM_CONTENT]';
 
   const protectedFile = safeProtectedFileReference(event);
@@ -192,6 +195,41 @@ function nativeHookShellPreview(event: RuntimeAuditEvent): string {
   if (hasUnmaskedSensitiveFinding) return '[LOCAL_ONLY_LLM_CONTENT]';
   const preview = redacted.slice(0, 2000);
   return preview.trim() ? preview : '[LOCAL_ONLY_LLM_CONTENT]';
+}
+
+/**
+ * Preserve only the request destination. Credentials, fragments, query
+ * values, sensitive path segments, and opaque token-like segments stay local.
+ */
+function nativeHookNetworkPreview(event: RuntimeAuditEvent): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(event.input.trim());
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+
+  const path = url.pathname.split('/').map(safeUrlPathSegment).join('/');
+  const queryKeys = [...new Set(url.searchParams.keys())]
+    .slice(0, 20)
+    .map((key) => SAFE_URL_QUERY_KEY.test(key) ? key : 'param');
+  const query = queryKeys.length > 0
+    ? `?${queryKeys.map((key) => `${key}=[REDACTED]`).join('&')}`
+    : '';
+  return `${url.protocol}//${url.host}${path}${query}`.slice(0, 2000);
+}
+
+function safeUrlPathSegment(segment: string): string {
+  if (!segment) return '';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return '[REDACTED]';
+  }
+  if (decoded.length > 128 || OPAQUE_URL_PATH_SEGMENT.test(decoded)) return '[REDACTED]';
+  return redactText(decoded) === decoded ? segment : '[REDACTED]';
 }
 
 function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefined {
@@ -334,6 +372,8 @@ const MATERIAL_POST_RISK_LEVELS = new Set<unknown>(['medium', 'high', 'critical'
 const MATERIAL_POST_SEVERITIES = new Set<unknown>(['medium', 'high', 'critical']);
 const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const SAFE_URL_QUERY_KEY = /^[A-Za-z0-9_.~-]{1,64}$/;
+const OPAQUE_URL_PATH_SEGMENT = /^(?=.{24,128}$)(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]+$/;
 const NATIVE_SENSITIVE_CONTENT_RULES = new Set([
   'PII_EGRESS', 'DATA_EXFILTRATION', 'LLM_KEY_TO_UNKNOWN_HOST',
   'WORKSPACE_BULK_EGRESS', 'DANGEROUS_CONFIG_CHANGE',

@@ -211,6 +211,46 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(claude.input, 'ls -la ~/.agentguard && stat ~/.agentguard/config.json');
   });
 
+  it('keeps a bounded native web-fetch destination without URL credentials or values', () => {
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://private-user:private-pass@example.com/models/sk-private-token-1234567890?api_key=private-key&page=2#private-fragment',
+      decision: 'warn',
+      policyDecision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      lifecycleStage: 'pre_tool',
+      reasons: [{
+        code: 'NETWORK_OUTBOUND',
+        severity: 'medium',
+        title: 'Network outbound policy',
+        description: 'The action makes an outbound network request.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse', method: 'GET' },
+    };
+
+    const codex = buildCloudAuditEvent(event);
+    assert.equal(
+      codex.input,
+      'https://example.com/models/[REDACTED]?api_key=[REDACTED]&page=[REDACTED]',
+    );
+    assert.doesNotMatch(JSON.stringify(codex), /private-user|private-pass|private-token|private-key|private-fragment/);
+
+    const claude = buildCloudAuditEvent({
+      ...event,
+      agentHost: 'claude-code',
+      input: 'https://docs.example.com/public/guide',
+      metadata: { claudeHookEvent: 'PreToolUse', method: 'GET' },
+    });
+    assert.equal(claude.input, 'https://docs.example.com/public/guide');
+
+    const nonUrl = buildCloudAuditEvent({ ...event, input: '{"url":"not validated"}' });
+    assert.equal(nonUrl.input, '[LOCAL_ONLY_LLM_CONTENT]');
+  });
+
   it('keeps safe custom protected filenames but not unsafe names or raw sensitive shell content', () => {
     const base: RuntimeAuditEvent = {
       ...sampleEvent(),
