@@ -257,6 +257,39 @@ describe('installed Codex native hooks', () => {
     assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, new RegExp(secret));
     const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
     assert.doesNotMatch(audit, new RegExp(privateOutput));
+    const auditEvent = JSON.parse(audit.trim().split('\n').at(-1)!) as {
+      metadata?: { exitCode?: number; toolFailed?: boolean };
+    };
+    assert.equal(auditEvent.metadata?.exitCode, 0);
+    assert.equal(auditEvent.metadata?.toolFailed, undefined);
+  });
+
+  it('keeps routine post-tool output in the local audit without retaining stdout', () => {
+    const fixture = installFixture();
+    const stdoutMarker = 'routine-private-stdout-marker';
+    const run = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess_post_routine',
+      turn_id: 'turn_post_routine',
+      cwd: fixture.project,
+      tool_name: 'Bash',
+      tool_use_id: 'tool_post_routine',
+      tool_input: { command: 'printf hello' },
+      tool_response: { output: stdoutMarker, exit_code: 0 },
+    });
+
+    assert.equal(run.status, 0);
+    const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
+    assert.doesNotMatch(audit, new RegExp(stdoutMarker));
+    const event = JSON.parse(audit.trim().split('\n').at(-1)!) as {
+      input?: string;
+      lifecycleStage?: string;
+      metadata?: { codexHookEvent?: string; exitCode?: number };
+    };
+    assert.equal(event.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(event.lifecycleStage, 'post_tool');
+    assert.equal(event.metadata?.codexHookEvent, 'PostToolUse');
+    assert.equal(event.metadata?.exitCode, 0);
   });
 
   it('records compact metadata without reading transcript content', () => {

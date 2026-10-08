@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Native `PreToolUse` actions remain the primary Cloud records, while routine successful `PostToolUse` observations now stay local and only failures, elevated risks, anomalous results, or material new findings are uploaded as separate redacted events.
+- Native web-fetch audit events now retain a bounded sanitized destination instead of a generic placeholder, without uploading URL credentials, fragments, query values, or sensitive path segments.
+- Native file, configuration-change, model-switch, and policy-reason events now retain bounded allowlisted summaries instead of generic placeholders, without uploading paths, contents, patch bodies, endpoints, credentials, or raw reason text.
+
 ## [1.2.1] - 2026-09-29
 
 ### Added

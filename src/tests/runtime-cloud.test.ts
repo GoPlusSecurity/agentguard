@@ -211,6 +211,236 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(claude.input, 'ls -la ~/.agentguard && stat ~/.agentguard/config.json');
   });
 
+  it('keeps a bounded native web-fetch destination without URL credentials or values', () => {
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: 'https://private-user:private-pass@example.com/models/sk-private-token-1234567890?api_key=private-key&page=2#private-fragment',
+      decision: 'warn',
+      policyDecision: 'warn',
+      riskScore: 20,
+      riskLevel: 'medium',
+      lifecycleStage: 'pre_tool',
+      reasons: [{
+        code: 'NETWORK_OUTBOUND',
+        severity: 'medium',
+        title: 'Network outbound policy',
+        description: 'The action makes an outbound network request.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse', method: 'GET' },
+    };
+
+    const codex = buildCloudAuditEvent(event);
+    assert.equal(
+      codex.input,
+      'https://example.com/models/[REDACTED]?api_key=[REDACTED]&page=[REDACTED]',
+    );
+    assert.doesNotMatch(JSON.stringify(codex), /private-user|private-pass|private-token|private-key|private-fragment/);
+
+    const claude = buildCloudAuditEvent({
+      ...event,
+      agentHost: 'claude-code',
+      input: 'https://docs.example.com/public/guide',
+      metadata: { claudeHookEvent: 'PreToolUse', method: 'GET' },
+    });
+    assert.equal(claude.input, 'https://docs.example.com/public/guide');
+
+    const nonUrl = buildCloudAuditEvent({ ...event, input: '{"url":"not validated"}' });
+    assert.equal(nonUrl.input, '[LOCAL_ONLY_LLM_CONTENT]');
+  });
+
+  it('keeps only safe file targets for native reads, writes, patches, and config changes', () => {
+    const base: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'file_read',
+      toolName: 'Read',
+      input: '/private/customer/reports/quarterly-report.txt',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      lifecycleStage: 'pre_tool',
+      reasons: [{
+        code: 'PATH_NOT_ALLOWED',
+        severity: 'high',
+        title: 'Private path outside allowlist',
+        description: 'Raw description must not be uploaded.',
+      }],
+      metadata: {
+        codexHookEvent: 'PreToolUse',
+        nativeFileTargets: ['/private/customer/reports/quarterly-report.txt'],
+      },
+    };
+
+    const read = buildCloudAuditEvent(base);
+    assert.equal(read.input, 'read quarterly-report.txt');
+    assert.equal(read.reasons[0]?.title, 'Path outside filesystem allowlist');
+    assert.doesNotMatch(JSON.stringify(read), /private\/customer|Raw description/);
+
+    const write = buildCloudAuditEvent({
+      ...base,
+      actionType: 'file_write',
+      toolName: 'Write',
+      input: '{"file_path":"/private/customer/src/app.ts","content":"private-write-content"}',
+      metadata: {
+        codexHookEvent: 'PreToolUse',
+        nativeFileTargets: ['/private/customer/src/app.ts'],
+      },
+    });
+    assert.equal(write.input, 'write app.ts');
+    assert.doesNotMatch(JSON.stringify(write), /private-write-content|private\/customer/);
+
+    const patch = buildCloudAuditEvent({
+      ...base,
+      actionType: 'file_write',
+      toolName: 'apply_patch',
+      input: 'private patch content',
+      metadata: {
+        codexHookEvent: 'PreToolUse',
+        nativeFileTargets: ['/private/customer/src/a.ts', '/private/customer/src/b.ts'],
+      },
+    });
+    assert.equal(patch.input, 'write 2 files');
+    assert.doesNotMatch(JSON.stringify(patch), /private patch content|private\/customer/);
+
+    const config = buildCloudAuditEvent({
+      ...base,
+      agentHost: 'claude-code',
+      actionType: 'file_write',
+      toolName: 'ConfigChange',
+      input: '/private/customer/.claude/settings.json',
+      reasons: [{
+        code: 'DANGEROUS_CONFIG_CHANGE',
+        severity: 'critical',
+        title: 'Raw config title',
+        description: 'Raw config description',
+      }],
+      metadata: {
+        claudeHookEvent: 'ConfigChange',
+        nativeFileTargets: ['/private/customer/.claude/settings.json'],
+        configSource: 'project_settings',
+      },
+    });
+    assert.equal(config.input, 'config change settings.json');
+    assert.equal(config.reasons[0]?.title, 'Dangerous configuration change');
+    assert.doesNotMatch(JSON.stringify(config), /private\/customer|Raw config/);
+
+    const sourceOnlyConfig = buildCloudAuditEvent({
+      ...config,
+      input: 'config change',
+      metadata: { claudeHookEvent: 'ConfigChange', configSource: 'project_settings' },
+    });
+    assert.equal(sourceOnlyConfig.input, 'config change');
+
+    const unsafeName = buildCloudAuditEvent({
+      ...base,
+      input: '/private/customer/private.person@invalid.test',
+      metadata: {
+        codexHookEvent: 'PreToolUse',
+        nativeFileTargets: ['/private/customer/private.person@invalid.test'],
+      },
+    });
+    assert.equal(unsafeName.input, '[LOCAL_ONLY_LLM_CONTENT]');
+
+    const privacyReason = buildCloudAuditEvent({
+      ...base,
+      reasons: [{
+        code: 'LLM_ENDPOINT_HIJACK',
+        severity: 'critical',
+        title: 'Raw endpoint title',
+        description: 'Raw endpoint description',
+      }],
+    });
+    assert.equal(privacyReason.reasons[0]?.title, 'LLM endpoint configuration change');
+    assert.doesNotMatch(JSON.stringify(privacyReason), /Raw endpoint/);
+  });
+
+  it('extracts a native file target before discarding write content from audit', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-native-file-preview-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+    const contentMarker = 'private-write-content-marker';
+
+    const result = await protectAction({
+      config,
+      agentHost: 'codex',
+      rawInput: {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess_native_write_preview',
+        cwd: dir,
+        tool_name: 'Write',
+        tool_input: {
+          file_path: '/tmp/work/.ssh/id_ed25519.pub',
+          content: contentMarker,
+        },
+      },
+    });
+
+    assert.ok(result);
+    assert.equal(result.decision.decision, 'require_approval');
+    const persisted = readFileSync(config.auditPath, 'utf8');
+    const event = JSON.parse(persisted.trim()) as RuntimeAuditEvent;
+    assert.equal(event.input, 'write id_ed25519.pub');
+    assert.doesNotMatch(persisted, /private-write-content-marker|\/tmp\/work\/\.ssh\//);
+  });
+
+  it('keeps a bounded native model-switch summary without endpoint or credential labels', () => {
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      agentHost: 'claude-code',
+      actionType: 'other',
+      toolName: 'PreModelSwitch',
+      input: 'raw model-switch input',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      lifecycleStage: 'model_switch',
+      reasons: [{
+        code: 'MODEL_SWITCH_APPROVAL',
+        severity: 'high',
+        title: 'Raw model title',
+        description: 'Raw model description',
+      }],
+      metadata: {
+        claudeHookEvent: 'PreModelSwitch',
+        fromModel: 'claude-a',
+        toModel: 'anthropic/claude-b',
+        modelSwitchSource: 'user',
+        contextTokens: 120_000,
+        modelIdIsEndpoint: false,
+      },
+    };
+
+    const cloud = buildCloudAuditEvent(event);
+    assert.equal(
+      cloud.input,
+      'model switch claude-a -> anthropic/claude-b source=user context_tokens=120000',
+    );
+    assert.equal(cloud.reasons[0]?.title, 'Model switch requires approval');
+    assert.doesNotMatch(JSON.stringify(cloud), /Raw model/);
+
+    const unsafe = buildCloudAuditEvent({
+      ...event,
+      metadata: {
+        ...event.metadata,
+        toModel: 'https://private-model.example/v1',
+        modelSwitchSource: 'sk-private-source-1234567890',
+      },
+    });
+    assert.equal(unsafe.input, 'model switch claude-a -> unknown context_tokens=120000');
+    assert.doesNotMatch(JSON.stringify(unsafe), /private-model|private-source/);
+  });
+
   it('keeps safe custom protected filenames but not unsafe names or raw sensitive shell content', () => {
     const base: RuntimeAuditEvent = {
       ...sampleEvent(),
@@ -411,6 +641,91 @@ describe('Runtime Cloud bridge', () => {
         valueCount: 1,
       });
       assert.doesNotMatch(requests[0]!.body || '', /sent\.person@corp\.invalid/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports pre-tool actions but keeps routine post-tool observations local', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const preTool: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      actionId: 'act_pre_tool',
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: 'printf hello',
+      decision: 'allow',
+      policyDecision: 'allow',
+      riskScore: 10,
+      riskLevel: 'low',
+      lifecycleStage: 'pre_tool',
+      reasons: [{
+        code: 'SHELL_INJECTION_RISK', severity: 'low', title: 'Shell metacharacters', description: 'Low-risk shell syntax.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    };
+    const routinePost: RuntimeAuditEvent = {
+      ...preTool,
+      actionId: 'act_post_routine',
+      actionType: 'other',
+      input: 'hello',
+      lifecycleStage: 'post_tool',
+      metadata: { codexHookEvent: 'PostToolUse', exitCode: 0 },
+    };
+    const failedPost: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_post_failed',
+      input: 'private failure output',
+      metadata: { codexHookEvent: 'PostToolUse', exitCode: 1, toolFailed: true },
+    };
+    const riskyPost: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_post_risky',
+      input: 'private tool output containing a secret',
+      decision: 'block',
+      policyDecision: 'block',
+      riskScore: 80,
+      riskLevel: 'high',
+      enforcementStatus: 'would_block',
+      reasons: [{
+        code: 'DATA_EXFILTRATION', severity: 'high', title: 'Sensitive output', description: 'Sensitive output detected.',
+      }],
+    };
+    const claudeFailure: RuntimeAuditEvent = {
+      ...routinePost,
+      actionId: 'act_claude_failure',
+      agentHost: 'claude-code',
+      metadata: { claudeHookEvent: 'PostToolUseFailure', toolFailed: true },
+    };
+
+    assert.equal(shouldReportAuditEventToCloud(preTool), true);
+    assert.equal(shouldReportAuditEventToCloud(routinePost), false);
+    assert.equal(shouldReportAuditEventToCloud(failedPost), true);
+    assert.equal(shouldReportAuditEventToCloud(riskyPost), true);
+    assert.equal(shouldReportAuditEventToCloud(claudeFailure), true);
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(typeof init?.body === 'string' ? init.body : '');
+      return jsonResponse({ success: true, data: { accepted: 4, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents([preTool, routinePost, failedPost, riskyPost, claudeFailure]);
+      assert.equal(requests.length, 1);
+      const payload = JSON.parse(requests[0]!) as { events?: RuntimeAuditEvent[] };
+      assert.deepEqual(payload.events?.map((event) => event.actionId), [
+        'act_pre_tool', 'act_post_failed', 'act_post_risky', 'act_claude_failure',
+      ]);
+      for (const post of payload.events?.filter((event) => event.lifecycleStage === 'post_tool') ?? []) {
+        assert.equal(post.input, '[LOCAL_ONLY_LLM_CONTENT]');
+      }
+      assert.doesNotMatch(requests[0]!, /private failure output|private tool output/);
     } finally {
       globalThis.fetch = originalFetch;
     }

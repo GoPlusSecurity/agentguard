@@ -116,6 +116,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
   const auditSafe = options.auditSafe || codexHookEvent === 'PermissionRequest'
     || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
+    || codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse'
     || isClaudeObserverEvent(claudeHookEvent);
   if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
 
@@ -712,6 +714,13 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     : '';
   const actionInput = process.env.TOOL_INPUT
     || pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input);
+  const nativeFileTargets = pickNativeFileTargets(
+    actionType,
+    toolName,
+    raw,
+    toolInput,
+    claudeHookEvent,
+  );
   const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse'
     && verifiedOutput === undefined && redactText(actionInput) !== actionInput;
 
@@ -739,7 +748,9 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...(codexHookEvent ? { codexHookEvent } : {}),
       ...(claudeHookEvent ? { claudeHookEvent } : {}),
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
+      ...(nativeFileTargets.length > 0 ? { nativeFileTargets } : {}),
       ...pickNetworkMetadata(raw, toolInput),
+      ...pickPostToolOutcomeMetadata(codexHookEvent, claudeHookEvent, raw),
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
@@ -1302,6 +1313,48 @@ function pickInput(
   return JSON.stringify(raw);
 }
 
+/**
+ * Capture only structured file targets for later audit summarization. The raw
+ * paths remain internal metadata and are removed by nativeHookSafeMetadata;
+ * file contents and patch bodies are never copied into this field.
+ */
+function pickNativeFileTargets(
+  actionType: RuntimeActionType,
+  toolName: string,
+  raw: Record<string, unknown> | null,
+  toolInput: Record<string, unknown> | undefined,
+  claudeHookEvent: ClaudeHookEvent | undefined,
+): string[] {
+  if (actionType !== 'file_read' && actionType !== 'file_write') return [];
+  const targets = new Set<string>();
+  const addTarget = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim()) targets.add(value.trim());
+  };
+  const addRecordTarget = (value: unknown): void => {
+    if (!isPlainRecord(value)) return;
+    addTarget(value.file_path);
+    addTarget(value.filePath);
+    addTarget(value.path);
+    addTarget(value.target);
+  };
+
+  addRecordTarget(toolInput);
+  if (Array.isArray(toolInput?.edits)) {
+    for (const edit of toolInput.edits.slice(0, 100)) addRecordTarget(edit);
+  }
+  if (claudeHookEvent === 'ConfigChange') addTarget(raw?.file_path);
+
+  const lowerToolName = toolName.toLowerCase();
+  if (actionType === 'file_write' && (toolName === 'apply_patch' || lowerToolName.includes('patch'))) {
+    const patch = firstString(toolInput?.patch, toolInput?.command);
+    for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+      addTarget(match[1]);
+      if (targets.size >= 100) break;
+    }
+  }
+  return [...targets].slice(0, 100);
+}
+
 function readClaudeConfigChange(raw: Record<string, unknown> | null): {
   input: string;
   bytesRead: number;
@@ -1395,6 +1448,39 @@ function pickNetworkMetadata(
     ...definedMetadata('responseBodyBytes', toolInput?.responseBodyBytes, response?.bodyBytes, response?.bytes, raw?.responseBodyBytes),
     ...definedMetadata('responseBytes', toolInput?.responseBytes, raw?.responseBytes),
     ...definedMetadata('contentLength', toolInput?.contentLength, response?.contentLength, raw?.contentLength),
+  };
+}
+
+function pickPostToolOutcomeMetadata(
+  codexHookEvent: CodexHookEvent | undefined,
+  claudeHookEvent: ClaudeHookEvent | undefined,
+  raw: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const postTool = codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUseFailure';
+  if (!postTool || !raw) return {};
+
+  const response = firstRecord(
+    raw.tool_response,
+    raw.toolResponse,
+    raw.tool_output,
+    raw.toolOutput,
+    raw.response,
+    raw.result,
+    raw.output,
+  );
+  const exitCode = nonNegativeInteger(
+    response?.exit_code ?? response?.exitCode ?? raw.exit_code ?? raw.exitCode,
+  );
+  const failed = claudeHookEvent === 'PostToolUseFailure'
+    || (exitCode !== undefined && exitCode !== 0)
+    || response?.success === false
+    || response?.is_error === true
+    || response?.isError === true;
+  return {
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(failed ? { toolFailed: true } : {}),
   };
 }
 

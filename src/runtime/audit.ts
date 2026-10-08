@@ -48,24 +48,62 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
  * and the request was not stopped at a blocking gate.
  */
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
+  if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
   if (event.actionType === 'llm_response') return false;
   if (event.actionType !== 'llm_request') return true;
 
-  const piiDetected = Boolean(
-    event.privacySummary
-    && Number.isSafeInteger(event.privacySummary.valueCount)
-    && event.privacySummary.valueCount > 0
-    && event.privacySummary.categories.some((item) => (
-      PII_CATEGORIES.has(item.category)
-      && Number.isSafeInteger(item.count)
-      && item.count > 0
-    ))
-  );
+  const piiDetected = hasPiiSummary(event.privacySummary);
   if (!piiDetected) return false;
 
   const stoppedBeforeEgress = event.canBlockCurrentAction !== false
     && (event.decision === 'block' || event.decision === 'require_approval');
   return !stoppedBeforeEgress;
+}
+
+/**
+ * Routine post-tool observations duplicate the already reported pre-tool
+ * action and stay in the local audit. Upload a separate post-tool event only
+ * when the result adds a material security or execution signal.
+ */
+function shouldReportNativePostToolEvent(event: RuntimeAuditEvent): boolean {
+  if (event.metadata?.claudeHookEvent === 'PostToolUseFailure') return true;
+  if (event.metadata?.toolFailed === true) return true;
+
+  const responseStatus = firstSafeInteger(
+    event.metadata?.responseStatusCode,
+    event.metadata?.statusCode,
+  );
+  if (responseStatus !== undefined && responseStatus >= 400) return true;
+
+  if (event.decision !== 'allow' || (event.policyDecision && event.policyDecision !== 'allow')) return true;
+  if (event.riskScore >= 20 || MATERIAL_POST_RISK_LEVELS.has(event.riskLevel)) return true;
+  if (event.enforcementStatus === 'would_block' || event.enforcementStatus === 'unsupported') return true;
+  if (hasPiiSummary(event.privacySummary)) return true;
+
+  return event.reasons.some((reason) => (
+    reason.code !== 'SHELL_INJECTION_RISK' || MATERIAL_POST_SEVERITIES.has(reason.severity)
+  ));
+}
+
+function isNativePostToolEvent(event: RuntimeAuditEvent): boolean {
+  return event.metadata?.codexHookEvent === 'PostToolUse'
+    || event.metadata?.claudeHookEvent === 'PostToolUse'
+    || event.metadata?.claudeHookEvent === 'PostToolUseFailure';
+}
+
+function hasPiiSummary(summary: RuntimePiiSummary | undefined): boolean {
+  return Boolean(summary
+    && Number.isSafeInteger(summary.valueCount)
+    && summary.valueCount > 0
+    && summary.categories.some((item) => (
+      PII_CATEGORIES.has(item.category)
+      && Number.isSafeInteger(item.count)
+      && item.count > 0
+    )));
+}
+
+function firstSafeInteger(...values: unknown[]): number | undefined {
+  return values.find((value): value is number => Number.isSafeInteger(value));
 }
 
 export function isCodexNativeHookAction(action: Pick<RuntimeAction, 'agentHost' | 'metadata'>): boolean {
@@ -95,7 +133,7 @@ export function nativeHookSafeMetadata(metadata: Record<string, unknown> | undef
   }
   for (const key of [
     'responseStatusCode', 'statusCode', 'responseBodyBytes', 'responseBytes', 'contentLength',
-    'filePathCount', 'serializedResultBytes', 'redactedBytes', 'contextTokens',
+    'filePathCount', 'serializedResultBytes', 'redactedBytes', 'contextTokens', 'exitCode',
   ]) {
     const value = metadata[key];
     if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) result[key] = value;
@@ -107,7 +145,7 @@ export function nativeHookSafeMetadata(metadata: Record<string, unknown> | undef
   if (metadata.approvalOnce === true) result.approvalOnce = true;
   for (const key of [
     'configDiskRollback', 'modelIdIsEndpoint', 'outputReplaceable', 'displayOnly', 'transcriptModified',
-    'continuationBlockedOnly', 'resumeRetransmissionGuaranteed',
+    'continuationBlockedOnly', 'resumeRetransmissionGuaranteed', 'toolFailed',
   ]) {
     if (typeof metadata[key] === 'boolean') result[key] = metadata[key];
   }
@@ -118,7 +156,7 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
   return reasons.slice(0, 20).map((reason) => ({
     code: SAFE_RULE_ID.test(reason.code) ? reason.code : 'POLICY',
     severity: CODEX_SEVERITIES.has(reason.severity) ? reason.severity as RuntimeSeverity : 'info',
-    title: reason.code === 'SECRET_ACCESS' ? 'Protected path access' : 'Policy rule matched',
+    title: SAFE_REASON_TITLES[reason.code] ?? 'Policy rule matched',
     description: '[REDACTED]',
     evidence: reason.evidence === undefined ? undefined : '[REDACTED]',
     remediation: reason.remediation === undefined ? undefined : '[REDACTED]',
@@ -131,7 +169,17 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
  */
 function nativeHookAuditInput(event: RuntimeAuditEvent): string {
   const protectedAccess = event.reasons.some((reason) => reason.code === 'SECRET_ACCESS');
+  if (event.metadata?.claudeHookEvent === 'PreModelSwitch'
+      || event.metadata?.claudeHookEvent === 'PostModelSwitch') {
+    return nativeHookModelSwitchPreview(event);
+  }
   if (event.actionType === 'shell' && !protectedAccess) return nativeHookShellPreview(event);
+  if ((event.actionType === 'network' || event.actionType === 'browser') && !protectedAccess) {
+    return nativeHookNetworkPreview(event) ?? '[LOCAL_ONLY_LLM_CONTENT]';
+  }
+  if ((event.actionType === 'file_read' || event.actionType === 'file_write') && !protectedAccess) {
+    return nativeHookFilePreview(event) ?? '[LOCAL_ONLY_LLM_CONTENT]';
+  }
   if (!protectedAccess) return '[LOCAL_ONLY_LLM_CONTENT]';
 
   const protectedFile = safeProtectedFileReference(event);
@@ -142,7 +190,11 @@ function nativeHookAuditInput(event: RuntimeAuditEvent): string {
     return `${command ?? 'access'} ${protectedFile}`;
   }
   if (event.actionType === 'file_read') return `read ${protectedFile}`;
-  if (event.actionType === 'file_write') return `write ${protectedFile}`;
+  if (event.actionType === 'file_write') {
+    return event.metadata?.claudeHookEvent === 'ConfigChange'
+      ? `config change ${protectedFile}`
+      : `write ${protectedFile}`;
+  }
   return `access ${protectedFile}`;
 }
 
@@ -154,6 +206,91 @@ function nativeHookShellPreview(event: RuntimeAuditEvent): string {
   if (hasUnmaskedSensitiveFinding) return '[LOCAL_ONLY_LLM_CONTENT]';
   const preview = redacted.slice(0, 2000);
   return preview.trim() ? preview : '[LOCAL_ONLY_LLM_CONTENT]';
+}
+
+/**
+ * Preserve only the request destination. Credentials, fragments, query
+ * values, sensitive path segments, and opaque token-like segments stay local.
+ */
+function nativeHookNetworkPreview(event: RuntimeAuditEvent): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(event.input.trim());
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+
+  const path = url.pathname.split('/').map(safeUrlPathSegment).join('/');
+  const queryKeys = [...new Set(url.searchParams.keys())]
+    .slice(0, 20)
+    .map((key) => SAFE_URL_QUERY_KEY.test(key) ? key : 'param');
+  const query = queryKeys.length > 0
+    ? `?${queryKeys.map((key) => `${key}=[REDACTED]`).join('&')}`
+    : '';
+  return `${url.protocol}//${url.host}${path}${query}`.slice(0, 2000);
+}
+
+function safeUrlPathSegment(segment: string): string {
+  if (!segment) return '';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return '[REDACTED]';
+  }
+  if (decoded.length > 128 || OPAQUE_URL_PATH_SEGMENT.test(decoded)) return '[REDACTED]';
+  return redactText(decoded) === decoded ? segment : '[REDACTED]';
+}
+
+function nativeHookFilePreview(event: RuntimeAuditEvent): string | undefined {
+  const configChange = event.metadata?.claudeHookEvent === 'ConfigChange';
+  const operation = configChange ? 'config change' : event.actionType === 'file_read' ? 'read' : 'write';
+  const targets = nativeFileTargets(event);
+  if (targets.length === 0) return configChange ? operation : undefined;
+  if (targets.length > 1) return `${operation} ${Math.min(targets.length, 100)} files`;
+  const target = safePathBasename(targets[0]!);
+  return target ? `${operation} ${target}` : undefined;
+}
+
+function nativeFileTargets(event: RuntimeAuditEvent): string[] {
+  const targets = event.metadata?.nativeFileTargets;
+  if (Array.isArray(targets)) {
+    return [...new Set(targets.filter((value): value is string => (
+      typeof value === 'string' && value.trim().length > 0
+    )).map((value) => value.trim()))].slice(0, 100);
+  }
+  if (event.actionType === 'file_read') return [event.input];
+  if (event.actionType === 'file_write') {
+    if (event.metadata?.claudeHookEvent === 'ConfigChange') {
+      return event.input === 'config change' ? [] : [event.input];
+    }
+    const path = event.input.match(
+      /["'](?:file_path|filePath|path|target)["']\s*:\s*["']([^"']+)["']/
+    )?.[1];
+    return path ? [path] : [];
+  }
+  return [];
+}
+
+function nativeHookModelSwitchPreview(event: RuntimeAuditEvent): string {
+  const fromModel = safeModelSwitchLabel(event.metadata?.fromModel) ?? 'unknown';
+  const toModel = safeModelSwitchLabel(event.metadata?.toModel) ?? 'unknown';
+  const source = safeModelSwitchLabel(event.metadata?.modelSwitchSource);
+  const rawContextTokens = firstSafeInteger(event.metadata?.contextTokens);
+  const contextTokens = rawContextTokens !== undefined && rawContextTokens >= 0
+    ? rawContextTokens
+    : undefined;
+  return [
+    `model switch ${fromModel} -> ${toModel}`,
+    ...(source ? [`source=${source}`] : []),
+    ...(contextTokens !== undefined ? [`context_tokens=${Math.min(contextTokens, 10_000_000)}`] : []),
+  ].join(' ').slice(0, 500);
+}
+
+function safeModelSwitchLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.includes('://') || !SAFE_MODEL_SWITCH_LABEL.test(value)) return undefined;
+  return redactText(value) === value ? value : undefined;
 }
 
 function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefined {
@@ -191,7 +328,10 @@ function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefine
 }
 
 function safeGenericProtectedTarget(event: RuntimeAuditEvent): string | undefined {
-  if (event.actionType === 'file_read') return safePathBasename(event.input);
+  if (event.actionType === 'file_read' || event.actionType === 'file_write') {
+    const targets = nativeFileTargets(event);
+    if (targets.length === 1) return safePathBasename(targets[0]!);
+  }
 
   if (event.actionType === 'file_write') {
     const path = event.input.match(
@@ -292,8 +432,55 @@ const MISSING_FACTS = new Set<unknown>([
 ]);
 const CODEX_DECISIONS = new Set<unknown>(['allow', 'warn', 'require_approval', 'block']);
 const CODEX_SEVERITIES = new Set<unknown>(['info', 'low', 'medium', 'high', 'critical']);
+const MATERIAL_POST_RISK_LEVELS = new Set<unknown>(['medium', 'high', 'critical']);
+const MATERIAL_POST_SEVERITIES = new Set<unknown>(['medium', 'high', 'critical']);
 const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const SAFE_URL_QUERY_KEY = /^[A-Za-z0-9_.~-]{1,64}$/;
+const OPAQUE_URL_PATH_SEGMENT = /^(?=.{24,128}$)(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]+$/;
+const SAFE_MODEL_SWITCH_LABEL = /^[A-Za-z0-9._/-]{1,160}$/;
+const SAFE_REASON_TITLES: Readonly<Record<string, string>> = {
+  ACTION_TYPE_REQUIRES_APPROVAL: 'Tool type requires approval',
+  AGENT_SELF_APPROVAL: 'Agent approval command denied',
+  CUSTOM_BLOCKED_COMMAND: 'Custom blocked command',
+  CUSTOM_BLOCKED_DOMAIN: 'Custom blocked domain',
+  DANGEROUS_CONFIG_CHANGE: 'Dangerous configuration change',
+  DATA_EXFILTRATION: 'Potential data exfiltration',
+  DEPLOYMENT_ACTION: 'Deployment action requires approval',
+  DESTRUCTIVE_COMMAND: 'Dangerous command',
+  DESTRUCTIVE_FILE_OPERATION: 'Destructive file operation',
+  HIDDEN_NETWORK_COMMAND: 'Hidden network command',
+  LARGE_CONTEXT_MODEL_SWITCH: 'Large-context model switch',
+  LLM_ENDPOINT_HIJACK: 'LLM endpoint configuration change',
+  LLM_KEY_TO_UNKNOWN_HOST: 'Model credential routing risk',
+  MODEL_SWITCH_APPROVAL: 'Model switch requires approval',
+  NETWORK_DOS_RESPONSE: 'Repeated network service failures',
+  NETWORK_LARGE_RESPONSE: 'Large network response volume',
+  NETWORK_ODD_HOUR_ACTIVITY: 'Odd-hour network activity',
+  NETWORK_OUTBOUND: 'Network outbound policy',
+  NETWORK_RATE_LIMIT: 'High-frequency network activity',
+  NETWORK_REPLAY: 'Repeated identical request',
+  NETWORK_RISK: 'Network action',
+  NETWORK_TOKEN_DOMAIN_SWEEP: 'Credential used across many domains',
+  PATH_NOT_ALLOWED: 'Path outside filesystem allowlist',
+  PII_EGRESS: 'Sensitive data exposure',
+  PINNED_REMOTE_PACKAGE_EXECUTION: 'Pinned remote package execution',
+  REMOTE_CODE_EXECUTION: 'Remote code execution',
+  RESPONSE_CONTENT_TYPE_MISMATCH: 'Response content type mismatch',
+  RESPONSE_CREDENTIAL_ECHO: 'Credential echoed in response',
+  RESPONSE_ERROR_DISCLOSURE: 'Server error disclosure',
+  RESPONSE_MALICIOUS_SCRIPT: 'Malicious script in response',
+  RESPONSE_PATH_TRAVERSAL: 'Path traversal content in response',
+  RESPONSE_XSS_ECHO: 'Executable markup in response',
+  RELAY_RESPONSE_TAMPERING: 'Model response integrity risk',
+  SECRET_ACCESS: 'Protected path access',
+  SHELL_INJECTION_RISK: 'Shell metacharacters',
+  SYSTEM_PATH_ACCESS: 'System path access',
+  SYSTEM_PATH_MUTATION: 'System path mutation',
+  UNTRUSTED_PROMPT_EXPANSION: 'Untrusted prompt expansion',
+  UNTRUSTED_LLM_ENDPOINT: 'Untrusted LLM endpoint',
+  WORKSPACE_BULK_EGRESS: 'Bulk workspace data egress',
+};
 const NATIVE_SENSITIVE_CONTENT_RULES = new Set([
   'PII_EGRESS', 'DATA_EXFILTRATION', 'LLM_KEY_TO_UNKNOWN_HOST',
   'WORKSPACE_BULK_EGRESS', 'DANGEROUS_CONFIG_CHANGE',

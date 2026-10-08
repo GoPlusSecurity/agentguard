@@ -33,6 +33,24 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
   Protected-file access uses only a bounded, validated target summary such as
   `cat .env` or `cat .ssh/id_ed25519.pub`; absolute paths, additional
   arguments, redirects, substitutions, and command tails are omitted.
+- Native web-fetch Pre events retain only a bounded `http`/`https` destination.
+  URL credentials, fragments, query values, sensitive path segments, and
+  opaque token-like path segments are removed; safe query names may remain.
+- Native file reads and writes retain only a validated basename or bounded file
+  count. Absolute paths, file contents, edit bodies, and patch bodies stay
+  local. Configuration changes use the same boundary.
+- Native model-switch events retain only validated model labels, a bounded
+  source label, and the non-negative context-token count. Endpoint-like or
+  credential-like labels are replaced with `unknown`.
+- Native policy reasons use static titles selected by allowlisted rule ID;
+  descriptions, evidence, and remediation text remain redacted.
+- Native `PreToolUse` events are the primary Cloud action records. Routine
+  successful `PostToolUse` observations stay in the local audit. A post-tool
+  event is uploaded separately only when it adds a failure, elevated risk,
+  anomalous result, PII summary, or another material security finding.
+- Raw stdout and stderr are never uploaded from either lifecycle stage.
+  Reportable post-tool events contain only the redacted risk summary and
+  bounded status metadata.
 - Decision, risk score, risk level, reasons, and policy version
 - Lifecycle stage, coverage level, enforcement status, missing-fact names, and
   request correlation IDs
@@ -75,10 +93,10 @@ Cloud endpoints also apply server-side redaction, but clients should not rely on
 ## Offline behavior
 
 If Cloud is unreachable, AgentGuard continues local enforcement and spools
-Cloud-eligible redacted audit events for later retry. Routine model requests and
-model responses are filtered again at the Cloud client boundary, including
-when an older spool is drained. It must never fail open for local `block`
-decisions.
+Cloud-eligible redacted audit events for later retry. Routine post-tool
+observations, routine model requests, and model responses are filtered again
+at the Cloud client boundary, including when an older spool is drained. It
+must never fail open for local `block` decisions.
 
 Local policies are normalized when loaded, so caches written before the LLM
 privacy fields existed inherit the bundled privacy defaults. Cloud availability
