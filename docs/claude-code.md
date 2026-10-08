@@ -60,4 +60,6 @@ Raw prompts, command arguments, tool output, failure text, configuration content
 
 WebFetch Pre events may retain only a bounded destination preview. URL credentials, fragments, query values, and sensitive or opaque path segments are removed before Cloud sync.
 
+File-tool and ConfigChange events may retain a validated basename or bounded file count; absolute paths and all file/configuration content stay local. Model-switch events may retain validated model labels, a bounded source label, and a non-negative context-token count. Endpoint-like and credential-like labels are replaced with `unknown`.
+
 Claude Code provides strong staged prompt/tool/context protection, but it does not expose the final model HTTP destination, Authorization credential, complete assembled payload, full response, all retries/fallbacks, or auxiliary model calls. Model-transport rules therefore remain `partial` or `unsupported`; AgentGuard does not claim complete model-traffic interception.

@@ -92,6 +92,8 @@ separate events.
 Web-fetch Pre events may retain only a bounded destination preview; URL
 credentials, fragments, query values, and sensitive or opaque path segments
 are removed.
+File-tool Pre events may retain a validated basename or bounded file count.
+Absolute paths, file contents, edit bodies, and patch bodies remain local.
 
 ## Coverage and known gaps
 

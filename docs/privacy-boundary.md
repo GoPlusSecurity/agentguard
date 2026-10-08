@@ -36,6 +36,14 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
 - Native web-fetch Pre events retain only a bounded `http`/`https` destination.
   URL credentials, fragments, query values, sensitive path segments, and
   opaque token-like path segments are removed; safe query names may remain.
+- Native file reads and writes retain only a validated basename or bounded file
+  count. Absolute paths, file contents, edit bodies, and patch bodies stay
+  local. Configuration changes use the same boundary.
+- Native model-switch events retain only validated model labels, a bounded
+  source label, and the non-negative context-token count. Endpoint-like or
+  credential-like labels are replaced with `unknown`.
+- Native policy reasons use static titles selected by allowlisted rule ID;
+  descriptions, evidence, and remediation text remain redacted.
 - Native `PreToolUse` events are the primary Cloud action records. Routine
   successful `PostToolUse` observations stay in the local audit. A post-tool
   event is uploaded separately only when it adds a failure, elevated risk,

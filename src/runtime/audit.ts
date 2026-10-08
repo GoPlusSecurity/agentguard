@@ -156,7 +156,7 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
   return reasons.slice(0, 20).map((reason) => ({
     code: SAFE_RULE_ID.test(reason.code) ? reason.code : 'POLICY',
     severity: CODEX_SEVERITIES.has(reason.severity) ? reason.severity as RuntimeSeverity : 'info',
-    title: reason.code === 'SECRET_ACCESS' ? 'Protected path access' : 'Policy rule matched',
+    title: SAFE_REASON_TITLES[reason.code] ?? 'Policy rule matched',
     description: '[REDACTED]',
     evidence: reason.evidence === undefined ? undefined : '[REDACTED]',
     remediation: reason.remediation === undefined ? undefined : '[REDACTED]',
@@ -169,9 +169,16 @@ function codexSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
  */
 function nativeHookAuditInput(event: RuntimeAuditEvent): string {
   const protectedAccess = event.reasons.some((reason) => reason.code === 'SECRET_ACCESS');
+  if (event.metadata?.claudeHookEvent === 'PreModelSwitch'
+      || event.metadata?.claudeHookEvent === 'PostModelSwitch') {
+    return nativeHookModelSwitchPreview(event);
+  }
   if (event.actionType === 'shell' && !protectedAccess) return nativeHookShellPreview(event);
   if ((event.actionType === 'network' || event.actionType === 'browser') && !protectedAccess) {
     return nativeHookNetworkPreview(event) ?? '[LOCAL_ONLY_LLM_CONTENT]';
+  }
+  if ((event.actionType === 'file_read' || event.actionType === 'file_write') && !protectedAccess) {
+    return nativeHookFilePreview(event) ?? '[LOCAL_ONLY_LLM_CONTENT]';
   }
   if (!protectedAccess) return '[LOCAL_ONLY_LLM_CONTENT]';
 
@@ -183,7 +190,11 @@ function nativeHookAuditInput(event: RuntimeAuditEvent): string {
     return `${command ?? 'access'} ${protectedFile}`;
   }
   if (event.actionType === 'file_read') return `read ${protectedFile}`;
-  if (event.actionType === 'file_write') return `write ${protectedFile}`;
+  if (event.actionType === 'file_write') {
+    return event.metadata?.claudeHookEvent === 'ConfigChange'
+      ? `config change ${protectedFile}`
+      : `write ${protectedFile}`;
+  }
   return `access ${protectedFile}`;
 }
 
@@ -232,6 +243,56 @@ function safeUrlPathSegment(segment: string): string {
   return redactText(decoded) === decoded ? segment : '[REDACTED]';
 }
 
+function nativeHookFilePreview(event: RuntimeAuditEvent): string | undefined {
+  const configChange = event.metadata?.claudeHookEvent === 'ConfigChange';
+  const operation = configChange ? 'config change' : event.actionType === 'file_read' ? 'read' : 'write';
+  const targets = nativeFileTargets(event);
+  if (targets.length === 0) return configChange ? operation : undefined;
+  if (targets.length > 1) return `${operation} ${Math.min(targets.length, 100)} files`;
+  const target = safePathBasename(targets[0]!);
+  return target ? `${operation} ${target}` : undefined;
+}
+
+function nativeFileTargets(event: RuntimeAuditEvent): string[] {
+  const targets = event.metadata?.nativeFileTargets;
+  if (Array.isArray(targets)) {
+    return [...new Set(targets.filter((value): value is string => (
+      typeof value === 'string' && value.trim().length > 0
+    )).map((value) => value.trim()))].slice(0, 100);
+  }
+  if (event.actionType === 'file_read') return [event.input];
+  if (event.actionType === 'file_write') {
+    if (event.metadata?.claudeHookEvent === 'ConfigChange') {
+      return event.input === 'config change' ? [] : [event.input];
+    }
+    const path = event.input.match(
+      /["'](?:file_path|filePath|path|target)["']\s*:\s*["']([^"']+)["']/
+    )?.[1];
+    return path ? [path] : [];
+  }
+  return [];
+}
+
+function nativeHookModelSwitchPreview(event: RuntimeAuditEvent): string {
+  const fromModel = safeModelSwitchLabel(event.metadata?.fromModel) ?? 'unknown';
+  const toModel = safeModelSwitchLabel(event.metadata?.toModel) ?? 'unknown';
+  const source = safeModelSwitchLabel(event.metadata?.modelSwitchSource);
+  const rawContextTokens = firstSafeInteger(event.metadata?.contextTokens);
+  const contextTokens = rawContextTokens !== undefined && rawContextTokens >= 0
+    ? rawContextTokens
+    : undefined;
+  return [
+    `model switch ${fromModel} -> ${toModel}`,
+    ...(source ? [`source=${source}`] : []),
+    ...(contextTokens !== undefined ? [`context_tokens=${Math.min(contextTokens, 10_000_000)}`] : []),
+  ].join(' ').slice(0, 500);
+}
+
+function safeModelSwitchLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.includes('://') || !SAFE_MODEL_SWITCH_LABEL.test(value)) return undefined;
+  return redactText(value) === value ? value : undefined;
+}
+
 function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefined {
   const input = event.input;
   const ssh = input.match(/\.ssh[\\/]([A-Za-z0-9._-]{1,128})(?=$|[\s"';&|)\]},:])/i)?.[1];
@@ -267,7 +328,10 @@ function safeProtectedFileReference(event: RuntimeAuditEvent): string | undefine
 }
 
 function safeGenericProtectedTarget(event: RuntimeAuditEvent): string | undefined {
-  if (event.actionType === 'file_read') return safePathBasename(event.input);
+  if (event.actionType === 'file_read' || event.actionType === 'file_write') {
+    const targets = nativeFileTargets(event);
+    if (targets.length === 1) return safePathBasename(targets[0]!);
+  }
 
   if (event.actionType === 'file_write') {
     const path = event.input.match(
@@ -374,6 +438,49 @@ const SAFE_RULE_ID = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SAFE_URL_QUERY_KEY = /^[A-Za-z0-9_.~-]{1,64}$/;
 const OPAQUE_URL_PATH_SEGMENT = /^(?=.{24,128}$)(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]+$/;
+const SAFE_MODEL_SWITCH_LABEL = /^[A-Za-z0-9._/-]{1,160}$/;
+const SAFE_REASON_TITLES: Readonly<Record<string, string>> = {
+  ACTION_TYPE_REQUIRES_APPROVAL: 'Tool type requires approval',
+  AGENT_SELF_APPROVAL: 'Agent approval command denied',
+  CUSTOM_BLOCKED_COMMAND: 'Custom blocked command',
+  CUSTOM_BLOCKED_DOMAIN: 'Custom blocked domain',
+  DANGEROUS_CONFIG_CHANGE: 'Dangerous configuration change',
+  DATA_EXFILTRATION: 'Potential data exfiltration',
+  DEPLOYMENT_ACTION: 'Deployment action requires approval',
+  DESTRUCTIVE_COMMAND: 'Dangerous command',
+  DESTRUCTIVE_FILE_OPERATION: 'Destructive file operation',
+  HIDDEN_NETWORK_COMMAND: 'Hidden network command',
+  LARGE_CONTEXT_MODEL_SWITCH: 'Large-context model switch',
+  LLM_ENDPOINT_HIJACK: 'LLM endpoint configuration change',
+  LLM_KEY_TO_UNKNOWN_HOST: 'Model credential routing risk',
+  MODEL_SWITCH_APPROVAL: 'Model switch requires approval',
+  NETWORK_DOS_RESPONSE: 'Repeated network service failures',
+  NETWORK_LARGE_RESPONSE: 'Large network response volume',
+  NETWORK_ODD_HOUR_ACTIVITY: 'Odd-hour network activity',
+  NETWORK_OUTBOUND: 'Network outbound policy',
+  NETWORK_RATE_LIMIT: 'High-frequency network activity',
+  NETWORK_REPLAY: 'Repeated identical request',
+  NETWORK_RISK: 'Network action',
+  NETWORK_TOKEN_DOMAIN_SWEEP: 'Credential used across many domains',
+  PATH_NOT_ALLOWED: 'Path outside filesystem allowlist',
+  PII_EGRESS: 'Sensitive data exposure',
+  PINNED_REMOTE_PACKAGE_EXECUTION: 'Pinned remote package execution',
+  REMOTE_CODE_EXECUTION: 'Remote code execution',
+  RESPONSE_CONTENT_TYPE_MISMATCH: 'Response content type mismatch',
+  RESPONSE_CREDENTIAL_ECHO: 'Credential echoed in response',
+  RESPONSE_ERROR_DISCLOSURE: 'Server error disclosure',
+  RESPONSE_MALICIOUS_SCRIPT: 'Malicious script in response',
+  RESPONSE_PATH_TRAVERSAL: 'Path traversal content in response',
+  RESPONSE_XSS_ECHO: 'Executable markup in response',
+  RELAY_RESPONSE_TAMPERING: 'Model response integrity risk',
+  SECRET_ACCESS: 'Protected path access',
+  SHELL_INJECTION_RISK: 'Shell metacharacters',
+  SYSTEM_PATH_ACCESS: 'System path access',
+  SYSTEM_PATH_MUTATION: 'System path mutation',
+  UNTRUSTED_PROMPT_EXPANSION: 'Untrusted prompt expansion',
+  UNTRUSTED_LLM_ENDPOINT: 'Untrusted LLM endpoint',
+  WORKSPACE_BULK_EGRESS: 'Bulk workspace data egress',
+};
 const NATIVE_SENSITIVE_CONTENT_RULES = new Set([
   'PII_EGRESS', 'DATA_EXFILTRATION', 'LLM_KEY_TO_UNKNOWN_HOST',
   'WORKSPACE_BULK_EGRESS', 'DANGEROUS_CONFIG_CHANGE',
