@@ -50,7 +50,9 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
   if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
   if (event.actionType === 'llm_response') return false;
-  if (event.actionType !== 'llm_request') return hasMaterialAuditFinding(event);
+  if (event.actionType !== 'llm_request') {
+    return isExplicitCleanLocalOnlyEvent(event) ? hasMaterialAuditFinding(event) : true;
+  }
 
   const piiDetected = hasPiiSummary(event.privacySummary);
   if (!piiDetected) return false;
@@ -58,6 +60,12 @@ export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean
   const stoppedBeforeEgress = event.canBlockCurrentAction !== false
     && (event.decision === 'block' || event.decision === 'require_approval');
   return !stoppedBeforeEgress;
+}
+
+function isExplicitCleanLocalOnlyEvent(event: RuntimeAuditEvent): boolean {
+  return event.agentHost === 'dsh'
+    || isCodexNativeHookAction(event)
+    || isClaudeNativeHookAction(event);
 }
 
 function hasMaterialAuditFinding(event: RuntimeAuditEvent): boolean {
@@ -203,25 +211,30 @@ function nativeHookAuditInput(event: RuntimeAuditEvent): string {
       || event.metadata?.claudeHookEvent === 'PostModelSwitch') {
     return nativeHookModelSwitchPreview(event);
   }
+  if (isNativePostToolEvent(event)
+      && capturedToolInput === undefined
+      && NATIVE_STRUCTURED_PREVIEW_ACTION_TYPES.has(actionEvent.actionType)) {
+    return nativeHookFindingSummary(event, actionEvent.actionType);
+  }
   if (actionEvent.actionType === 'shell' && !protectedAccess) {
     return nativeHookShellPreview(actionEvent, capturedToolInput === undefined)
-      ?? nativeHookFindingSummary(event);
+      ?? nativeHookFindingSummary(event, actionEvent.actionType);
   }
   if ((actionEvent.actionType === 'network' || actionEvent.actionType === 'browser') && !protectedAccess) {
-    return nativeHookNetworkPreview(actionEvent) ?? nativeHookFindingSummary(event);
+    return nativeHookNetworkPreview(actionEvent) ?? nativeHookFindingSummary(event, actionEvent.actionType);
   }
   if ((actionEvent.actionType === 'file_read' || actionEvent.actionType === 'file_write') && !protectedAccess) {
-    return nativeHookFilePreview(actionEvent) ?? nativeHookFindingSummary(event);
+    return nativeHookFilePreview(actionEvent) ?? nativeHookFindingSummary(event, actionEvent.actionType);
   }
   if (!protectedAccess) {
-    const genericPreview = nativeHookGenericToolPreview(event);
+    const genericPreview = nativeHookGenericToolPreview(event, actionEvent.actionType);
     if (genericPreview) return genericPreview;
-    return nativeHookFindingSummary(event);
+    return nativeHookFindingSummary(event, actionEvent.actionType);
   }
 
   const protectedFile = intrinsicProtectedFile
     ?? (protectedReason ? safeProtectedFileReference(actionEvent) : undefined);
-  if (!protectedFile) return nativeHookFindingSummary(event);
+  if (!protectedFile) return nativeHookFindingSummary(event, actionEvent.actionType);
 
   if (actionEvent.actionType === 'shell') {
     const command = safeShellCommandName(actionEvent.input);
@@ -249,8 +262,12 @@ function nativeHookShellPreview(
   return preview.trim() ? preview : undefined;
 }
 
-function nativeHookFindingSummary(event: RuntimeAuditEvent): string {
+function nativeHookFindingSummary(
+  event: RuntimeAuditEvent,
+  actionType: RuntimeActionType = event.actionType,
+): string {
   const toolName = redactPreview(event.toolName, 160).trim() || 'Tool';
+  const subject = nativeHookSummarySubject(event, actionType, toolName);
   const responseStatus = firstSafeInteger(
     event.metadata?.responseStatusCode,
     event.metadata?.statusCode,
@@ -258,16 +275,19 @@ function nativeHookFindingSummary(event: RuntimeAuditEvent): string {
   const failed = event.metadata?.claudeHookEvent === 'PostToolUseFailure'
     || event.metadata?.toolFailed === true
     || (responseStatus !== undefined && responseStatus >= 400);
-  if (failed) return `${toolName}: Tool execution failed`.slice(0, 500);
+  if (failed) return `${subject}: Tool execution failed`.slice(0, 500);
 
   const reason = event.reasons.find((candidate) => SAFE_RULE_ID.test(candidate.code));
   const finding = reason
     ? SAFE_REASON_TITLES[reason.code] ?? 'Security finding'
     : 'Security finding';
-  return `${toolName}: ${finding}`.slice(0, 500);
+  return `${subject}: ${finding}`.slice(0, 500);
 }
 
-function nativeHookGenericToolPreview(event: RuntimeAuditEvent): string | undefined {
+function nativeHookGenericToolPreview(
+  event: RuntimeAuditEvent,
+  actionType: RuntimeActionType,
+): string | undefined {
   const rawKeys = event.metadata?.nativeToolArgumentKeys;
   if (!Array.isArray(rawKeys)) return undefined;
   const keys = rawKeys
@@ -278,7 +298,18 @@ function nativeHookGenericToolPreview(event: RuntimeAuditEvent): string | undefi
     ))
     .slice(0, 20);
   if (keys.length === 0) return undefined;
-  return `${redactPreview(event.toolName, 160)} args=${keys.join(',')}`.slice(0, 500);
+  const toolName = redactPreview(event.toolName, 160).trim() || 'Tool';
+  const subject = nativeHookSummarySubject(event, actionType, toolName);
+  return `${subject} args=${keys.join(',')}`.slice(0, 500);
+}
+
+function nativeHookSummarySubject(
+  event: RuntimeAuditEvent,
+  actionType: RuntimeActionType,
+  toolName: string,
+): string {
+  if (!isNativePostToolEvent(event)) return toolName;
+  return `${NATIVE_ACTION_DESCRIPTORS[actionType]} via ${toolName}`;
 }
 
 /**
@@ -521,8 +552,25 @@ const MISSING_FACTS = new Set<unknown>([
 ]);
 const CODEX_DECISIONS = new Set<unknown>(['allow', 'warn', 'require_approval', 'block']);
 const NATIVE_TOOL_ACTION_TYPES = new Set<unknown>([
-  'shell', 'file_read', 'file_write', 'network', 'browser', 'web_search', 'skill_install', 'mcp_tool', 'other',
+  'shell', 'file_read', 'file_write', 'network', 'browser', 'web_search', 'skill_install', 'mcp_tool', 'deploy', 'other',
 ]);
+const NATIVE_STRUCTURED_PREVIEW_ACTION_TYPES = new Set<RuntimeActionType>([
+  'shell', 'file_read', 'file_write', 'network', 'browser',
+]);
+const NATIVE_ACTION_DESCRIPTORS: Readonly<Record<RuntimeActionType, string>> = {
+  shell: 'shell command',
+  file_read: 'file read',
+  file_write: 'file write',
+  network: 'network request',
+  web_search: 'web search',
+  mcp_tool: 'MCP tool',
+  browser: 'browser action',
+  skill_install: 'skill install',
+  deploy: 'deployment',
+  llm_request: 'model request',
+  llm_response: 'model response',
+  other: 'tool action',
+};
 const CODEX_SEVERITIES = new Set<unknown>(['info', 'low', 'medium', 'high', 'critical']);
 const MATERIAL_POST_RISK_LEVELS = new Set<unknown>(['medium', 'high', 'critical']);
 const MATERIAL_POST_SEVERITIES = new Set<unknown>(['medium', 'high', 'critical']);

@@ -306,6 +306,57 @@ describe('Runtime Cloud bridge', () => {
     assert.doesNotMatch(persisted, new RegExp(`${outputMarker}|${secret}`));
   });
 
+  it('distinguishes every native post-tool action type when a safe action preview is unavailable', () => {
+    const rawOutput = 'RAW_PRIVATE_POST_TOOL_OUTPUT';
+    const cases = [
+      ['shell', 'Bash', 'shell command via Bash: Potential data exfiltration'],
+      ['file_read', 'Read', 'file read via Read: Potential data exfiltration'],
+      ['file_write', 'Write', 'file write via Write: Potential data exfiltration'],
+      ['network', 'WebFetch', 'network request via WebFetch: Potential data exfiltration'],
+      ['browser', 'Browser', 'browser action via Browser: Potential data exfiltration'],
+      ['web_search', 'WebSearch', 'web search via WebSearch args=query'],
+      ['mcp_tool', 'mcp__deploy__release', 'MCP tool via mcp__deploy__release args=operation'],
+      ['skill_install', 'SkillInstall', 'skill install via SkillInstall args=source'],
+      ['deploy', 'Deploy', 'deployment via Deploy args=target'],
+      ['other', 'CustomTool', 'tool action via CustomTool args=operation'],
+    ] as const;
+
+    for (const [actionType, toolName, expected] of cases) {
+      const event = buildCloudAuditEvent({
+        ...sampleEvent(),
+        actionId: `act_post_fallback_${actionType}`,
+        agentHost: 'codex',
+        actionType: 'other',
+        toolName,
+        input: rawOutput,
+        decision: 'block',
+        policyDecision: 'block',
+        riskScore: 100,
+        riskLevel: 'critical',
+        lifecycleStage: 'post_tool',
+        reasons: [{
+          code: 'DATA_EXFILTRATION',
+          severity: 'high',
+          title: 'Raw sensitive output title',
+          description: 'Raw sensitive output description',
+        }],
+        metadata: {
+          codexHookEvent: 'PostToolUse',
+          nativeToolActionType: actionType,
+          nativeToolArgumentKeys: [
+            actionType === 'web_search' ? 'query'
+              : actionType === 'skill_install' ? 'source'
+                : actionType === 'deploy' ? 'target'
+                  : 'operation',
+          ],
+        },
+      });
+
+      assert.equal(event.input, expected, actionType);
+      assert.doesNotMatch(JSON.stringify(event), /RAW_PRIVATE_POST_TOOL_OUTPUT|Raw sensitive output/);
+    }
+  });
+
   it('keeps protected paths bounded when a native post-tool finding comes from output', () => {
     const event = buildCloudAuditEvent({
       ...sampleEvent(),
@@ -874,6 +925,39 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('preserves Cloud reporting for every non-LLM action type outside explicit local-only integrations', () => {
+    const actionTypes = [
+      'shell', 'file_read', 'file_write', 'network', 'web_search',
+      'mcp_tool', 'browser', 'skill_install', 'deploy', 'other',
+    ] as const;
+
+    for (const actionType of actionTypes) {
+      const event: RuntimeAuditEvent = {
+        ...sampleEvent(),
+        actionId: `act_openclaw_${actionType}`,
+        agentHost: 'openclaw',
+        actionType,
+        toolName: `tool_${actionType}`,
+        input: `safe ${actionType} context`,
+      };
+      assert.equal(shouldReportAuditEventToCloud(event), true, actionType);
+      assert.equal(shouldReportAuditEventToCloud({ ...event, agentHost: 'dsh' }), false, `dsh:${actionType}`);
+    }
+
+    const plainCodexEvent = { ...sampleEvent(), metadata: {} };
+    const plainClaudeEvent = { ...sampleEvent(), agentHost: 'claude-code' as const, metadata: {} };
+    assert.equal(shouldReportAuditEventToCloud(plainCodexEvent), true);
+    assert.equal(shouldReportAuditEventToCloud(plainClaudeEvent), true);
+    assert.equal(shouldReportAuditEventToCloud({
+      ...plainCodexEvent,
+      metadata: { codexHookEvent: 'PreToolUse' },
+    }), false);
+    assert.equal(shouldReportAuditEventToCloud({
+      ...plainClaudeEvent,
+      metadata: { claudeHookEvent: 'PreToolUse' },
+    }), false);
+  });
+
   it('uploads only a bounded DSH finding summary without raw I/O or absolute paths', async () => {
     const originalFetch = globalThis.fetch;
     const requests: string[] = [];
@@ -1055,13 +1139,15 @@ describe('Runtime Cloud bridge', () => {
       actionType: 'other',
       input: 'hello',
       lifecycleStage: 'post_tool',
-      metadata: { codexHookEvent: 'PostToolUse', exitCode: 0 },
+      metadata: { codexHookEvent: 'PostToolUse', nativeToolActionType: 'shell', exitCode: 0 },
     };
     const failedPost: RuntimeAuditEvent = {
       ...routinePost,
       actionId: 'act_post_failed',
       input: 'private failure output',
-      metadata: { codexHookEvent: 'PostToolUse', exitCode: 1, toolFailed: true },
+      metadata: {
+        codexHookEvent: 'PostToolUse', nativeToolActionType: 'shell', exitCode: 1, toolFailed: true,
+      },
     };
     const riskyPost: RuntimeAuditEvent = {
       ...routinePost,
@@ -1080,7 +1166,7 @@ describe('Runtime Cloud bridge', () => {
       ...routinePost,
       actionId: 'act_claude_failure',
       agentHost: 'claude-code',
-      metadata: { claudeHookEvent: 'PostToolUseFailure', toolFailed: true },
+      metadata: { claudeHookEvent: 'PostToolUseFailure', nativeToolActionType: 'shell', toolFailed: true },
     };
 
     assert.equal(shouldReportAuditEventToCloud(preTool), true);
@@ -1107,7 +1193,11 @@ describe('Runtime Cloud bridge', () => {
       ]);
       assert.deepEqual(
         payload.events?.filter((event) => event.lifecycleStage === 'post_tool').map((event) => event.input),
-        ['Bash: Tool execution failed', 'Bash: Potential data exfiltration', 'Bash: Tool execution failed'],
+        [
+          'shell command via Bash: Tool execution failed',
+          'shell command via Bash: Potential data exfiltration',
+          'shell command via Bash: Tool execution failed',
+        ],
       );
       assert.doesNotMatch(requests[0]!, /private failure output|private tool output/);
     } finally {
