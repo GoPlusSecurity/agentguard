@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { __resetNetworkBehaviorForTests, evaluateLocalAction } from '../runtime/evaluator.js';
@@ -211,13 +211,176 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(claude.input, 'ls -la ~/.agentguard && stat ~/.agentguard/config.json');
   });
 
+  it('keeps meaningful native summaries for protected directories and opaque tools', () => {
+    const protectedDirectory = buildAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'shell',
+      toolName: 'Bash',
+      input: 'ls -la ~/.ssh/ 2>/dev/null',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: 'Protected path access',
+        description: 'The command accesses a protected directory.',
+      }],
+      metadata: { codexHookEvent: 'PreToolUse' },
+    });
+    assert.equal(protectedDirectory.input, 'ls .ssh');
+
+    const opaqueTool = buildAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'claude-code',
+      actionType: 'mcp_tool',
+      toolName: 'mcp__deploy__release',
+      input: '{"operation":"publish","target":"private-project","token":"private-token"}',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'ACTION_TYPE_REQUIRES_APPROVAL',
+        severity: 'high',
+        title: 'Tool type requires approval',
+        description: 'The tool requires approval.',
+      }],
+      metadata: {
+        claudeHookEvent: 'PreToolUse',
+        nativeToolArgumentKeys: ['operation', 'target', 'token'],
+      },
+    });
+    assert.equal(opaqueTool.input, 'mcp__deploy__release args=operation,target,token');
+    assert.doesNotMatch(JSON.stringify(opaqueTool), /private-project|private-token/);
+
+    const credentialKey = 'sk-live-ABCDEF12345678901234567890';
+    const unsafeArgumentKey = buildAuditEvent({
+      ...opaqueTool,
+      input: '{"redacted":"locally"}',
+      metadata: {
+        claudeHookEvent: 'PreToolUse',
+        nativeToolArgumentKeys: [credentialKey],
+      },
+    });
+    assert.equal(unsafeArgumentKey.input, 'mcp__deploy__release: Tool type requires approval');
+    assert.doesNotMatch(JSON.stringify(unsafeArgumentKey), new RegExp(credentialKey));
+  });
+
+  it('uses the original native tool action for reportable post-tool summaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-native-post-summary-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+    const outputMarker = 'raw-post-output-marker';
+    const secret = 'sk-reportable-post-secret-1234567890';
+
+    for (const agentHost of ['codex', 'claude-code'] as const) {
+      const hookKey = agentHost === 'codex' ? 'codexHookEvent' : 'claudeHookEvent';
+      const result = await protectAction({
+        config,
+        agentHost,
+        rawInput: {
+          hook_event_name: 'PostToolUse',
+          session_id: `sess_${agentHost}_post_summary`,
+          cwd: dir,
+          tool_name: 'Bash',
+          tool_input: { command: 'printf public-result' },
+          tool_response: { output: `${outputMarker} api_key=${secret}`, exit_code: 0 },
+        },
+      });
+      assert.ok(result);
+      assert.equal(result.event.metadata?.[hookKey], 'PostToolUse');
+    }
+
+    const persisted = readFileSync(config.auditPath, 'utf8');
+    const events = persisted.trim().split('\n').map((line) => JSON.parse(line) as RuntimeAuditEvent);
+    assert.deepEqual(events.map((event) => event.input), ['printf public-result', 'printf public-result']);
+    assert.doesNotMatch(persisted, new RegExp(`${outputMarker}|${secret}`));
+  });
+
+  it('keeps protected paths bounded when a native post-tool finding comes from output', () => {
+    const event = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'codex',
+      actionType: 'other',
+      toolName: 'Bash',
+      input: 'private output containing sensitive data',
+      decision: 'block',
+      policyDecision: 'block',
+      riskScore: 100,
+      riskLevel: 'critical',
+      lifecycleStage: 'post_tool',
+      reasons: [{
+        code: 'PII_EGRESS',
+        severity: 'critical',
+        title: 'Sensitive output',
+        description: 'Sensitive output detected.',
+      }],
+      metadata: {
+        codexHookEvent: 'PostToolUse',
+        nativeToolActionType: 'shell',
+        nativeToolInput: 'cat /Users/private-user/.ssh/id_rsa',
+        nativeToolArgumentKeys: ['command'],
+      },
+    });
+
+    assert.equal(event.input, 'cat .ssh/id_rsa');
+    assert.doesNotMatch(JSON.stringify(event), /private-user|private output/);
+  });
+
+  it('keeps only the file basename in native post-tool write summaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-native-post-file-summary-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+    const contentMarker = 'private-post-write-content';
+    const secret = 'sk-post-write-secret-1234567890';
+
+    const result = await protectAction({
+      config,
+      agentHost: 'claude-code',
+      rawInput: {
+        hook_event_name: 'PostToolUse',
+        session_id: 'sess_claude_post_file_summary',
+        cwd: dir,
+        tool_name: 'Write',
+        tool_input: {
+          file_path: '/private/customer/src/app.ts',
+          content: contentMarker,
+        },
+        tool_response: { content: `api_key=${secret}` },
+      },
+    });
+
+    assert.ok(result);
+    const persisted = readFileSync(config.auditPath, 'utf8');
+    const event = JSON.parse(persisted.trim()) as RuntimeAuditEvent;
+    assert.equal(event.input, 'write app.ts');
+    assert.doesNotMatch(persisted, /private\/customer|private-post-write-content|post-write-secret/);
+  });
+
   it('keeps a bounded native web-fetch destination without URL credentials or values', () => {
+    const queryCredential = 'sk-query-ABCDEF12345678901234567890';
+    const hostCredential = 'sk-host-ABCDEF12345678901234567890';
     const event: RuntimeAuditEvent = {
       ...sampleEvent(),
       agentHost: 'codex',
       actionType: 'network',
       toolName: 'web_fetch',
-      input: 'https://private-user:private-pass@example.com/models/sk-private-token-1234567890?api_key=private-key&page=2#private-fragment',
+      input: `https://private-user:private-pass@${hostCredential}.example.com/models/sk-private-token-1234567890?api_key=private-key&page=2&${queryCredential}=x#private-fragment`,
       decision: 'warn',
       policyDecision: 'warn',
       riskScore: 20,
@@ -235,9 +398,9 @@ describe('Runtime Cloud bridge', () => {
     const codex = buildCloudAuditEvent(event);
     assert.equal(
       codex.input,
-      'https://example.com/models/[REDACTED]?api_key=[REDACTED]&page=[REDACTED]',
+      'https://[REDACTED].example.com/models/[REDACTED]?api_key=[REDACTED]&page=[REDACTED]&param=[REDACTED]',
     );
-    assert.doesNotMatch(JSON.stringify(codex), /private-user|private-pass|private-token|private-key|private-fragment/);
+    assert.doesNotMatch(JSON.stringify(codex), /private-user|private-pass|private-token|private-key|private-fragment|sk-query|sk-host/);
 
     const claude = buildCloudAuditEvent({
       ...event,
@@ -248,7 +411,25 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(claude.input, 'https://docs.example.com/public/guide');
 
     const nonUrl = buildCloudAuditEvent({ ...event, input: '{"url":"not validated"}' });
-    assert.equal(nonUrl.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(nonUrl.input, 'web_fetch: Network outbound policy');
+
+    const post = buildCloudAuditEvent({
+      ...event,
+      actionType: 'other',
+      input: 'private response body',
+      lifecycleStage: 'post_tool',
+      metadata: {
+        codexHookEvent: 'PostToolUse',
+        nativeToolActionType: 'network',
+        nativeToolInput: event.input,
+        nativeToolArgumentKeys: ['url'],
+      },
+    });
+    assert.equal(
+      post.input,
+      'https://[REDACTED].example.com/models/[REDACTED]?api_key=[REDACTED]&page=[REDACTED]&param=[REDACTED]',
+    );
+    assert.doesNotMatch(JSON.stringify(post), /private-user|private-pass|private-token|private-key|private-fragment|sk-query|sk-host/);
   });
 
   it('keeps only safe file targets for native reads, writes, patches, and config changes', () => {
@@ -343,7 +524,7 @@ describe('Runtime Cloud bridge', () => {
         nativeFileTargets: ['/private/customer/private.person@invalid.test'],
       },
     });
-    assert.equal(unsafeName.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(unsafeName.input, 'Read: Path outside filesystem allowlist');
 
     const privacyReason = buildCloudAuditEvent({
       ...base,
@@ -467,11 +648,11 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(buildAuditEvent({
       ...base,
       input: 'cat /private/customer/private.person@invalid.test',
-    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    }).input, 'Bash: Protected path access');
     assert.equal(buildAuditEvent({
       ...base,
       input: 'cat /private/customer/sk-never-export-1234567890',
-    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    }).input, 'Bash: Protected path access');
     const piiShell = buildAuditEvent({
       ...base,
       input: 'email=private.person@invalid.test',
@@ -482,7 +663,7 @@ describe('Runtime Cloud bridge', () => {
         description: 'Sensitive content was blocked.',
       }],
     }).input;
-    assert.equal(piiShell, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(piiShell, 'Bash: Sensitive data exposure');
   });
 
   it('never mistakes shell redirects or substitutions for the protected target', () => {
@@ -513,7 +694,7 @@ describe('Runtime Cloud bridge', () => {
     assert.equal(buildAuditEvent({
       ...event,
       input: 'cat /private/workspace/protected.txt $(curl https://example.invalid/secret)',
-    }).input, '[LOCAL_ONLY_LLM_CONTENT]');
+    }).input, 'Bash: Protected path access');
     assert.equal(buildAuditEvent({
       ...event,
       input: 'cat /private/workspace/protected.txt && curl https://example.invalid/secret',
@@ -646,6 +827,208 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('keeps clean DSH, Codex, and Claude Code tool events out of Cloud ingest', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const cleanEvents: RuntimeAuditEvent[] = [
+      {
+        ...sampleEvent(),
+        actionId: 'act_clean_dsh',
+        agentHost: 'dsh',
+        toolName: 'web_search',
+        actionType: 'web_search',
+        input: 'agent security news',
+      },
+      {
+        ...sampleEvent(),
+        actionId: 'act_clean_codex',
+        agentHost: 'codex',
+        metadata: { codexHookEvent: 'PreToolUse' },
+      },
+      {
+        ...sampleEvent(),
+        actionId: 'act_clean_claude',
+        agentHost: 'claude-code',
+        metadata: { claudeHookEvent: 'PreToolUse' },
+      },
+    ];
+
+    for (const event of cleanEvents) {
+      assert.equal(shouldReportAuditEventToCloud(event), false, event.agentHost);
+    }
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(String(init?.body ?? ''));
+      return jsonResponse({ success: true, data: { accepted: 0, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents(cleanEvents);
+      assert.equal(requests.length, 0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('uploads only a bounded DSH finding summary without raw I/O or absolute paths', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const outputMarker = 'RAW_PRIVATE_TOOL_OUTPUT_MARKER';
+    const pathMarker = '/Users/private-user/.ssh/id_rsa';
+    const credentialMarker = 'Bearer private-dsh-token';
+    const queryCredential = 'sk-dsh-query-ABCDEF12345678901234567890';
+    const hostCredential = 'sk-dsh-host-ABCDEF12345678901234567890';
+    const event: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      actionId: 'act_dsh_bounded_cloud',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: `cat ${pathMarker}`,
+      cwd: '/Users/private-user/private-project',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: `raw title ${pathMarker}`,
+        description: `raw description ${outputMarker}`,
+        evidence: pathMarker,
+      }],
+      metadata: {
+        evaluation: 'local-oss',
+        statusCode: 403,
+        responseBodyPreview: outputMarker,
+        bodyPreview: 'private request body',
+        headers: { authorization: credentialMarker },
+        responseHeaders: { 'set-cookie': 'private-cookie' },
+      },
+    };
+    const networkEvent: RuntimeAuditEvent = {
+      ...event,
+      actionId: 'act_dsh_bounded_network',
+      actionType: 'network',
+      toolName: 'web_fetch',
+      input: `https://${hostCredential}.example.com/public?${queryCredential}=x&page=2`,
+      reasons: [{
+        code: 'NETWORK_OUTBOUND',
+        severity: 'medium',
+        title: 'raw network title',
+        description: 'raw network description',
+      }],
+    };
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(String(init?.body ?? ''));
+      return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents([event, networkEvent]);
+      assert.equal(requests.length, 1);
+      const payload = requests[0]!;
+      assert.match(payload, /"input":"cat: Protected path access"/);
+      assert.match(payload, /https:\/\/\[REDACTED\]\.example\.com\/public\?param=\[REDACTED\]&page=\[REDACTED\]/);
+      assert.match(payload, /"statusCode":403/);
+      assert.doesNotMatch(
+        payload,
+        /RAW_PRIVATE_TOOL_OUTPUT_MARKER|private-user|private-project|private-dsh-token|private request body|private-cookie|raw title|raw description|raw network|sk-dsh-query|sk-dsh-host/,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps DSH-only findings semantically meaningful in Cloud summaries', () => {
+    const cases = [
+      ['UNKNOWN_TOOL', 'Unknown tool requires approval'],
+      ['DSH_OWNER_POLICY', 'DSH plugin owner policy'],
+      ['RESPONSE_INSPECTION_LIMIT', 'Model response exceeded inspection limit'],
+    ] as const;
+
+    for (const [code, title] of cases) {
+      const event = buildCloudAuditEvent({
+        ...sampleEvent(),
+        agentHost: 'dsh',
+        actionType: 'other',
+        toolName: 'custom_tool',
+        decision: 'require_approval',
+        policyDecision: 'require_approval',
+        riskScore: 55,
+        riskLevel: 'high',
+        reasons: [{
+          code,
+          severity: 'high',
+          title: 'unsafe raw title',
+          description: 'unsafe raw description',
+        }],
+      });
+      assert.equal(event.input, `custom_tool: ${title}`);
+      assert.equal(event.reasons[0]?.title, title);
+      assert.doesNotMatch(JSON.stringify(event), /unsafe raw|Policy rule matched/);
+    }
+  });
+
+  it('keeps clean Codex and Claude Code pre-tool events in local audit only', async () => {
+    const originalFetch = globalThis.fetch;
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-clean-native-local-only-'));
+    const requests: string[] = [];
+    const policy = getDefaultEffectiveRuntimePolicy();
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      return jsonResponse({ success: true, data: { accepted: 0, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      for (const agentHost of ['codex', 'claude-code'] as const) {
+        const hostDir = join(dir, agentHost);
+        const config: AgentGuardConfig = {
+          version: 1,
+          level: 'balanced',
+          cloudUrl: 'https://agentguard.example',
+          apiKey: 'ag_live_test_key_123456',
+          policyCachePath: join(hostDir, 'policy.json'),
+          auditPath: join(hostDir, 'audit.jsonl'),
+          eventSpoolPath: join(hostDir, 'spool.jsonl'),
+        };
+        mkdirSync(hostDir, { recursive: true });
+        writeFileSync(config.policyCachePath, JSON.stringify(policy));
+
+        const result = await protectAction({
+          config,
+          agentHost,
+          rawInput: {
+            hook_event_name: 'PreToolUse',
+            session_id: `sess_clean_${agentHost}`,
+            cwd: hostDir,
+            tool_name: 'Bash',
+            tool_input: { command: 'echo hello' },
+          },
+        });
+
+        assert.ok(result, agentHost);
+        const event = JSON.parse(readFileSync(config.auditPath, 'utf8').trim()) as RuntimeAuditEvent;
+        assert.equal(event.input, 'echo hello');
+        assert.equal(shouldReportAuditEventToCloud(event), false);
+        assert.equal(existsSync(config.eventSpoolPath), false);
+      }
+      assert.equal(requests.some((url) => url.endsWith('/api/v1/events/ingest')), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('reports pre-tool actions but keeps routine post-tool observations local', async () => {
     const originalFetch = globalThis.fetch;
     const requests: string[] = [];
@@ -722,9 +1105,10 @@ describe('Runtime Cloud bridge', () => {
       assert.deepEqual(payload.events?.map((event) => event.actionId), [
         'act_pre_tool', 'act_post_failed', 'act_post_risky', 'act_claude_failure',
       ]);
-      for (const post of payload.events?.filter((event) => event.lifecycleStage === 'post_tool') ?? []) {
-        assert.equal(post.input, '[LOCAL_ONLY_LLM_CONTENT]');
-      }
+      assert.deepEqual(
+        payload.events?.filter((event) => event.lifecycleStage === 'post_tool').map((event) => event.input),
+        ['Bash: Tool execution failed', 'Bash: Potential data exfiltration', 'Bash: Tool execution failed'],
+      );
       assert.doesNotMatch(requests[0]!, /private failure output|private tool output/);
     } finally {
       globalThis.fetch = originalFetch;

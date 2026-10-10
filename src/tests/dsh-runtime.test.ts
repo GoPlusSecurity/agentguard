@@ -270,6 +270,35 @@ describe('DSH runtime Phase 2A observer', () => {
     }
   });
 
+  it('keeps clean DSH audit events local without a Cloud request or spool entry', async () => {
+    const cloud = await startCloudServer();
+    const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-clean-'));
+    const spoolPath = join(directory, 'events.jsonl');
+    try {
+      const observed = await observeDshToolCall(execution({
+        name: 'web_search',
+        arguments: { query: 'agent security news' },
+      }), {
+        loadAgentGuardConfig: () => ({
+          ...config,
+          cloudUrl: cloud.url,
+          apiKey: 'ag_live_dsh_cloud_test',
+          eventSpoolPath: spoolPath,
+        }),
+        fetchPolicyFor: () => undefined,
+        evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+        writeAudit() {},
+      });
+
+      assert.ok(observed);
+      assert.equal(cloud.requests.length, 0);
+      assert.equal(existsSync(spoolPath), false);
+    } finally {
+      await cloud.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('spools the DSH audit event when connected Cloud ingest fails', async () => {
     const cloud = await startCloudServer([503]);
     const directory = mkdtempSync(join(tmpdir(), 'agentguard-dsh-cloud-failure-'));
@@ -311,7 +340,7 @@ describe('DSH runtime Phase 2A observer', () => {
           eventSpoolPath: directory,
         }),
         fetchPolicyFor: () => undefined,
-        evaluate: async () => ({ decision: decision('allow'), policySource: 'default' }),
+        evaluate: async () => ({ decision: decision('warn'), policySource: 'default' }),
         writeAudit() {},
       });
       const downstream = { kind: 'allow' as const };
