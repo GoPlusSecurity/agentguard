@@ -26,6 +26,9 @@ Unknown fields are ignored rather than treated as local enforcement facts.
 
 Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
 
+- Clean events (`allow`, zero risk, `safe`, no findings, and no execution
+  failure) remain in the local audit and are not uploaded, regardless of host.
+
 - `sessionId`, `agentHost`, `actionType`, `toolName`
 - Redacted `input` preview, capped at 2,000 characters
 - Native shell hooks may retain a redacted command preview so operational
@@ -48,9 +51,18 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
   successful `PostToolUse` observations stay in the local audit. A post-tool
   event is uploaded separately only when it adds a failure, elevated risk,
   anomalous result, PII summary, or another material security finding.
+- Reportable native events use the original tool action for their safe summary,
+  including post-tool shell commands and file basenames. If no raw value can be
+  retained safely, the preview falls back to a bounded tool name plus static
+  finding title rather than an opaque placeholder.
+- Reportable DSH events use the same local-first boundary through a Cloud-only
+  projection: command names, file basenames, sanitized network destinations,
+  static finding titles, and bounded status fields may be sent; raw tool output,
+  request/response previews, headers, absolute paths, and evaluator reason text
+  remain local.
 - Raw stdout and stderr are never uploaded from either lifecycle stage.
-  Reportable post-tool events contain only the redacted risk summary and
-  bounded status metadata.
+  Reportable post-tool events contain only the safe original-action summary,
+  redacted risk summary, and bounded status metadata.
 - Decision, risk score, risk level, reasons, and policy version
 - Lifecycle stage, coverage level, enforcement status, missing-fact names, and
   request correlation IDs
@@ -93,10 +105,10 @@ Cloud endpoints also apply server-side redaction, but clients should not rely on
 ## Offline behavior
 
 If Cloud is unreachable, AgentGuard continues local enforcement and spools
-Cloud-eligible redacted audit events for later retry. Routine post-tool
-observations, routine model requests, and model responses are filtered again
-at the Cloud client boundary, including when an older spool is drained. It
-must never fail open for local `block` decisions.
+Cloud-eligible redacted audit events for later retry. Clean tool events,
+routine post-tool observations, routine model requests, and model responses
+are filtered again at the Cloud client boundary, including when an older spool
+is drained. It must never fail open for local `block` decisions.
 
 Local policies are normalized when loaded, so caches written before the LLM
 privacy fields existed inherit the bundled privacy defaults. Cloud availability

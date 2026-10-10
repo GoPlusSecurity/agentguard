@@ -286,7 +286,7 @@ describe('installed Codex native hooks', () => {
       lifecycleStage?: string;
       metadata?: { codexHookEvent?: string; exitCode?: number };
     };
-    assert.equal(event.input, '[LOCAL_ONLY_LLM_CONTENT]');
+    assert.equal(event.input, 'printf hello');
     assert.equal(event.lifecycleStage, 'post_tool');
     assert.equal(event.metadata?.codexHookEvent, 'PostToolUse');
     assert.equal(event.metadata?.exitCode, 0);

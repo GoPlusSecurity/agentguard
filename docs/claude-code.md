@@ -34,7 +34,7 @@ Hook execution is bounded to 30 seconds. Claude Code may continue the original a
 
 `PostToolUse` scans `tool_response`. AgentGuard uses `updatedToolOutput` only for verified response shapes: Read, Bash/PowerShell, WebFetch/WebSearch, and MCP content results. Redaction preserves the verified string/object/array shape. Unknown output schemas are not guessed or destructively rewritten; sensitive unknown output is marked `partial`/`would_block`, and `PostToolBatch` remains the continuation gate.
 
-Routine successful `PostToolUse` observations remain in the local audit and are not uploaded. Failures, elevated risks, anomalous results, and other material new findings are uploaded as separate Cloud events containing only redacted summaries and bounded status metadata.
+Routine successful `PostToolUse` observations remain in the local audit and are not uploaded. Failures, elevated risks, anomalous results, and other material new findings are uploaded as separate Cloud events containing the safe original-action summary, redacted findings, and bounded status metadata.
 
 `PostToolUseFailure` records only redacted failure type/summary and coverage. It cannot replace or block a failed tool's output. Whether a particular Claude Code version includes failed results in a following `PostToolBatch.tool_calls[].tool_response` is `unverified` until tested on that version; if absent, the failure-output path is `unsupported`.
 
@@ -56,7 +56,7 @@ An `@file` path without an explicit exact deny is `unsupported` and is not count
 
 Raw prompts, command arguments, tool output, failure text, configuration content, credentials, and PII are evaluated locally. Native Claude hook audit and Cloud records keep prompts and tool output local, while shell actions may retain a redacted command preview. Protected-file actions retain only a bounded, validated explanation such as `cat .env` or `cat .ssh/id_ed25519.pub`, without the absolute path, remaining arguments, redirects, substitutions, or command tail. Hook stdout/stderr never echoes raw input.
 
-`PreToolUse` is the primary Cloud action record. Raw stdout and stderr are never uploaded from either lifecycle stage; reportable Post events carry only the redacted risk summary and necessary status fields.
+Clean `PreToolUse` events remain local; reportable `PreToolUse` events are the primary Cloud action records. Raw stdout and stderr are never uploaded from either lifecycle stage; reportable Post events carry the safe original-action summary, redacted risk summary, and necessary status fields. If the action value itself cannot be retained safely, the summary uses the tool name and a static finding title instead of a generic placeholder.
 
 WebFetch Pre events may retain only a bounded destination preview. URL credentials, fragments, query values, and sensitive or opaque path segments are removed before Cloud sync.
 

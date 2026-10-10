@@ -8,9 +8,10 @@ import type {
   RuntimePiiSummary,
 } from '../runtime/types.js';
 import { normalizeEffectiveRuntimePolicy } from '../runtime/policy.js';
-import { redactLlmMetadata, redactMetadata, redactPreview } from '../runtime/redaction.js';
+import { redactLlmMetadata, redactMetadata, redactPreview, redactText } from '../runtime/redaction.js';
 import {
   buildAuditEvent,
+  cloudSafeReasons,
   isClaudeNativeHookAction,
   isCodexNativeHookAction,
   nativeHookSafeMetadata,
@@ -323,9 +324,99 @@ export function buildCloudActionRequest(action: RuntimeAction): CloudActionReque
 
 export function buildCloudAuditEvent(event: RuntimeAuditEvent): CloudAuditEventPayload {
   const sanitized = buildAuditEvent(event);
+  if (event.agentHost === 'dsh') {
+    const reasons = cloudSafeReasons(event.reasons);
+    return {
+      schemaVersion: CLOUD_RUNTIME_WIRE_SCHEMA_VERSION,
+      ...(event.llm?.requestId ? { requestId: redactPreview(event.llm.requestId, 160) } : {}),
+      ...sanitized,
+      input: dshCloudFindingSummary(event, reasons[0]?.title),
+      cwd: undefined,
+      sourceSkill: undefined,
+      reasons,
+      metadata: nativeHookSafeMetadata(event.metadata),
+    };
+  }
   return {
     schemaVersion: CLOUD_RUNTIME_WIRE_SCHEMA_VERSION,
     ...(event.llm?.requestId ? { requestId: redactPreview(event.llm.requestId, 160) } : {}),
     ...sanitized,
   };
+}
+
+function dshCloudFindingSummary(event: RuntimeAuditEvent, findingTitle?: string): string {
+  const finding = findingTitle || 'Security finding';
+  if (event.actionType === 'network' || event.actionType === 'browser') {
+    return safeDshNetworkDestination(event.input) ?? `${safeDshToolName(event)}: ${finding}`;
+  }
+  if (event.actionType === 'file_read' || event.actionType === 'file_write') {
+    const target = safeDshFileName(event.input);
+    if (target) return `${event.actionType === 'file_read' ? 'read' : 'write'} ${target}`;
+  }
+  if (event.actionType === 'shell') {
+    const command = safeDshCommandName(event.input) ?? safeDshToolName(event);
+    return `${command}: ${finding}`.slice(0, 500);
+  }
+  return `${safeDshToolName(event)}: ${finding}`.slice(0, 500);
+}
+
+function safeDshToolName(event: RuntimeAuditEvent): string {
+  const tool = redactPreview(event.toolName, 160).trim();
+  return tool && tool !== '[REDACTED]' ? tool : event.actionType;
+}
+
+function safeDshCommandName(input: string): string | undefined {
+  const command = input.match(
+    /^\s*(?:(?:sudo|env)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:\/[^\s/]+\/)*([A-Za-z][A-Za-z0-9_-]{0,79})\b/
+  )?.[1]?.toLowerCase();
+  return command && redactPreview(command, 80) === command ? command : undefined;
+}
+
+function safeDshFileName(input: string): string | undefined {
+  const normalized = input.trim().replace(/^['"]|['"]$/g, '').replace(/[\\/]+$/, '');
+  const name = normalized.split(/[\\/]/).at(-1);
+  return name && name !== '.' && name !== '..' && /^[A-Za-z0-9._-]{1,128}$/.test(name)
+    && redactPreview(name, 128) === name
+    ? name
+    : undefined;
+}
+
+function safeDshNetworkDestination(input: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+  const path = url.pathname.split('/').map((segment) => {
+    if (!segment) return '';
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return '[REDACTED]';
+    }
+    const tokenLike = decoded.length >= 20 && /^[A-Za-z0-9._~+/-]+$/.test(decoded);
+    return decoded.length <= 128 && !tokenLike && redactPreview(decoded, 128) === decoded
+      ? segment
+      : '[REDACTED]';
+  }).join('/');
+  const queryKeys = [...new Set(url.searchParams.keys())]
+    .slice(0, 20)
+    .map((key) => /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key) && redactText(key) === key
+      ? key
+      : 'param');
+  const query = queryKeys.length > 0
+    ? `?${queryKeys.map((key) => `${key}=[REDACTED]`).join('&')}`
+    : '';
+  return `${url.protocol}//${safeDshUrlHost(url)}${path}${query}`.slice(0, 2000);
+}
+
+function safeDshUrlHost(url: URL): string {
+  const hostname = url.hostname.split('.').map((label) => {
+    const tokenLike = label.length >= 20 && /^[A-Za-z0-9_-]+$/.test(label);
+    return !tokenLike && redactText(label) === label ? label : '[REDACTED]';
+  }).join('.');
+  return url.port ? `${hostname}:${url.port}` : hostname;
 }

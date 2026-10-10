@@ -114,9 +114,11 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
-  const auditSafe = options.auditSafe || codexHookEvent === 'PermissionRequest'
+  const auditSafe = options.auditSafe || codexHookEvent === 'PreToolUse'
+    || codexHookEvent === 'PermissionRequest'
     || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
     || codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PreToolUse'
     || claudeHookEvent === 'PostToolUse'
     || isClaudeObserverEvent(claudeHookEvent);
   if (!auditSafe && shouldSuppressRuntimeReport(decision)) return null;
@@ -714,8 +716,20 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     : '';
   const actionInput = process.env.TOOL_INPUT
     || pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input);
+  const nativePostToolEvent = codexHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUse'
+    || claudeHookEvent === 'PostToolUseFailure';
+  const nativeToolActionType = nativePostToolEvent
+    ? mapToolToRuntimeAction(toolName, raw)
+    : actionType;
+  const nativeToolInput = codexHookEvent || claudeHookEvent
+    ? pickNativeToolAuditInput(nativeToolActionType, toolInput)
+    : '';
+  const nativeToolArgumentKeys = codexHookEvent || claudeHookEvent
+    ? pickNativeToolArgumentKeys(toolInput)
+    : [];
   const nativeFileTargets = pickNativeFileTargets(
-    actionType,
+    nativeToolActionType,
     toolName,
     raw,
     toolInput,
@@ -748,6 +762,9 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...(codexHookEvent ? { codexHookEvent } : {}),
       ...(claudeHookEvent ? { claudeHookEvent } : {}),
       ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
+      ...((codexHookEvent || claudeHookEvent) ? { nativeToolActionType } : {}),
+      ...(nativeToolInput ? { nativeToolInput } : {}),
+      ...(nativeToolArgumentKeys.length > 0 ? { nativeToolArgumentKeys } : {}),
       ...(nativeFileTargets.length > 0 ? { nativeFileTargets } : {}),
       ...pickNetworkMetadata(raw, toolInput),
       ...pickPostToolOutcomeMetadata(codexHookEvent, claudeHookEvent, raw),
@@ -765,6 +782,32 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
         : {}),
     },
   };
+}
+
+function pickNativeToolAuditInput(
+  actionType: RuntimeActionType,
+  toolInput: Record<string, unknown> | undefined,
+): string {
+  if (!toolInput) return '';
+  if (actionType === 'shell') {
+    return firstString(toolInput.command, toolInput.cmd, toolInput.script, toolInput.code, toolInput.input);
+  }
+  if (actionType === 'file_read' || actionType === 'file_write') {
+    return firstString(toolInput.file_path, toolInput.filePath, toolInput.path, toolInput.target);
+  }
+  if (actionType === 'web_search') {
+    return firstString(toolInput.query, toolInput.q, toolInput.search, toolInput.term);
+  }
+  if (actionType === 'network' || actionType === 'browser') {
+    const request = firstRecord(toolInput.request, toolInput.options);
+    return firstString(toolInput.url, toolInput.uri, toolInput.href, toolInput.target, request?.url, request?.uri);
+  }
+  return '';
+}
+
+function pickNativeToolArgumentKeys(toolInput: Record<string, unknown> | undefined): string[] {
+  if (!toolInput) return [];
+  return Object.keys(toolInput).slice(0, 20);
 }
 
 function validateNativeCodexHook(raw: Record<string, unknown> | null, wrapper: string | undefined): void {

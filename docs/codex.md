@@ -56,7 +56,8 @@ from a repository subdirectory does not bypass them.
   not undone.
   Routine successful observations remain local; only failures, elevated risks,
   anomalous results, or other material new findings are uploaded as separate
-  Cloud events.
+  Cloud events. Reportable events use the original tool action for a safe
+  summary instead of uploading tool output.
 - `PreCompact` and `PostCompact` record only the trigger and redacted policy
   metadata. AgentGuard does not open or parse `transcript_path`, and compact
   metadata is not sent to AgentGuard Cloud.
@@ -86,9 +87,11 @@ tool output, credentials, or PII. Native shell actions may retain a redacted
 command preview. Protected-file actions retain only a bounded, validated
 explanation such as `cat .env` or `cat .ssh/id_ed25519.pub`, without the
 absolute path, remaining arguments, redirects, substitutions, or command tail.
-Raw stdout and stderr are never uploaded. `PreToolUse` remains the primary
-Cloud action record, while only material `PostToolUse` findings are uploaded as
-separate events.
+Raw stdout and stderr are never uploaded. Clean `PreToolUse` events remain
+local; reportable `PreToolUse` events are the primary Cloud action records,
+while only material `PostToolUse` findings are uploaded as separate events.
+When an action cannot be represented safely, Cloud receives the tool name and
+static finding title instead of a generic placeholder.
 Web-fetch Pre events may retain only a bounded destination preview; URL
 credentials, fragments, query values, and sensitive or opaque path segments
 are removed.
