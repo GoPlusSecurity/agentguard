@@ -50,7 +50,9 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
 - Native `PreToolUse` events are the primary Cloud action records. Routine
   successful `PostToolUse` observations stay in the local audit. A post-tool
   event is uploaded separately only when it adds a failure, elevated risk,
-  anomalous result, PII summary, or another material security finding.
+  anomalous result, PII summary, or another material security finding. A
+  material Claude Code `PostToolBatch` event remains reportable when it blocks
+  model continuation, using only a static finding summary and aggregate counts.
 - Reportable native events use the original tool action for their safe summary,
   including post-tool shell commands and file basenames. If no raw value can be
   retained safely, the preview falls back to a bounded tool name plus static

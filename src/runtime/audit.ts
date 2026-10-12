@@ -11,11 +11,13 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     agentHost: event.agentHost,
     actionType: event.actionType,
     toolName: redactPreview(event.toolName, 160),
-    input: isLlmTrafficEvent(event)
-      ? '[LOCAL_ONLY_LLM_CONTENT]'
-      : nativeHook
-        ? nativeHookAuditInput(event)
-        : redactPreview(event.input),
+    input: isClaudePostToolBatchEvent(event)
+      ? nativeHookAuditInput(event)
+      : isLlmTrafficEvent(event)
+        ? '[LOCAL_ONLY_LLM_CONTENT]'
+        : nativeHook
+          ? nativeHookAuditInput(event)
+          : redactPreview(event.input),
     decision: event.decision,
     policyDecision: event.policyDecision,
     riskScore: clampRiskScore(event.riskScore),
@@ -49,6 +51,7 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
  */
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
   if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
+  if (isClaudePostToolBatchEvent(event)) return hasMaterialAuditFinding(event);
   if (event.actionType === 'llm_response') return false;
   if (event.actionType !== 'llm_request') {
     return isExplicitCleanLocalOnlyEvent(event) ? hasMaterialAuditFinding(event) : true;
@@ -111,6 +114,12 @@ function isNativePostToolEvent(event: RuntimeAuditEvent): boolean {
   return event.metadata?.codexHookEvent === 'PostToolUse'
     || event.metadata?.claudeHookEvent === 'PostToolUse'
     || event.metadata?.claudeHookEvent === 'PostToolUseFailure';
+}
+
+function isClaudePostToolBatchEvent(
+  event: Pick<RuntimeAction, 'agentHost' | 'metadata'>,
+): boolean {
+  return event.agentHost === 'claude-code' && event.metadata?.claudeHookEvent === 'PostToolBatch';
 }
 
 function hasPiiSummary(summary: RuntimePiiSummary | undefined): boolean {
@@ -308,6 +317,7 @@ function nativeHookSummarySubject(
   actionType: RuntimeActionType,
   toolName: string,
 ): string {
+  if (isClaudePostToolBatchEvent(event)) return 'PostToolBatch';
   if (!isNativePostToolEvent(event)) return toolName;
   return `${NATIVE_ACTION_DESCRIPTORS[actionType]} via ${toolName}`;
 }

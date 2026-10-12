@@ -878,6 +878,83 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('reports blocked PostToolBatch findings with a useful bounded Cloud summary', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const rawResult = 'personal_email=private.person@corp.invalid';
+    const absolutePath = '/Users/private/workspace/customer-records.txt';
+    const blockedBatch: RuntimeAuditEvent = {
+      ...sampleEvent(),
+      actionId: 'act_blocked_post_tool_batch',
+      agentHost: 'claude-code',
+      actionType: 'llm_request',
+      toolName: 'Tool',
+      input: JSON.stringify({ tool_response: rawResult, file_path: absolutePath }),
+      decision: 'block',
+      policyDecision: 'block',
+      riskScore: 100,
+      riskLevel: 'critical',
+      lifecycleStage: 'post_tool_batch',
+      canBlockCurrentAction: true,
+      coverageLevel: 'partial',
+      enforcementStatus: 'enforced',
+      reasons: [{
+        code: 'PII_EGRESS',
+        severity: 'critical',
+        title: 'Raw sensitive batch title',
+        description: 'Raw sensitive batch description',
+      }],
+      privacySummary: {
+        categories: [{ category: 'email_address', count: 1 }],
+        valueCount: 1,
+      },
+      metadata: {
+        claudeHookEvent: 'PostToolBatch',
+        continuationBlockedOnly: true,
+        resumeRetransmissionGuaranteed: false,
+        filePathCount: 1,
+        serializedResultBytes: 4096,
+        redactedBytes: 64,
+      },
+    };
+
+    assert.equal(shouldReportAuditEventToCloud(blockedBatch), true);
+
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push(String(init?.body ?? ''));
+      return jsonResponse({ success: true, data: { accepted: 1, rejected: 0 } }, 202);
+    }) as typeof fetch;
+
+    try {
+      const client = new AgentGuardCloudClient({
+        cloudUrl: 'https://agentguard.example',
+        apiKey: 'ag_live_test_key_123456',
+      });
+      await client.ingestEvents([blockedBatch]);
+      assert.equal(requests.length, 1);
+
+      const payload = JSON.parse(requests[0]!) as { events?: RuntimeAuditEvent[] };
+      const uploaded = payload.events?.[0];
+      assert.ok(uploaded);
+      assert.equal(uploaded.input, 'PostToolBatch: Sensitive data exposure');
+      assert.equal(uploaded.decision, 'block');
+      assert.equal(uploaded.lifecycleStage, 'post_tool_batch');
+      assert.deepEqual(uploaded.privacySummary, blockedBatch.privacySummary);
+      assert.deepEqual(uploaded.metadata, {
+        claudeHookEvent: 'PostToolBatch',
+        filePathCount: 1,
+        serializedResultBytes: 4096,
+        redactedBytes: 64,
+        continuationBlockedOnly: true,
+        resumeRetransmissionGuaranteed: false,
+      });
+      assert.equal(uploaded.reasons[0]?.title, 'Sensitive data exposure');
+      assert.doesNotMatch(requests[0]!, /private\.person|customer-records|Raw sensitive batch/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('keeps clean DSH, Codex, and Claude Code tool events out of Cloud ingest', async () => {
     const originalFetch = globalThis.fetch;
     const requests: string[] = [];
