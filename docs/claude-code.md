@@ -38,7 +38,7 @@ Routine successful `PostToolUse` observations remain in the local audit and are 
 
 `PostToolUseFailure` records only redacted failure type/summary and coverage. It cannot replace or block a failed tool's output. Whether a particular Claude Code version includes failed results in a following `PostToolBatch.tool_calls[].tool_response` is `unverified` until tested on that version; if absent, the failure-output path is `unsupported`.
 
-`PostToolBatch` scans each official `tool_calls[].tool_response` result Claude is about to use, records bounded file-path, byte, and redaction counts, and can stop the agentic loop before the next model call. Tool reads and side effects have already occurred. Existing transcript content is not removed, and a resumed session is not guaranteed to suppress retransmission.
+`PostToolBatch` scans each official `tool_calls[].tool_response` result Claude is about to use, records bounded file-path, byte, and redaction counts, and can stop the agentic loop before the next model call. Material findings are uploaded even when continuation is blocked, using only a bounded tool-and-finding summary, static policy titles, and aggregate counts; raw tool results, sensitive values, and absolute paths remain local. Tool reads and side effects have already occurred. Existing transcript content is not removed, and a resumed session is not guaranteed to suppress retransmission.
 
 `ConfigChange` reads the event source and, when `file_path` is present, at most the first 256 KiB of new local file content to detect endpoint changes, key forwarding, and dangerous permissions. Source-only events remain metadata-only partial coverage. A block prevents the current session from applying the change; it does not roll back the file on disk.
 

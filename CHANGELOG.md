@@ -10,6 +10,9 @@
 - Native web-fetch audit events now retain a bounded sanitized destination instead of a generic placeholder, without uploading URL credentials, fragments, query values, or sensitive path segments.
 - Native file, configuration-change, model-switch, and policy-reason events now retain bounded allowlisted summaries instead of generic placeholders, without uploading paths, contents, patch bodies, endpoints, credentials, or raw reason text.
 
+### Fixed
+- Blocked Claude Code `PostToolBatch` findings now reach Cloud ingest with a bounded semantic summary and batch counts, while raw tool results, sensitive values, and absolute paths remain local.
+
 ## [1.2.1] - 2026-09-29
 
 ### Added
