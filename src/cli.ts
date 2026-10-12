@@ -1330,7 +1330,10 @@ function printPrivacyEnhancementHint(config: AgentGuardConfig): void {
   console.log('Optional: enhanced privacy detection is available but off.');
   console.log('  Local rules find personal data written as `field: value`. They miss most');
   console.log('  of it in prose, which is the shape prompts and chat logs take.');
-  console.log('  agentguard privacy status            see what enabling it would send');
+  console.log('');
+  console.log('  agentguard privacy enable            shows what it sends, then asks you to confirm');
+  console.log('  agentguard privacy enable --yes      confirm and turn it on');
+  console.log('  export TYPESAFE_API_KEY=<key>        supply the key without writing it to disk');
 }
 
 function printInitGuidanceIfNeeded(config: AgentGuardConfig): void {

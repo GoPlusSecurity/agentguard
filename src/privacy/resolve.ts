@@ -59,10 +59,21 @@ export function resolvePrivacyMode(config: AgentGuardConfig): ResolvedPrivacyMod
   return { adjudicator, options, budget, requestedMode };
 }
 
-/** One-line description for `status` and `doctor`. */
+/**
+ * One-line description for `status` and `doctor`.
+ *
+ * The actionable command is part of this line rather than a separate block
+ * below it. Agent hosts reformat CLI output into their own tables and keep the
+ * status value while dropping surrounding prose, which left users seeing that
+ * the feature was off with no way to find out how to turn it on.
+ */
 export function describePrivacyMode(config: AgentGuardConfig): string {
   const resolved = resolvePrivacyMode(config);
-  if (resolved.requestedMode === 'off') return 'off (local rules only; prose coverage limited)';
-  if (resolved.warning) return 'jev (ENABLED BUT INACTIVE — no API key; running local-only)';
-  return `jev (spans and sentences are sent to ${config.privacy?.endpoint ?? 'api.typesafe.ai'} for judgment)`;
+  if (resolved.requestedMode === 'off') {
+    return 'off — local rules only, limited coverage of prose. Turn on: `agentguard privacy enable`';
+  }
+  if (resolved.warning) {
+    return 'jev — ENABLED BUT INACTIVE, no API key. Fix: `export TYPESAFE_API_KEY=<key>` or `agentguard privacy enable --api-key <key>`';
+  }
+  return `jev — active, sending spans and sentences to ${config.privacy?.endpoint ?? 'api.typesafe.ai'} for judgment`;
 }
