@@ -12,7 +12,7 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
     actionType: event.actionType,
     toolName: redactPreview(event.toolName, 160),
     input: isClaudePostToolBatchEvent(event)
-      ? nativeHookAuditInput(event)
+      ? claudePostToolBatchAuditInput(event)
       : isLlmTrafficEvent(event)
         ? '[LOCAL_ONLY_LLM_CONTENT]'
         : nativeHook
@@ -51,7 +51,7 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
  */
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
   if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
-  if (isClaudePostToolBatchEvent(event)) return hasMaterialAuditFinding(event);
+  if (isClaudePostToolBatchEvent(event)) return shouldReportClaudePostToolBatchEvent(event);
   if (event.actionType === 'llm_response') return false;
   if (event.actionType !== 'llm_request') {
     return isExplicitCleanLocalOnlyEvent(event) ? hasMaterialAuditFinding(event) : true;
@@ -63,6 +63,15 @@ export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean
   const stoppedBeforeEgress = event.canBlockCurrentAction !== false
     && (event.decision === 'block' || event.decision === 'require_approval');
   return !stoppedBeforeEgress;
+}
+
+function shouldReportClaudePostToolBatchEvent(event: RuntimeAuditEvent): boolean {
+  return event.decision === 'block'
+    && event.enforcementStatus === 'enforced'
+    && event.lifecycleStage === 'post_tool_batch'
+    && event.canBlockCurrentAction === true
+    && event.metadata?.continuationBlockedOnly === true
+    && hasMaterialAuditFinding(event);
 }
 
 function isExplicitCleanLocalOnlyEvent(event: RuntimeAuditEvent): boolean {
@@ -192,6 +201,14 @@ export function cloudSafeReasons(reasons: PolicyReason[]): PolicyReason[] {
     evidence: reason.evidence === undefined ? undefined : '[REDACTED]',
     remediation: reason.remediation === undefined ? undefined : '[REDACTED]',
   }));
+}
+
+function claudePostToolBatchAuditInput(event: RuntimeAuditEvent): string {
+  const reason = event.reasons.find((candidate) => SAFE_RULE_ID.test(candidate.code));
+  const finding = reason
+    ? SAFE_REASON_TITLES[reason.code] ?? 'Security finding'
+    : 'Security finding';
+  return `PostToolBatch: ${finding}`.slice(0, 500);
 }
 
 /**
