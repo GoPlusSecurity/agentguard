@@ -199,15 +199,22 @@ function enforceNativeHookDecision(
   const scansVisibleContent = event === 'UserPromptSubmit' || event === 'PostToolUse'
     || claudeEvent === 'UserPromptSubmit' || claudeEvent === 'PostToolUse'
     || claudeEvent === 'PostToolBatch' || claudeEvent === 'PostToolUseFailure'
-    || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange';
+    || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange'
+    || (claudeEvent === 'PreToolUse' && action.toolName === 'WebSearch');
   const blockingVisibleModelInput = action.actionType === 'llm_request'
     && action.canBlockCurrentAction !== false
     && (action.lifecycleStage === 'user_prompt'
       || action.lifecycleStage === 'run_start'
       || action.lifecycleStage === 'model_request'
       || action.lifecycleStage === 'post_tool_batch');
+  const visibleContentNeedsProtection = claudeEvent === 'PostToolUse'
+      && action.toolName === 'WebSearch' && typeof action.metadata?.claudeWebSearchSensitive === 'boolean'
+    ? action.metadata.claudeWebSearchSensitive
+    : claudeEvent === 'PostToolBatch' && typeof action.metadata?.claudeBatchSensitive === 'boolean'
+      ? action.metadata.claudeBatchSensitive
+      : redactText(action.input) !== action.input;
   const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
-    && (redactText(action.input) !== action.input || action.metadata?.configSensitive === true);
+    && (visibleContentNeedsProtection || action.metadata?.configSensitive === true);
   const untrustedExpansion = claudeEvent === 'UserPromptExpansion'
     && isUntrustedClaudePromptExpansion(action.metadata);
   const explicitModelSwitch = claudeEvent === 'PreModelSwitch'
@@ -264,6 +271,12 @@ function withFriendlySensitiveDataReason(
     || action.actionType === 'llm_response'
     || decision.reasons.some((reason) => reason.code === 'PII_EGRESS');
   if (!relevantLifecycle) return decision;
+  // Incomplete model-payload visibility is not evidence that a number from a
+  // public search result belongs to a person. Do not convert that warning into
+  // a false bank-account exposure reason.
+  if (action.metadata?.claudeHookEvent === 'PostToolBatch'
+      && action.metadata.claudeBatchSensitive === false
+      && !decision.ruleEvaluations?.some((rule) => rule.ruleId === 'PII_EGRESS' && rule.detected)) return decision;
 
   const summaries = summarizeSensitiveData(action.input).slice(0, 3);
   if (summaries.length === 0) return decision;
@@ -711,6 +724,11 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const verifiedOutput = claudeHookEvent === 'PostToolUse'
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
     : undefined;
+  const claudeWebSearchSensitive = claudeHookEvent === 'PostToolUse' && toolName === 'WebSearch'
+    && verifiedOutput !== undefined
+    ? JSON.stringify(verifiedOutput) !== JSON.stringify(raw?.tool_response ?? raw?.toolResponse)
+      || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
+    : undefined;
   const displayMessage = claudeHookEvent === 'MessageDisplay'
     ? firstString(raw?.delta)
     : '';
@@ -771,12 +789,14 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
+      ...(claudeBatch && process.env.TOOL_INPUT ? { claudeBatchSensitive: undefined } : {}),
       ...(claudeConfig ? {
         configBytesRead: claudeConfig.bytesRead,
         configDangerous: claudeConfig.dangerous,
         configSensitive: claudeConfig.sensitive,
       } : {}),
       ...(verifiedOutput !== undefined ? { claudeUpdatedToolOutput: verifiedOutput } : {}),
+      ...(claudeWebSearchSensitive !== undefined && !process.env.TOOL_INPUT ? { claudeWebSearchSensitive } : {}),
       ...(displayMessage && redactText(displayMessage) !== displayMessage
         ? { claudeUpdatedMessage: redactText(displayMessage) }
         : {}),
@@ -1143,6 +1163,7 @@ function claudeBatchFacts(
   const responses = raw?.tool_calls ?? [];
   const serialized = JSON.stringify(responses);
   const filePaths = collectClaudeBatchFilePaths(responses);
+  const containsSensitiveContent = hasSensitiveClaudeBatchContent(responses);
   return {
     llm: {
       schemaVersion: 1,
@@ -1159,10 +1180,34 @@ function claudeBatchFacts(
     metadata: {
       filePathCount: filePaths.length,
       serializedResultBytes: Buffer.byteLength(serialized, 'utf8'),
-      redactedBytes: Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8'),
+      redactedBytes: containsSensitiveContent
+        ? Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8')
+        : 0,
+      claudeBatchSensitive: containsSensitiveContent,
       filePaths,
     },
   };
+}
+
+function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
+  if (!Array.isArray(responses)) return redactText(JSON.stringify(responses)) !== JSON.stringify(responses);
+  return responses.some((call: unknown) => {
+    if (!isPlainRecord(call) || call.tool_name !== 'WebSearch') {
+      const serialized = JSON.stringify(call);
+      return redactText(serialized) !== serialized;
+    }
+    const output = call.tool_response ?? call.toolResponse;
+    const verified = redactVerifiedClaudeToolOutput('WebSearch', output);
+    if (verified === undefined) {
+      const serialized = JSON.stringify(call);
+      return redactText(serialized) !== serialized;
+    }
+    // Do not let a public-search result relax checks on the query, call
+    // metadata, or another tool result in the same batch.
+    const { tool_response: _response, toolResponse: _camelResponse, ...rest } = call;
+    const other = JSON.stringify(rest);
+    return redactText(other) !== other || JSON.stringify(verified) !== JSON.stringify(output);
+  });
 }
 
 function collectClaudeBatchFilePaths(value: unknown): string[] {
@@ -1190,7 +1235,7 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
   const verifiedTool = toolName === 'Read' || toolName === 'Bash' || toolName === 'PowerShell'
     || toolName === 'WebFetch' || toolName === 'WebSearch' || lower.startsWith('mcp__');
   if (!verifiedTool) return undefined;
-  if (typeof output === 'string') return redactText(output);
+  if (typeof output === 'string') return redactText(output, { skipBareNumericIdentifiers: toolName === 'WebSearch' });
   if (!isPlainRecord(output)) return undefined;
   const hasVerifiedShape = toolName === 'Read'
     ? typeof output.content === 'string'
@@ -1199,15 +1244,23 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
       : lower.startsWith('mcp__')
         ? Array.isArray(output.content)
         : typeof output.content === 'string' || Array.isArray(output.content);
-  return hasVerifiedShape ? redactStructuredClaudeOutput(output) : undefined;
+  return hasVerifiedShape ? redactStructuredClaudeOutput(output, toolName === 'WebSearch') : undefined;
 }
 
-function redactStructuredClaudeOutput(value: unknown): unknown {
-  if (typeof value === 'string') return redactText(value);
-  if (Array.isArray(value)) return value.map(redactStructuredClaudeOutput);
+const SENSITIVE_IDENTIFIER_FIELD = /(?:card.?number|credit.?card|debit.?card|bank.?account|national.?id|identity.?number|passport|ssn|身份证|银行卡)/i;
+// A plain `token` field is often the name of a cryptocurrency, not a credential.
+const SENSITIVE_CREDENTIAL_FIELD = /^(?:api[_-]?key|access[_-]?(?:key|token)|authorization|bearer|password|passwd|secret(?:[_-]?key)?|private[_-]?key|client[_-]?secret)$/i;
+
+function redactStructuredClaudeOutput(value: unknown, publicSearch = false): unknown {
+  if (typeof value === 'string') return redactText(value, { skipBareNumericIdentifiers: publicSearch });
+  if (Array.isArray(value)) return value.map((item) => redactStructuredClaudeOutput(item, publicSearch));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => [key, redactStructuredClaudeOutput(item)]));
+    .map(([key, item]) => [key,
+      publicSearch && SENSITIVE_CREDENTIAL_FIELD.test(key) && typeof item === 'string' && item.length >= 8
+        ? '[REDACTED]'
+        : redactStructuredClaudeOutput(item, publicSearch && !SENSITIVE_IDENTIFIER_FIELD.test(key)),
+    ]));
 }
 
 function pickEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {

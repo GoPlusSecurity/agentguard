@@ -1,5 +1,5 @@
 import type { LlmEgressRequestMetadata, PolicyReason } from './types.js';
-import { redactPiiText } from '../scanner/rules/privacy.js';
+import { redactPiiText, type PiiRedactionOptions } from '../scanner/rules/privacy.js';
 
 const REDACTED = '[REDACTED]';
 
@@ -78,8 +78,8 @@ const REDACTION_PATTERNS: Array<[RegExp, (match: string) => string]> = [
   ],
 ];
 
-export function redactText(value: unknown): string {
-  let redacted = redactPiiText(String(value ?? ''));
+export function redactText(value: unknown, options: PiiRedactionOptions = {}): string {
+  let redacted = redactPiiText(String(value ?? ''), options);
   for (const [pattern, replacement] of PROSE_PII_PATTERNS) {
     redacted = redacted.replace(pattern, replacement);
   }
@@ -236,14 +236,18 @@ function redactUrlSecrets(value: string): string {
   return value.replace(/https?:\/\/[^\s'"`<>]+/gi, (rawUrl) => {
     try {
       const url = new URL(rawUrl);
+      let changed = false;
       for (const key of [...url.searchParams.keys()]) {
         if (SENSITIVE_KEY_PATTERN.test(key)) {
           url.searchParams.set(key, REDACTED);
+          changed = true;
         }
       }
-      if (url.username) url.username = REDACTED;
-      if (url.password) url.password = REDACTED;
-      return url.toString();
+      if (url.username) { url.username = REDACTED; changed = true; }
+      if (url.password) { url.password = REDACTED; changed = true; }
+      // URL normalization alone is not a privacy finding. In particular a
+      // search-result link without a trailing slash must not trip block 100.
+      return changed ? url.toString() : rawUrl;
     } catch {
       return rawUrl;
     }
