@@ -1,6 +1,7 @@
 import type { PiiCategory } from '../runtime/types.js';
 import type { PiiCandidate } from './types.js';
 import { outboundContext } from './redact-outbound.js';
+import { isNonPiiNumericContext } from '../scanner/rules/privacy.js';
 
 interface Extractor {
   kind: string;
@@ -23,16 +24,16 @@ interface Extractor {
  */
 const EXTRACTORS: Extractor[] = [
   // Mainland China resident ID: 18 digits with optional X check digit.
-  { kind: 'national_id_cn', category: 'national_id', pattern: /(?<!\d)\d{17}[\dXx](?!\d)/g },
+  { kind: 'national_id_cn', category: 'national_id', pattern: /(?<![\d.])\d{17}[\dXx](?!\d)(?!\.\d)/g },
   // US SSN, written or bare.
   { kind: 'ssn_us', category: 'national_id', pattern: /(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)/g },
   // Passport-shaped identifiers.
   { kind: 'passport', category: 'national_id', pattern: /\b[A-Z]{1,2}\d{7,9}\b/g },
   // Payment cards and long account numbers.
-  { kind: 'account_number', category: 'bank_account', pattern: /(?<!\d)\d{15,19}(?!\d)/g },
+  { kind: 'account_number', category: 'bank_account', pattern: /(?<![\d.])\d{15,19}(?!\d)(?!\.\d)/g },
   { kind: 'iban', category: 'bank_account', pattern: /\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g },
   // Mainland China mobile and E.164.
-  { kind: 'mobile_cn', category: 'phone_number', pattern: /(?<!\d)1[3-9]\d{9}(?!\d)/g },
+  { kind: 'mobile_cn', category: 'phone_number', pattern: /(?<![\d.])1[3-9]\d{9}(?!\d)(?!\.\d)/g },
   { kind: 'phone_e164', category: 'phone_number', pattern: /\+[1-9]\d{7,14}(?!\d)/g },
   { kind: 'phone_dashed', category: 'phone_number', pattern: /(?<![\d-])\d{3}-\d{3,4}-\d{4}(?![\d-])/g },
   { kind: 'email', category: 'email_address', pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
@@ -114,6 +115,8 @@ export function extractCandidates(
 
       const start = group === 0 ? (match.index ?? 0) : groupOffset(match, group);
       if (start < 0) continue;
+      if ((extractor.kind === 'national_id_cn' || extractor.kind === 'account_number')
+          && isNonPiiNumericContext(text, start, start + value.length)) continue;
 
       const chunk = chunkFor(start);
       found.push({

@@ -13,7 +13,7 @@ const EMAIL_PATTERN = /["']?(?:personal[_-]?email|email[_-]?(?:address|addr)?|e-
 const DATASET_PATTERN = /["']?(?:users?|customers?|patients?|people|persons?|records?|dataset|用户数据|客户数据|患者数据)["']?\s*[:=]\s*[\[{]/i;
 
 const EMAIL_CANDIDATE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const PHONE_CANDIDATE = /(?<!\d)(?:\+[1-9]\d{7,14}|1[3-9]\d{9})(?!\d)/g;
+const PHONE_CANDIDATE = /(?<![\d.])(?:\+[1-9]\d{7,14}|1[3-9]\d{9})(?!\d)(?!\.\d)/g;
 const KNOWN_TEST_CARD_NUMBERS = new Set([
   '4111111111111111',
   '4242424242424242',
@@ -22,6 +22,31 @@ const KNOWN_TEST_CARD_NUMBERS = new Set([
   '378282246310005',
   '6011111111111117',
 ]);
+
+// A checksum alone is not evidence of a bank account: one in ten arbitrary
+// long numbers passes Luhn. Limit this exclusion to an exact, non-PII data
+// field (including JSON embedded as an escaped tool-output string). Explicit
+// national-ID / payment fields still go through the labeled rules above.
+const TECHNICAL_NUMBER_FIELDS = new Set([
+  'id', 'result_id', 'resultid', 'search_id', 'searchid', 'search_result_id', 'searchresultid', 'timestamp', 'time_stamp',
+  'created_at', 'updated_at', 'createdat', 'updatedat', 'rank', 'ranking',
+  'status', 'status_code', 'statuscode', 'price', 'token_price', 'tokenprice', 'market_price', 'marketprice',
+  'market_cap', 'marketcap', 'volume', 'liquidity', 'rate', 'block_number', 'blocknumber',
+  'block_height', 'blockheight', 'decimals',
+]);
+
+/** Exclude only unambiguously numeric context; unknown bare numbers stay protected. */
+export function isNonPiiNumericContext(content: string, start: number, end: number): boolean {
+  // Do not interpret the fractional or integral part of a decimal as an ID.
+  if (content[start - 1] === '.' || (content[end] === '.' && /\d/.test(content[end + 1] ?? ''))) return true;
+
+  const prefix = content.slice(Math.max(0, start - 100), start);
+  const field = /(?:^|[,{]\s*|\s+)(\\*["'])?([a-z][a-z0-9_-]*)\\*["']?\s*[:=]\s*\\*["']?$/i.exec(prefix);
+  if (!field || !TECHNICAL_NUMBER_FIELDS.has(field[2].toLowerCase())) return false;
+  // An unqualified prose `id: ...` can mean someone's identity number. Treat
+  // `id` as a search-result identifier only when it is a quoted JSON key.
+  return field[2].toLowerCase() !== 'id' || Boolean(field[1]);
+}
 
 export interface PiiCategoryDetection {
   category: PiiCategory;
@@ -159,12 +184,14 @@ export function redactPiiText(content: string): string {
     isValidEmailAddress(value) ? '[REDACTED:PII_EMAIL_ADDRESS]' : value);
   redacted = redacted.replace(PHONE_CANDIDATE, (value) =>
     isValidPhoneNumber(value) ? '[REDACTED:PII_PHONE_NUMBER]' : value);
-  redacted = redacted.replace(/\b\d{17}[\dX]\b/gi, (value) =>
-    isValidNationalIdentifier(value) ? '[REDACTED:PII_NATIONAL_ID]' : value);
+  redacted = redacted.replace(/(?<![\d.])\d{17}[\dX](?!\d)(?!\.\d)/gi, (value, offset: number, source: string) =>
+    !isNonPiiNumericContext(source, offset, offset + value.length) && isValidNationalIdentifier(value)
+      ? '[REDACTED:PII_NATIONAL_ID]' : value);
   redacted = redacted.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/gi, (value) =>
     isValidBankIdentifier(value, 'iban') ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
-  redacted = redacted.replace(/(?<!\d)\d{12,19}(?!\d)/g, (value) =>
-    isValidBankIdentifier(value, 'card_number') ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
+  redacted = redacted.replace(/(?<![\d.])\d{12,19}(?!\d)(?!\.\d)/g, (value, offset: number, source: string) =>
+    !isNonPiiNumericContext(source, offset, offset + value.length) && isValidBankIdentifier(value, 'card_number')
+      ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
 
   if (LOCATION_PATTERN.test(original) && countCoordinatePairs(original) >= 3) {
     redacted = redacted.replace(
