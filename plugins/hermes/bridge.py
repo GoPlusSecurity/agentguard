@@ -148,6 +148,7 @@ class AgentGuardBridge:
         session_id: Optional[str] = None,
         cwd: Optional[str] = None,
         task_id: Optional[str] = None,
+        result: Any = None,
     ) -> Optional[Dict[str, str]]:
         """Return a Hermes block dict, or ``None`` to allow.
 
@@ -169,7 +170,7 @@ class AgentGuardBridge:
                 result = self._evaluate_daemon(
                     action_type=TOOL_ACTION_TYPE[tool_name],
                     tool_name=tool_name,
-                    raw_input=_build_payload(event, tool_name, args, session_id, cwd, task_id),
+                    raw_input=_build_payload(event, tool_name, args, session_id, cwd, task_id, result),
                     session_id=session_id,
                     phase=phase,
                 )
@@ -189,7 +190,7 @@ class AgentGuardBridge:
                 "AGENTGUARD_BIN / AGENTGUARD_HERMES_HOOK",
             )
 
-        payload = _build_payload(event, tool_name, args, session_id, cwd, task_id)
+        payload = _build_payload(event, tool_name, args, session_id, cwd, task_id, result)
         cmd = list(argv)
         if mode == "protect":
             cmd += [
@@ -622,8 +623,8 @@ def _validate_mapped_payload(tool_name: str, args: Dict[str, Any]) -> Optional[s
     return "Hermes %s payload is missing %s" % (tool_name, " / ".join(fields))
 
 
-def _build_payload(event, tool_name, args, session_id, cwd, task_id) -> Dict[str, Any]:
-    return {
+def _build_payload(event, tool_name, args, session_id, cwd, task_id, result=None) -> Dict[str, Any]:
+    payload = {
         "hook_event_name": event,
         "tool_name": tool_name,
         "tool_input": args or {},
@@ -631,6 +632,11 @@ def _build_payload(event, tool_name, args, session_id, cwd, task_id) -> Dict[str
         "cwd": cwd,
         "extra": {"task_id": task_id} if task_id else {},
     }
+    if event == "post_tool_call" and result is not None:
+        # Only host-supplied results establish a public-search output boundary;
+        # arguments alone are a request and must never receive that exemption.
+        payload["tool_response"] = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    return payload
 
 
 def _build_llm_payload(

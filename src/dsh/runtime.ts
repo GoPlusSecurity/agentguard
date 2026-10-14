@@ -7,6 +7,11 @@ import {
   type RuntimeEvaluation,
 } from '../runtime/decision.js';
 import type { RuntimeAction, RuntimeActionType, RuntimeAuditEvent, RuntimeDecision } from '../runtime/types.js';
+import {
+  hasSensitivePublicSearchResult, isNativePublicSearchTool, isVisiblePublicSearchResult,
+  rememberPublicSearchResult,
+} from '../runtime/public-search.js';
+import { redactText } from '../runtime/redaction.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
   mergeDshPostDecisions,
@@ -265,22 +270,40 @@ export async function observeDshToolResult(
 ): Promise<DshRuntimeObservation | null> {
   if (isAgentGuardDshTool(exec.name)) return null;
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
-  if (action.actionType !== 'network' && action.actionType !== 'browser') return null;
+  const searchResult = observedDshSearchResult(exec, result);
+  if (action.actionType !== 'network' && action.actionType !== 'browser' && searchResult === undefined) return null;
+  if (searchResult !== undefined) {
+    action.input = JSON.stringify(searchResult.value);
+    action.lifecycleStage = 'post_tool';
+    action.canBlockCurrentAction = false;
+  }
   action.metadata = {
     ...action.metadata,
     runtimePhase: 'post',
     hookPhase: 'post',
     responseIsError: result.isError,
+    ...(searchResult !== undefined ? {
+      ...(searchResult.verified ? { publicSearchOutput: true } : {}),
+      publicSearchSensitive: (searchResult.verified
+        ? hasSensitivePublicSearchResult(searchResult.value)
+        : redactText(JSON.stringify(searchResult.value)) !== JSON.stringify(searchResult.value))
+        || redactText(JSON.stringify(exec.arguments)) !== JSON.stringify(exec.arguments),
+    } : {}),
     ...responseMetadata(result),
   };
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  return evaluateAndAuditDshAction(
+  const observed = await evaluateAndAuditDshAction(
     action,
     config,
     dependencies,
     dependencies.runtimeMode ?? DSH_RUNTIME_MODE,
     false
   );
+  if (searchResult?.verified && observed.evaluation.decision.decision === 'allow'
+      && action.metadata?.publicSearchSensitive === false) {
+    rememberPublicSearchResult('dsh', action.sessionId, searchResult.value);
+  }
+  return observed;
 }
 
 export async function protectDshToolResult(
@@ -290,16 +313,34 @@ export async function protectDshToolResult(
 ): Promise<DshRuntimeObservation | null> {
   if (isAgentGuardDshTool(exec.name)) return null;
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
-  if (action.actionType !== 'network' && action.actionType !== 'browser') return null;
+  const searchResult = observedDshSearchResult(exec, result);
+  if (action.actionType !== 'network' && action.actionType !== 'browser' && searchResult === undefined) return null;
+  if (searchResult !== undefined) {
+    action.input = JSON.stringify(searchResult.value);
+    action.lifecycleStage = 'post_tool';
+    action.canBlockCurrentAction = true;
+  }
   action.metadata = {
     ...action.metadata,
     runtimePhase: 'post',
     hookPhase: 'post',
     responseIsError: result.isError,
+    ...(searchResult !== undefined ? {
+      ...(searchResult.verified ? { publicSearchOutput: true } : {}),
+      publicSearchSensitive: (searchResult.verified
+        ? hasSensitivePublicSearchResult(searchResult.value)
+        : redactText(JSON.stringify(searchResult.value)) !== JSON.stringify(searchResult.value))
+        || redactText(JSON.stringify(exec.arguments)) !== JSON.stringify(exec.arguments),
+    } : {}),
     ...responseMetadata(result),
   };
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-  return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, 'block-only');
+  const observed = await evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, 'block-only');
+  if (searchResult?.verified && observed.evaluation.decision.decision === 'allow'
+      && action.metadata?.publicSearchSensitive === false) {
+    rememberPublicSearchResult('dsh', action.sessionId, searchResult.value);
+  }
+  return observed;
 }
 
 async function evaluateAndAuditDshAction(
@@ -329,7 +370,26 @@ async function evaluateAndAuditDshAction(
     runtimeMode,
     dependencies.unknownToolDecision ?? 'ask',
   );
-  const evaluation = applyDshOwnerPolicy(guardedEvaluation, action, dependencies.ownerPolicies);
+  const ownedEvaluation = applyDshOwnerPolicy(guardedEvaluation, action, dependencies.ownerPolicies);
+  const preSearchSensitive = phaseIsPreSearch(action) && redactText(action.input) !== action.input;
+  const evaluation = (action.metadata?.publicSearchSensitive === true || preSearchSensitive)
+    && ownedEvaluation.decision.decision !== 'block'
+    ? { ...ownedEvaluation, decision: {
+      ...ownedEvaluation.decision,
+      decision: 'block' as const,
+      policyDecision: 'block' as const,
+      riskScore: 100,
+      riskLevel: 'critical' as const,
+      reasons: [...ownedEvaluation.decision.reasons, {
+        code: 'PII_EGRESS', severity: 'critical' as const,
+        title: preSearchSensitive ? 'Sensitive web-search request' : 'Sensitive public-search result',
+        description: preSearchSensitive
+          ? 'The outgoing search query contains sensitive data.'
+          : 'Confirmed sensitive content in a model-facing search result.',
+        evidence: '[REDACTED]',
+      }],
+    } }
+    : ownedEvaluation;
   const phase: DshRuntimePhase = action.metadata?.runtimePhase === 'post' ? 'post' : 'pre';
   const shadowPlan = planDshEnforcement(evaluation.decision.decision, phase);
   const decisionApplied = enforcementApplied === 'block-only'
@@ -364,6 +424,24 @@ async function evaluateAndAuditDshAction(
   }
   if (client.connected) await reportDshEvent(client, config, event);
   return { action, evaluation, event };
+}
+
+function phaseIsPreSearch(action: RuntimeAction): boolean {
+  return action.metadata?.runtimePhase === 'pre'
+    && action.actionType === 'web_search'
+    && isNativePublicSearchTool('dsh', action.toolName);
+}
+
+function observedDshSearchResult(
+  exec: DshToolExecution, result: DshToolExecutionResult,
+): { value: unknown; verified: boolean } | undefined {
+  if (!isNativePublicSearchTool('dsh', exec.name)) return undefined;
+  const content = result.content?.length ? result.content : undefined;
+  const value = result.value;
+  if (content === undefined && value === undefined) return undefined;
+  const output = content && value !== undefined ? { content, value } : content ?? value;
+  const visibleText = content?.some((block) => block.type === 'text' && typeof block.text === 'string') ?? false;
+  return { value: output, verified: !result.isError && (visibleText || isVisiblePublicSearchResult(value)) };
 }
 
 export function createDshPreExecuteObserver(

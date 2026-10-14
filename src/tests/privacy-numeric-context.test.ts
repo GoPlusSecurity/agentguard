@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { extractCandidates } from '../privacy/candidates.js';
 import { chunkLocator, splitChunks } from '../privacy/chunks.js';
 import { AgentGuardCloudClient } from '../cloud/client.js';
+import { observeDshToolResult, protectDshToolCall, protectDshToolResult } from '../dsh/runtime.js';
+import { buildDshLlmRequestAction } from '../dsh/llm-privacy.js';
+import { resetPublicSearchProvenanceForTests } from '../runtime/public-search.js';
 import { shouldReportAuditEventToCloud } from '../runtime/audit.js';
 import { redactText, summarizeSensitiveData } from '../runtime/redaction.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
@@ -260,5 +263,178 @@ describe('Numeric PII context', () => {
     assert.equal(result.decision.riskScore, 100);
     assert.ok(result.decision.reasons.some((reason) => reason.code === 'PII_EGRESS'));
     assert.equal(shouldReportAuditEventToCloud(result.event), true);
+  });
+
+  it('uses observed search results, not search arguments, across Codex, OpenClaw/QClaw, and Hermes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-cross-agent-search-'));
+    const config: AgentGuardConfig = {
+      version: 1, level: 'balanced', policyCachePath: join(root, 'policy.json'),
+      auditPath: join(root, 'audit.jsonl'), eventSpoolPath: join(root, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+    const number = '2026101215253008';
+    for (const [agentHost, toolName, raw] of [
+      ['codex', 'web_search', { hook_event_name: 'PostToolUse', tool_name: 'web_search',
+        tool_input: { query: 'coin price' }, tool_response: { content: JSON.stringify({ id: number }) } }],
+      ['openclaw', 'web_search', { toolName: 'web_search', params: { query: 'coin price' },
+        result: { content: JSON.stringify({ id: number }) } }],
+      ['qclaw', 'web_search', { toolName: 'web_search', params: { query: 'coin price' },
+        result: { content: JSON.stringify({ id: number }) } }],
+      ['hermes', 'web_search', { hook_event_name: 'post_tool_call', tool_name: 'web_search',
+        tool_input: { query: 'coin price' }, tool_response: { content: JSON.stringify({ id: number }) } }],
+    ] as const) {
+      const result = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
+        phase: 'post', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`, ...raw } });
+      assert.ok(result, agentHost);
+      assert.equal(result.decision.decision, 'allow', agentHost);
+      assert.equal(result.decision.riskScore, 0, agentHost);
+      assert.equal(result.event.metadata?.publicSearchOutput, true, agentHost);
+      assert.equal(shouldReportAuditEventToCloud(result.event), false, agentHost);
+
+      const queryOnly = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
+        phase: 'pre', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`, ...raw,
+          ...(agentHost === 'openclaw' || agentHost === 'qclaw'
+            ? { result: undefined, params: { query: '银行卡号 5284917302468138' } }
+            : { tool_response: undefined, tool_input: { query: '银行卡号 5284917302468138' },
+              hook_event_name: agentHost === 'hermes' ? 'pre_tool_call' : 'PreToolUse' }) } });
+      assert.equal(queryOnly?.decision.decision, 'block', `${agentHost}:pre-query`);
+
+      const noResult = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
+        phase: 'post', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`, ...raw,
+          ...(agentHost === 'openclaw' || agentHost === 'qclaw'
+            ? { result: undefined } : { tool_response: undefined }) } });
+      if (noResult) assert.equal(shouldReportAuditEventToCloud(noResult.event), false, `${agentHost}:no-result`);
+
+      const privateValue = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
+        phase: 'post', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`,
+          ...raw, ...(agentHost === 'openclaw' || agentHost === 'qclaw'
+            ? { result: { content: 'card_number: 5284917302468138' } }
+            : { tool_response: { content: 'card_number: 5284917302468138' } }) } });
+      assert.equal(privateValue?.decision.decision, 'block', agentHost);
+      if (agentHost !== 'codex') {
+        assert.ok(privateValue);
+        assert.equal(shouldReportAuditEventToCloud(privateValue.event), false,
+          `${agentHost}:observer result was not intercepted`);
+      }
+
+      const unverified = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
+        phase: 'post', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`,
+          ...raw, ...(agentHost === 'openclaw' || agentHost === 'qclaw'
+            ? { result: { opaque: number } }
+            : { tool_response: { opaque: number } }) } });
+      assert.equal(unverified?.event.metadata?.publicSearchOutput, undefined, agentHost);
+      assert.equal(unverified?.decision.decision, 'block', agentHost);
+    }
+  });
+
+  it('inspects DSH search results without exempting a read result or an unclassified image query', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-dsh-search-'));
+    const config: AgentGuardConfig = {
+      version: 1, level: 'balanced', policyCachePath: join(root, 'policy.json'),
+      auditPath: join(root, 'audit.jsonl'), eventSpoolPath: join(root, 'spool.jsonl'),
+    };
+    writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+    const dependencies = { loadAgentGuardConfig: () => config, fetchPolicyFor: () => undefined, writeAudit() {} };
+    const exec = { name: 'web_search', callId: 'call-search', rootCallId: 'root-search',
+      arguments: { query: 'bitcoin price' }, agent: { id: 'session-search' } };
+    const result = { isError: false, content: [{ type: 'text', text: JSON.stringify({ id: '2026101215253008' }) }] };
+    const allowed = await protectDshToolResult(exec, result, dependencies);
+    assert.equal(allowed?.evaluation.decision.decision, 'allow');
+    assert.equal(allowed?.action.metadata?.publicSearchOutput, true);
+    assert.ok(allowed);
+    assert.equal(shouldReportAuditEventToCloud(allowed.event), false);
+
+    const searchText = result.content[0]!.text;
+    const modelOptions = {
+      provider: 'official', model: 'test-model', sessionId: 'session-search',
+      messages: [{ role: 'tool', content: [{ type: 'tool-result', content: [{ type: 'text', text: searchText }] }] }],
+    };
+    const modelRequest = buildDshLlmRequestAction(modelOptions, 'req-search');
+    assert.match(modelRequest.input, /PUBLIC_SEARCH_NUMBER/);
+    assert.doesNotMatch(modelRequest.input, /2026101215253008/);
+    assert.equal(modelOptions.messages[0]!.content[0]!.content[0]!.text, searchText,
+      'inspection must not rewrite the actual model payload');
+
+    const withUserMessage = buildDshLlmRequestAction({ ...modelOptions,
+      messages: [...modelOptions.messages, { role: 'user', content: [{ type: 'text', text: searchText }] }],
+    }, 'req-user');
+    assert.match(withUserMessage.input, /PUBLIC_SEARCH_NUMBER/);
+    assert.match(withUserMessage.input, /2026101215253008/, 'user content must remain fully inspected');
+
+    const otherSession = buildDshLlmRequestAction({ ...modelOptions, sessionId: 'another-session' }, 'req-other');
+    assert.match(otherSession.input, /2026101215253008/);
+
+    const observed = await observeDshToolResult(exec, result, dependencies);
+    assert.equal(observed?.evaluation.decision.decision, 'allow');
+    const observedSensitive = await observeDshToolResult(exec, {
+      isError: false, content: [{ type: 'text', text: 'card_number: 5284917302468138' }],
+    }, dependencies);
+    assert.ok(observedSensitive);
+    assert.equal(observedSensitive.evaluation.decision.decision, 'block');
+    assert.equal(shouldReportAuditEventToCloud(observedSensitive.event), false);
+    const blocked = await protectDshToolResult(exec, {
+      isError: false, content: [{ type: 'text', text: 'card_number: 5284917302468138' }],
+    }, dependencies);
+    assert.equal(blocked?.evaluation.decision.decision, 'block');
+    assert.equal(blocked?.evaluation.decision.riskScore, 100);
+    assert.ok(blocked);
+    assert.equal(shouldReportAuditEventToCloud(blocked.event), true);
+
+    assert.equal(await protectDshToolResult({ ...exec, name: 'read_file' }, result, dependencies), null);
+    assert.equal(await protectDshToolResult({ ...exec, name: 'image_query' }, result, dependencies), null);
+
+    const preQuery = await protectDshToolCall({ ...exec, arguments: { query: '银行卡号 5284917302468138' } },
+      dependencies);
+    assert.equal(preQuery?.evaluation.decision.decision, 'block');
+  });
+
+  it('keeps Hermes and OpenClaw model-request observers from reclassifying exact search results as user PII', async () => {
+    resetPublicSearchProvenanceForTests();
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'agentguard-search-provenance-'));
+      const config: AgentGuardConfig = {
+        version: 1, level: 'balanced', policyCachePath: join(root, 'policy.json'),
+        auditPath: join(root, 'audit.jsonl'), eventSpoolPath: join(root, 'spool.jsonl'),
+      };
+      writeFileSync(config.policyCachePath, JSON.stringify(getDefaultEffectiveRuntimePolicy()));
+      const publicText = JSON.stringify({ id: '2026101215253008' });
+      for (const host of ['hermes', 'openclaw', 'qclaw'] as const) {
+        const sessionId = `provenance-${host}`;
+        const source = await protectAction({ config, agentHost: host, actionType: 'web_search',
+          toolName: 'web_search', phase: 'post', rawInput: host === 'hermes'
+            ? { hook_event_name: 'post_tool_call', tool_name: 'web_search',
+              session_id: sessionId, tool_input: { query: 'price' }, tool_response: { content: publicText } }
+            : { toolName: 'web_search', session_id: sessionId,
+              params: { query: 'price' }, result: { content: publicText } },
+        });
+        assert.equal(source, null, `${host}: routine allowed tool result may skip local audit`);
+        const messages = [{ role: 'tool', name: 'web_search', content: publicText }];
+        const observed = await protectAction({ config, agentHost: host, actionType: 'llm_request',
+          toolName: host === 'hermes' ? 'hermes.pre_api_request' : 'openclaw.llm_input',
+          auditSafe: true, rawInput: {
+            session_id: sessionId,
+            input: JSON.stringify(host === 'hermes' ? messages : { historyMessages: messages }),
+            lifecycleStage: 'model_request', canBlockCurrentAction: false, coverageLevel: 'observe_only',
+            missingFacts: ['final_destination', 'complete_payload'],
+          },
+        });
+        assert.ok(observed);
+        assert.match(observed.event.input, /PUBLIC_SEARCH_NUMBER/);
+        assert.ok(!observed.decision.reasons.some((reason) => reason.title.includes('Bank account exposure')), host);
+        assert.equal(shouldReportAuditEventToCloud(observed.event), false);
+
+        const privateUser = await protectAction({ config, agentHost: host, actionType: 'llm_request',
+          toolName: host === 'hermes' ? 'hermes.pre_api_request' : 'openclaw.llm_input',
+          auditSafe: true, rawInput: {
+            session_id: sessionId,
+            input: JSON.stringify({ messages: [{ role: 'user', content: publicText }] }),
+            lifecycleStage: 'model_request', canBlockCurrentAction: false, coverageLevel: 'observe_only',
+          },
+        });
+        assert.match(privateUser?.event.input ?? '', /2026101215253008/, `${host}:user result must not be exempt`);
+      }
+    } finally {
+      resetPublicSearchProvenanceForTests();
+    }
   });
 });

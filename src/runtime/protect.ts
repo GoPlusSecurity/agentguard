@@ -8,6 +8,11 @@ import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
+import {
+  hasSensitivePublicSearchResult, isNativePublicSearchTool,
+  isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
+  redactPublicSearchResult, rememberPublicSearchResult,
+} from './public-search.js';
 import type {
   CoverageLevel,
   CredentialKind,
@@ -114,6 +119,12 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
+  if (decision.decision === 'allow' && action.metadata?.publicSearchOutput === true
+      && action.metadata.publicSearchSensitive === false) {
+    let result: unknown = action.input;
+    try { result = JSON.parse(action.input) as unknown; } catch { /* Plain search text. */ }
+    rememberPublicSearchResult(action.agentHost, action.sessionId, result);
+  }
   const auditSafe = options.auditSafe || codexHookEvent === 'PreToolUse'
     || codexHookEvent === 'PermissionRequest'
     || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
@@ -200,14 +211,21 @@ function enforceNativeHookDecision(
     || claudeEvent === 'UserPromptSubmit' || claudeEvent === 'PostToolUse'
     || claudeEvent === 'PostToolBatch' || claudeEvent === 'PostToolUseFailure'
     || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange'
-    || (claudeEvent === 'PreToolUse' && action.toolName === 'WebSearch');
+    || ((event === 'PreToolUse' || claudeEvent === 'PreToolUse'
+      || action.metadata?.hookPhase === 'pre')
+      && action.actionType === 'web_search'
+      && isNativePublicSearchTool(action.agentHost, action.toolName))
+    || action.metadata?.observedSearchResult === true;
   const blockingVisibleModelInput = action.actionType === 'llm_request'
     && action.canBlockCurrentAction !== false
     && (action.lifecycleStage === 'user_prompt'
       || action.lifecycleStage === 'run_start'
       || action.lifecycleStage === 'model_request'
       || action.lifecycleStage === 'post_tool_batch');
-  const visibleContentNeedsProtection = claudeEvent === 'PostToolUse'
+  const visibleContentNeedsProtection = action.metadata?.publicSearchOutput === true
+      && typeof action.metadata.publicSearchSensitive === 'boolean'
+    ? action.metadata.publicSearchSensitive
+    : claudeEvent === 'PostToolUse'
       && action.toolName === 'WebSearch' && typeof action.metadata?.claudeWebSearchSensitive === 'boolean'
     ? action.metadata.claudeWebSearchSensitive
     : claudeEvent === 'PostToolBatch' && typeof action.metadata?.claudeBatchSensitive === 'boolean'
@@ -729,11 +747,37 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     ? JSON.stringify(verifiedOutput) !== JSON.stringify(raw?.tool_response ?? raw?.toolResponse)
       || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
     : undefined;
+  const observedSearchResult = resolveObservedSearchResult(agentHost, toolName, raw, options.phase,
+    codexHookEvent, claudeHookEvent);
+  const publicSearchResult = observedSearchResult !== undefined
+    && !isFailedToolResult(observedSearchResult) && isVisiblePublicSearchResult(observedSearchResult)
+    ? observedSearchResult : undefined;
+  const publicSearchSensitive = publicSearchResult !== undefined
+    ? hasSensitivePublicSearchResult(publicSearchResult)
+      || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
+    : undefined;
   const displayMessage = claudeHookEvent === 'MessageDisplay'
     ? firstString(raw?.delta)
     : '';
-  const actionInput = process.env.TOOL_INPUT
-    || pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input);
+  let actionInput = process.env.TOOL_INPUT
+    || (observedSearchResult !== undefined
+      ? typeof observedSearchResult === 'string' ? observedSearchResult : JSON.stringify(observedSearchResult)
+      : pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input));
+  let suppressedPublicSearchValues = 0;
+  if (!process.env.TOOL_INPUT && actionType === 'llm_request'
+      && (agentHost === 'hermes' && toolName === 'hermes.pre_api_request'
+        || (agentHost === 'openclaw' || agentHost === 'qclaw')
+          && toolName === 'openclaw.llm_input')) {
+    try {
+      const inspected = inspectWithPublicSearchProvenance(
+        agentHost, sessionId, JSON.parse(actionInput) as unknown,
+      );
+      if (inspected.suppressed > 0) {
+        actionInput = JSON.stringify(inspected.value);
+        suppressedPublicSearchValues = inspected.suppressed;
+      }
+    } catch { /* Malformed or unavailable message structures stay strict. */ }
+  }
   const nativePostToolEvent = codexHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUseFailure';
@@ -765,8 +809,10 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
     lifecycleStage: nativeLifecycle.lifecycleStage
+      ?? (publicSearchResult !== undefined ? 'post_tool' : undefined)
       ?? pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
     canBlockCurrentAction: nativeLifecycle.canBlockCurrentAction
+      ?? (publicSearchResult !== undefined ? agentHost === 'codex' || agentHost === 'claude-code' : undefined)
       ?? pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
     coverageLevel: nativeLifecycle.coverageLevel
       ?? pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
@@ -779,7 +825,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       rawProtocol: raw ? 'stdin-json' : 'env',
       ...(codexHookEvent ? { codexHookEvent } : {}),
       ...(claudeHookEvent ? { claudeHookEvent } : {}),
-      ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
+      ...(options.phase ? { hookPhase: options.phase } : {}),
       ...((codexHookEvent || claudeHookEvent) ? { nativeToolActionType } : {}),
       ...(nativeToolInput ? { nativeToolInput } : {}),
       ...(nativeToolArgumentKeys.length > 0 ? { nativeToolArgumentKeys } : {}),
@@ -797,11 +843,44 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       } : {}),
       ...(verifiedOutput !== undefined ? { claudeUpdatedToolOutput: verifiedOutput } : {}),
       ...(claudeWebSearchSensitive !== undefined && !process.env.TOOL_INPUT ? { claudeWebSearchSensitive } : {}),
+      ...(publicSearchResult !== undefined && !process.env.TOOL_INPUT
+        ? { publicSearchOutput: true, publicSearchSensitive }
+        : {}),
+      ...(observedSearchResult !== undefined && !process.env.TOOL_INPUT ? { observedSearchResult: true } : {}),
+      ...(suppressedPublicSearchValues > 0 ? { suppressedPublicSearchValues } : {}),
       ...(displayMessage && redactText(displayMessage) !== displayMessage
         ? { claudeUpdatedMessage: redactText(displayMessage) }
         : {}),
     },
   };
+}
+
+function resolveObservedSearchResult(
+  host: RuntimeAgentHost,
+  toolName: string,
+  raw: Record<string, unknown> | null,
+  phase: ProtectOptions['phase'],
+  codexEvent: CodexHookEvent | undefined,
+  claudeEvent: ClaudeHookEvent | undefined,
+): unknown | undefined {
+  if (!raw || process.env.TOOL_INPUT || !isNativePublicSearchTool(host, toolName)) return undefined;
+  // The host's tool identity, not a guessed action type or user-supplied query,
+  // establishes provenance. Unknown result shapes remain on the strict path.
+  if (pickToolName(raw) !== toolName) return undefined;
+  const post = host === 'claude-code' ? claudeEvent === 'PostToolUse'
+    : host === 'codex' ? codexEvent === 'PostToolUse'
+      : host === 'hermes' ? phase === 'post' && raw.hook_event_name === 'post_tool_call'
+        : (host === 'openclaw' || host === 'qclaw') && phase === 'post';
+  if (!post) return undefined;
+  const result = host === 'openclaw' || host === 'qclaw'
+    ? raw.result ?? raw.response ?? raw.output ?? raw.tool_response
+    : raw.tool_response ?? raw.toolResponse;
+  return result;
+}
+
+function isFailedToolResult(result: unknown): boolean {
+  if (!isPlainRecord(result)) return false;
+  return result.isError === true || result.is_error === true || result.success === false;
 }
 
 function pickNativeToolAuditInput(
@@ -1247,20 +1326,13 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
   return hasVerifiedShape ? redactStructuredClaudeOutput(output, toolName === 'WebSearch') : undefined;
 }
 
-const SENSITIVE_IDENTIFIER_FIELD = /(?:card.?number|credit.?card|debit.?card|bank.?account|national.?id|identity.?number|passport|ssn|身份证|银行卡)/i;
-// A plain `token` field is often the name of a cryptocurrency, not a credential.
-const SENSITIVE_CREDENTIAL_FIELD = /^(?:api[_-]?key|access[_-]?(?:key|token)|authorization|bearer|password|passwd|secret(?:[_-]?key)?|private[_-]?key|client[_-]?secret)$/i;
-
 function redactStructuredClaudeOutput(value: unknown, publicSearch = false): unknown {
+  if (publicSearch) return redactPublicSearchResult(value);
   if (typeof value === 'string') return redactText(value, { skipBareNumericIdentifiers: publicSearch });
   if (Array.isArray(value)) return value.map((item) => redactStructuredClaudeOutput(item, publicSearch));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => [key,
-      publicSearch && SENSITIVE_CREDENTIAL_FIELD.test(key) && typeof item === 'string' && item.length >= 8
-        ? '[REDACTED]'
-        : redactStructuredClaudeOutput(item, publicSearch && !SENSITIVE_IDENTIFIER_FIELD.test(key)),
-    ]));
+    .map(([key, item]) => [key, redactStructuredClaudeOutput(item)]));
 }
 
 function pickEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {

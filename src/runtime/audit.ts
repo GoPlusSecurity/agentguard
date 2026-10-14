@@ -50,6 +50,18 @@ export function buildAuditEvent(event: RuntimeAuditEvent): RuntimeAuditEvent {
  * and the request was not stopped at a blocking gate.
  */
 export function shouldReportAuditEventToCloud(event: RuntimeAuditEvent): boolean {
+  if (event.metadata?.publicSearchOutput === true && event.lifecycleStage === 'post_tool'
+      && event.metadata.toolFailed !== true && event.metadata.responseIsError !== true
+      && (event.canBlockCurrentAction === false || event.metadata.enforcementApplied === false
+        || event.decision === 'allow' || event.decision === 'warn')) {
+    return false; // Public search results were released, not intercepted.
+  }
+  // Public WebSearch results that are allowed and carry no finding stay local,
+  // regardless of the hosting agent's generic post-tool reporting policy.
+  if ((event.metadata?.publicSearchOutput === true && event.lifecycleStage === 'post_tool'
+       || event.actionType === 'web_search' && event.metadata?.hookPhase === 'post')
+      && event.decision === 'allow' && (event.policyDecision ?? event.decision) === 'allow'
+      && event.riskScore === 0 && event.reasons.length === 0) return false;
   if (isNativePostToolEvent(event)) return shouldReportNativePostToolEvent(event);
   if (isClaudePostToolBatchEvent(event)) return shouldReportClaudePostToolBatchEvent(event);
   if (event.actionType === 'llm_response') return false;
