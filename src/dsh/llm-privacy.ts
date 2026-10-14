@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { loadConfig, type AgentGuardConfig } from '../config.js';
 import { writeAuditLog } from '../runtime/audit.js';
 import { evaluateRuntimeAction, type RuntimeEvaluation } from '../runtime/decision.js';
+import { inspectWithPublicSearchProvenance } from '../runtime/public-search.js';
 import type {
   AgentLifecycleCapabilities,
   LlmRequestPurpose,
@@ -103,12 +104,13 @@ export function buildDshLlmRequestAction(
 ): RuntimeAction {
   const sessionId = options.sessionId || `dsh:unscoped:${requestId}`;
   const projected = projectGenerateOptions(options);
+  const inspected = inspectWithPublicSearchProvenance('dsh', sessionId, projected.payload);
   return {
     sessionId,
     agentHost: 'dsh',
     actionType: 'llm_request',
     toolName: 'llm/stream',
-    input: JSON.stringify(projected.payload),
+    input: JSON.stringify(inspected.value),
     lifecycleStage: 'model_request',
     canBlockCurrentAction: true,
     coverageLevel: 'partial',
@@ -138,6 +140,7 @@ export function buildDshLlmRequestAction(
       directSdkCalls: DSH_LLM_CAPABILITY_GAPS.directSdkCalls,
       auxiliaryModelCalls: DSH_LLM_CAPABILITY_GAPS.auxiliaryModelCalls,
       imageCount: projected.imageCount,
+      ...(inspected.suppressed > 0 ? { suppressedPublicSearchValues: inspected.suppressed } : {}),
     },
   };
 }

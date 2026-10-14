@@ -8,6 +8,11 @@ import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
+import {
+  hasSensitivePublicSearchResult, isNativePublicSearchTool,
+  isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
+  redactPublicSearchResult, rememberPublicSearchResult,
+} from './public-search.js';
 import type {
   CoverageLevel,
   CredentialKind,
@@ -114,6 +119,12 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   if (approvedGrant) {
     decision = { ...decision, decision: 'allow' };
   }
+  if (decision.decision === 'allow' && action.metadata?.publicSearchOutput === true
+      && action.metadata.publicSearchSensitive === false) {
+    let result: unknown = action.input;
+    try { result = JSON.parse(action.input) as unknown; } catch { /* Plain search text. */ }
+    rememberPublicSearchResult(action.agentHost, action.sessionId, result);
+  }
   const auditSafe = options.auditSafe || codexHookEvent === 'PreToolUse'
     || codexHookEvent === 'PermissionRequest'
     || codexHookEvent === 'PreCompact' || codexHookEvent === 'PostCompact'
@@ -199,15 +210,36 @@ function enforceNativeHookDecision(
   const scansVisibleContent = event === 'UserPromptSubmit' || event === 'PostToolUse'
     || claudeEvent === 'UserPromptSubmit' || claudeEvent === 'PostToolUse'
     || claudeEvent === 'PostToolBatch' || claudeEvent === 'PostToolUseFailure'
-    || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange';
+    || claudeEvent === 'MessageDisplay' || claudeEvent === 'Stop' || claudeEvent === 'ConfigChange'
+    || ((event === 'PreToolUse' || claudeEvent === 'PreToolUse'
+      || action.metadata?.hookPhase === 'pre')
+      && action.actionType === 'web_search'
+      && isNativePublicSearchTool(action.agentHost, action.toolName))
+    || action.metadata?.observedSearchResult === true;
   const blockingVisibleModelInput = action.actionType === 'llm_request'
     && action.canBlockCurrentAction !== false
     && (action.lifecycleStage === 'user_prompt'
       || action.lifecycleStage === 'run_start'
       || action.lifecycleStage === 'model_request'
       || action.lifecycleStage === 'post_tool_batch');
+  const strictSensitive = redactText(action.input) !== action.input;
+  // Only a locally verified public-search result can suppress *bare-number*
+  // hits. Missing/malformed metadata, mixed tool inputs and other hook stages
+  // still rely on the strict scan above.
+  const verifiedSearchException = action.lifecycleStage === 'post_tool'
+    && action.metadata?.observedSearchResult === true
+    && action.metadata.publicSearchOutput === true
+    && isNativePublicSearchTool(action.agentHost, action.toolName)
+    && action.metadata.publicSearchSensitive === false;
+  const verifiedBatchException = claudeEvent === 'PostToolBatch'
+    && action.lifecycleStage === 'post_tool_batch'
+    && action.metadata?.claudeBatchVerified === true
+    && action.metadata.claudeBatchSensitive === false;
+  const visibleContentNeedsProtection = action.metadata?.publicSearchSensitive === true
+    || action.metadata?.claudeBatchSensitive === true
+    || (strictSensitive && !verifiedSearchException && !verifiedBatchException);
   const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
-    && (redactText(action.input) !== action.input || action.metadata?.configSensitive === true);
+    && (visibleContentNeedsProtection || action.metadata?.configSensitive === true);
   const untrustedExpansion = claudeEvent === 'UserPromptExpansion'
     && isUntrustedClaudePromptExpansion(action.metadata);
   const explicitModelSwitch = claudeEvent === 'PreModelSwitch'
@@ -264,6 +296,13 @@ function withFriendlySensitiveDataReason(
     || action.actionType === 'llm_response'
     || decision.reasons.some((reason) => reason.code === 'PII_EGRESS');
   if (!relevantLifecycle) return decision;
+  // Incomplete model-payload visibility is not evidence that a number from a
+  // public search result belongs to a person. Do not convert that warning into
+  // a false bank-account exposure reason.
+  if (action.metadata?.claudeHookEvent === 'PostToolBatch'
+      && action.metadata.claudeBatchVerified === true
+      && action.metadata.claudeBatchSensitive === false
+      && !decision.ruleEvaluations?.some((rule) => rule.ruleId === 'PII_EGRESS' && rule.detected)) return decision;
 
   const summaries = summarizeSensitiveData(action.input).slice(0, 3);
   if (summaries.length === 0) return decision;
@@ -711,11 +750,38 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const verifiedOutput = claudeHookEvent === 'PostToolUse'
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
     : undefined;
+  const observedSearchResult = resolveObservedSearchResult(agentHost, toolName, raw, options.phase,
+    codexHookEvent, claudeHookEvent);
+  const publicSearchResult = observedSearchResult !== undefined
+    && (agentHost !== 'hermes' || raw?.status === 'ok')
+    && !isFailedToolResult(observedSearchResult) && isVisiblePublicSearchResult(observedSearchResult)
+    ? observedSearchResult : undefined;
+  const publicSearchSensitive = publicSearchResult !== undefined
+    ? hasSensitivePublicSearchResult(publicSearchResult)
+      || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
+    : undefined;
   const displayMessage = claudeHookEvent === 'MessageDisplay'
     ? firstString(raw?.delta)
     : '';
-  const actionInput = process.env.TOOL_INPUT
-    || pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input);
+  let actionInput = process.env.TOOL_INPUT
+    || (observedSearchResult !== undefined
+      ? typeof observedSearchResult === 'string' ? observedSearchResult : JSON.stringify(observedSearchResult)
+      : pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input));
+  let suppressedPublicSearchValues = 0;
+  if (!process.env.TOOL_INPUT && actionType === 'llm_request'
+      && (agentHost === 'hermes' && toolName === 'hermes.pre_api_request'
+        || (agentHost === 'openclaw' || agentHost === 'qclaw')
+          && toolName === 'openclaw.llm_input')) {
+    try {
+      const inspected = inspectWithPublicSearchProvenance(
+        agentHost, sessionId, JSON.parse(actionInput) as unknown,
+      );
+      if (inspected.suppressed > 0) {
+        actionInput = JSON.stringify(inspected.value);
+        suppressedPublicSearchValues = inspected.suppressed;
+      }
+    } catch { /* Malformed or unavailable message structures stay strict. */ }
+  }
   const nativePostToolEvent = codexHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUseFailure';
@@ -747,8 +813,10 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     cwd: pickCwd(raw),
     sourceSkill: pickSourceSkill(raw),
     lifecycleStage: nativeLifecycle.lifecycleStage
+      ?? (publicSearchResult !== undefined ? 'post_tool' : undefined)
       ?? pickEnum(raw?.lifecycleStage ?? raw?.lifecycle_stage, LIFECYCLE_STAGES),
     canBlockCurrentAction: nativeLifecycle.canBlockCurrentAction
+      ?? (publicSearchResult !== undefined ? agentHost === 'codex' || agentHost === 'claude-code' : undefined)
       ?? pickBoolean(raw?.canBlockCurrentAction ?? raw?.can_block_current_action),
     coverageLevel: nativeLifecycle.coverageLevel
       ?? pickEnum(raw?.coverageLevel ?? raw?.coverage_level, COVERAGE_LEVELS),
@@ -761,7 +829,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       rawProtocol: raw ? 'stdin-json' : 'env',
       ...(codexHookEvent ? { codexHookEvent } : {}),
       ...(claudeHookEvent ? { claudeHookEvent } : {}),
-      ...(options.phase === 'post' ? { hookPhase: 'post' } : {}),
+      ...(options.phase ? { hookPhase: options.phase } : {}),
       ...((codexHookEvent || claudeHookEvent) ? { nativeToolActionType } : {}),
       ...(nativeToolInput ? { nativeToolInput } : {}),
       ...(nativeToolArgumentKeys.length > 0 ? { nativeToolArgumentKeys } : {}),
@@ -771,17 +839,52 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
+      ...(claudeBatch && process.env.TOOL_INPUT
+        ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
       ...(claudeConfig ? {
         configBytesRead: claudeConfig.bytesRead,
         configDangerous: claudeConfig.dangerous,
         configSensitive: claudeConfig.sensitive,
       } : {}),
       ...(verifiedOutput !== undefined ? { claudeUpdatedToolOutput: verifiedOutput } : {}),
+      ...(publicSearchResult !== undefined && !process.env.TOOL_INPUT
+        ? { publicSearchOutput: true, publicSearchSensitive }
+        : {}),
+      ...(observedSearchResult !== undefined && !process.env.TOOL_INPUT ? { observedSearchResult: true } : {}),
+      ...(suppressedPublicSearchValues > 0 ? { suppressedPublicSearchValues } : {}),
       ...(displayMessage && redactText(displayMessage) !== displayMessage
         ? { claudeUpdatedMessage: redactText(displayMessage) }
         : {}),
     },
   };
+}
+
+function resolveObservedSearchResult(
+  host: RuntimeAgentHost,
+  toolName: string,
+  raw: Record<string, unknown> | null,
+  phase: ProtectOptions['phase'],
+  codexEvent: CodexHookEvent | undefined,
+  claudeEvent: ClaudeHookEvent | undefined,
+): unknown | undefined {
+  if (!raw || process.env.TOOL_INPUT || !isNativePublicSearchTool(host, toolName)) return undefined;
+  // The host's tool identity, not a guessed action type or user-supplied query,
+  // establishes provenance. Unknown result shapes remain on the strict path.
+  if (pickToolName(raw) !== toolName) return undefined;
+  const post = host === 'claude-code' ? claudeEvent === 'PostToolUse'
+    : host === 'codex' ? codexEvent === 'PostToolUse'
+      : host === 'hermes' ? phase === 'post' && raw.hook_event_name === 'post_tool_call'
+        : (host === 'openclaw' || host === 'qclaw') && phase === 'post';
+  if (!post) return undefined;
+  const result = host === 'openclaw' || host === 'qclaw'
+    ? raw.result ?? raw.response ?? raw.output ?? raw.tool_response
+    : raw.tool_response ?? raw.toolResponse;
+  return result;
+}
+
+function isFailedToolResult(result: unknown): boolean {
+  if (!isPlainRecord(result)) return false;
+  return result.isError === true || result.is_error === true || result.success === false;
 }
 
 function pickNativeToolAuditInput(
@@ -1143,6 +1246,14 @@ function claudeBatchFacts(
   const responses = raw?.tool_calls ?? [];
   const serialized = JSON.stringify(responses);
   const filePaths = collectClaudeBatchFilePaths(responses);
+  const containsSensitiveContent = hasSensitiveClaudeBatchContent(responses);
+  const verifiedSearchCalls = Array.isArray(responses)
+    ? responses.filter((call): call is Record<string, unknown> =>
+      isPlainRecord(call) && call.tool_name === 'WebSearch')
+    : [];
+  const allSearchResultsVerified = verifiedSearchCalls.length > 0
+    && verifiedSearchCalls.every((call) =>
+      redactVerifiedClaudeToolOutput('WebSearch', call.tool_response ?? call.toolResponse) !== undefined);
   return {
     llm: {
       schemaVersion: 1,
@@ -1159,10 +1270,35 @@ function claudeBatchFacts(
     metadata: {
       filePathCount: filePaths.length,
       serializedResultBytes: Buffer.byteLength(serialized, 'utf8'),
-      redactedBytes: Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8'),
+      redactedBytes: containsSensitiveContent
+        ? Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8')
+        : 0,
+      claudeBatchSensitive: containsSensitiveContent,
+      claudeBatchVerified: allSearchResultsVerified,
       filePaths,
     },
   };
+}
+
+function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
+  if (!Array.isArray(responses)) return redactText(JSON.stringify(responses)) !== JSON.stringify(responses);
+  return responses.some((call: unknown) => {
+    if (!isPlainRecord(call) || call.tool_name !== 'WebSearch') {
+      const serialized = JSON.stringify(call);
+      return redactText(serialized) !== serialized;
+    }
+    const output = call.tool_response ?? call.toolResponse;
+    const verified = redactVerifiedClaudeToolOutput('WebSearch', output);
+    if (verified === undefined) {
+      const serialized = JSON.stringify(call);
+      return redactText(serialized) !== serialized;
+    }
+    // Do not let a public-search result relax checks on the query, call
+    // metadata, or another tool result in the same batch.
+    const { tool_response: _response, toolResponse: _camelResponse, ...rest } = call;
+    const other = JSON.stringify(rest);
+    return redactText(other) !== other || JSON.stringify(verified) !== JSON.stringify(output);
+  });
 }
 
 function collectClaudeBatchFilePaths(value: unknown): string[] {
@@ -1190,7 +1326,8 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
   const verifiedTool = toolName === 'Read' || toolName === 'Bash' || toolName === 'PowerShell'
     || toolName === 'WebFetch' || toolName === 'WebSearch' || lower.startsWith('mcp__');
   if (!verifiedTool) return undefined;
-  if (typeof output === 'string') return redactText(output);
+  if (typeof output === 'string') return toolName === 'WebSearch'
+    ? redactPublicSearchResult(output) : redactText(output);
   if (!isPlainRecord(output)) return undefined;
   const hasVerifiedShape = toolName === 'Read'
     ? typeof output.content === 'string'
@@ -1199,12 +1336,13 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
       : lower.startsWith('mcp__')
         ? Array.isArray(output.content)
         : typeof output.content === 'string' || Array.isArray(output.content);
-  return hasVerifiedShape ? redactStructuredClaudeOutput(output) : undefined;
+  return hasVerifiedShape ? redactStructuredClaudeOutput(output, toolName === 'WebSearch') : undefined;
 }
 
-function redactStructuredClaudeOutput(value: unknown): unknown {
-  if (typeof value === 'string') return redactText(value);
-  if (Array.isArray(value)) return value.map(redactStructuredClaudeOutput);
+function redactStructuredClaudeOutput(value: unknown, publicSearch = false): unknown {
+  if (publicSearch) return redactPublicSearchResult(value);
+  if (typeof value === 'string') return redactText(value, { skipBareNumericIdentifiers: publicSearch });
+  if (Array.isArray(value)) return value.map((item) => redactStructuredClaudeOutput(item, publicSearch));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .map(([key, item]) => [key, redactStructuredClaudeOutput(item)]));

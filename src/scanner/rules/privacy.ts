@@ -23,6 +23,21 @@ const KNOWN_TEST_CARD_NUMBERS = new Set([
   '6011111111111117',
 ]);
 
+/** A long digit run is a decimal part only when the dot belongs to a number. */
+export function isDecimalNumericContext(content: string, start: number, end: number): boolean {
+  if (content[end] === '.' && /\d/.test(content[end + 1] ?? '')) return true;
+  if (content[start - 1] !== '.') return false;
+  const beforeDot = content[start - 2];
+  // `0.123` and a leading `.123` are numeric; punctuation after a label
+  // (`身份证号.123` or `银行卡号 .123`) cannot justify dropping protection.
+  return beforeDot === undefined || /\d/.test(beforeDot);
+}
+
+export interface PiiRedactionOptions {
+  /** Only for a verified public WebSearch result, never for prompts or files. */
+  skipBareNumericIdentifiers?: boolean;
+}
+
 export interface PiiCategoryDetection {
   category: PiiCategory;
   tag: RiskTag;
@@ -135,7 +150,7 @@ export function detectPiiCategories(content: string, includeDataset = true): Pii
 }
 
 /** Redact validated PII values for audit previews without returning raw evidence. */
-export function redactPiiText(content: string): string {
+export function redactPiiText(content: string, options: PiiRedactionOptions = {}): string {
   const original = content;
   let redacted = content;
   for (const rule of PRIVACY_RULES) {
@@ -155,16 +170,36 @@ export function redactPiiText(content: string): string {
     }
   }
 
+  // A dot can separate a label from its value in prose ("银行卡号.528…").
+  // Unlike a fractional price, that value is explicitly identified as PII.
+  if (options.skipBareNumericIdentifiers) {
+    redacted = redacted.replace(
+      /((?:身份证号?|银行卡号?|bank[_-]?account|card[_-]?(?:number|no)|national[_-]?id)\s*\.\s*)(\d{12,19}|\d{17}[Xx])(?!\d)/gi,
+      (full, label: string, value: string) => {
+        const national = /(?:身份证|national[_-]?id)/i.test(label);
+        const valid = national ? isValidNationalIdentifier(value) : isValidBankIdentifier(value, label);
+        return valid ? `${label}[REDACTED:${national ? 'PII_NATIONAL_ID' : 'PII_BANK_ACCOUNT'}]` : full;
+      },
+    );
+  }
+
   redacted = redacted.replace(EMAIL_CANDIDATE, (value) =>
     isValidEmailAddress(value) ? '[REDACTED:PII_EMAIL_ADDRESS]' : value);
-  redacted = redacted.replace(PHONE_CANDIDATE, (value) =>
-    isValidPhoneNumber(value) ? '[REDACTED:PII_PHONE_NUMBER]' : value);
-  redacted = redacted.replace(/\b\d{17}[\dX]\b/gi, (value) =>
-    isValidNationalIdentifier(value) ? '[REDACTED:PII_NATIONAL_ID]' : value);
+  redacted = redacted.replace(PHONE_CANDIDATE, (value, offset: number, source: string) =>
+    !isDecimalNumericContext(source, offset, offset + value.length) && isValidPhoneNumber(value)
+      ? '[REDACTED:PII_PHONE_NUMBER]' : value);
+  if (!options.skipBareNumericIdentifiers) {
+    redacted = redacted.replace(/(?<!\d)\d{17}[\dX](?!\d)/gi, (value, offset: number, source: string) =>
+      !isDecimalNumericContext(source, offset, offset + value.length) && isValidNationalIdentifier(value)
+        ? '[REDACTED:PII_NATIONAL_ID]' : value);
+  }
   redacted = redacted.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/gi, (value) =>
     isValidBankIdentifier(value, 'iban') ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
-  redacted = redacted.replace(/(?<!\d)\d{12,19}(?!\d)/g, (value) =>
-    isValidBankIdentifier(value, 'card_number') ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
+  if (!options.skipBareNumericIdentifiers) {
+    redacted = redacted.replace(/(?<!\d)\d{12,19}(?!\d)/g, (value, offset: number, source: string) =>
+      !isDecimalNumericContext(source, offset, offset + value.length) && isValidBankIdentifier(value, 'card_number')
+        ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
+  }
 
   if (LOCATION_PATTERN.test(original) && countCoordinatePairs(original) >= 3) {
     redacted = redacted.replace(

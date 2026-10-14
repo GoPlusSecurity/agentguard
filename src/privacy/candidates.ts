@@ -1,6 +1,7 @@
 import type { PiiCategory } from '../runtime/types.js';
 import type { PiiCandidate } from './types.js';
 import { outboundContext } from './redact-outbound.js';
+import { isDecimalNumericContext } from '../scanner/rules/privacy.js';
 
 interface Extractor {
   kind: string;
@@ -114,6 +115,8 @@ export function extractCandidates(
 
       const start = group === 0 ? (match.index ?? 0) : groupOffset(match, group);
       if (start < 0) continue;
+      if (['national_id_cn', 'account_number', 'mobile_cn'].includes(extractor.kind)
+          && isDecimalNumericContext(text, start, start + value.length)) continue;
 
       const chunk = chunkFor(start);
       found.push({

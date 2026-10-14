@@ -148,6 +148,8 @@ class AgentGuardBridge:
         session_id: Optional[str] = None,
         cwd: Optional[str] = None,
         task_id: Optional[str] = None,
+        result: Any = None,
+        status: Optional[str] = None,
     ) -> Optional[Dict[str, str]]:
         """Return a Hermes block dict, or ``None`` to allow.
 
@@ -169,7 +171,7 @@ class AgentGuardBridge:
                 result = self._evaluate_daemon(
                     action_type=TOOL_ACTION_TYPE[tool_name],
                     tool_name=tool_name,
-                    raw_input=_build_payload(event, tool_name, args, session_id, cwd, task_id),
+                    raw_input=_build_payload(event, tool_name, args, session_id, cwd, task_id, result, status),
                     session_id=session_id,
                     phase=phase,
                 )
@@ -189,7 +191,7 @@ class AgentGuardBridge:
                 "AGENTGUARD_BIN / AGENTGUARD_HERMES_HOOK",
             )
 
-        payload = _build_payload(event, tool_name, args, session_id, cwd, task_id)
+        payload = _build_payload(event, tool_name, args, session_id, cwd, task_id, result, status)
         cmd = list(argv)
         if mode == "protect":
             cmd += [
@@ -622,8 +624,8 @@ def _validate_mapped_payload(tool_name: str, args: Dict[str, Any]) -> Optional[s
     return "Hermes %s payload is missing %s" % (tool_name, " / ".join(fields))
 
 
-def _build_payload(event, tool_name, args, session_id, cwd, task_id) -> Dict[str, Any]:
-    return {
+def _build_payload(event, tool_name, args, session_id, cwd, task_id, result=None, status=None) -> Dict[str, Any]:
+    payload = {
         "hook_event_name": event,
         "tool_name": tool_name,
         "tool_input": args or {},
@@ -631,6 +633,20 @@ def _build_payload(event, tool_name, args, session_id, cwd, task_id) -> Dict[str
         "cwd": cwd,
         "extra": {"task_id": task_id} if task_id else {},
     }
+    # model_tools._emit_post_tool_call_hook supplies exactly `result` and a
+    # derived `status`; aliases such as `output` are not host result facts.
+    # Keep observing other tools and failed searches on the strict path.
+    if event == "post_tool_call" and isinstance(result, (str, list, dict)):
+        try:
+            serialized = json.dumps(result, ensure_ascii=False, allow_nan=False)
+            if len(serialized.encode("utf-8")) <= 256 * 1024:
+                payload["tool_response"] = json.loads(serialized)
+                if status in ("ok", "error", "blocked"):
+                    payload["status"] = status
+        except (TypeError, ValueError, OverflowError):
+            # Unknown result shapes do not earn a public-search exception.
+            pass
+    return payload
 
 
 def _build_llm_payload(
