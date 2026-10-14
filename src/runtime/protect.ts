@@ -222,15 +222,22 @@ function enforceNativeHookDecision(
       || action.lifecycleStage === 'run_start'
       || action.lifecycleStage === 'model_request'
       || action.lifecycleStage === 'post_tool_batch');
-  const visibleContentNeedsProtection = action.metadata?.publicSearchOutput === true
-      && typeof action.metadata.publicSearchSensitive === 'boolean'
-    ? action.metadata.publicSearchSensitive
-    : claudeEvent === 'PostToolUse'
-      && action.toolName === 'WebSearch' && typeof action.metadata?.claudeWebSearchSensitive === 'boolean'
-    ? action.metadata.claudeWebSearchSensitive
-    : claudeEvent === 'PostToolBatch' && typeof action.metadata?.claudeBatchSensitive === 'boolean'
-      ? action.metadata.claudeBatchSensitive
-      : redactText(action.input) !== action.input;
+  const strictSensitive = redactText(action.input) !== action.input;
+  // Only a locally verified public-search result can suppress *bare-number*
+  // hits. Missing/malformed metadata, mixed tool inputs and other hook stages
+  // still rely on the strict scan above.
+  const verifiedSearchException = action.lifecycleStage === 'post_tool'
+    && action.metadata?.observedSearchResult === true
+    && action.metadata.publicSearchOutput === true
+    && isNativePublicSearchTool(action.agentHost, action.toolName)
+    && action.metadata.publicSearchSensitive === false;
+  const verifiedBatchException = claudeEvent === 'PostToolBatch'
+    && action.lifecycleStage === 'post_tool_batch'
+    && action.metadata?.claudeBatchVerified === true
+    && action.metadata.claudeBatchSensitive === false;
+  const visibleContentNeedsProtection = action.metadata?.publicSearchSensitive === true
+    || action.metadata?.claudeBatchSensitive === true
+    || (strictSensitive && !verifiedSearchException && !verifiedBatchException);
   const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
     && (visibleContentNeedsProtection || action.metadata?.configSensitive === true);
   const untrustedExpansion = claudeEvent === 'UserPromptExpansion'
@@ -293,6 +300,7 @@ function withFriendlySensitiveDataReason(
   // public search result belongs to a person. Do not convert that warning into
   // a false bank-account exposure reason.
   if (action.metadata?.claudeHookEvent === 'PostToolBatch'
+      && action.metadata.claudeBatchVerified === true
       && action.metadata.claudeBatchSensitive === false
       && !decision.ruleEvaluations?.some((rule) => rule.ruleId === 'PII_EGRESS' && rule.detected)) return decision;
 
@@ -742,14 +750,10 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const verifiedOutput = claudeHookEvent === 'PostToolUse'
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
     : undefined;
-  const claudeWebSearchSensitive = claudeHookEvent === 'PostToolUse' && toolName === 'WebSearch'
-    && verifiedOutput !== undefined
-    ? JSON.stringify(verifiedOutput) !== JSON.stringify(raw?.tool_response ?? raw?.toolResponse)
-      || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
-    : undefined;
   const observedSearchResult = resolveObservedSearchResult(agentHost, toolName, raw, options.phase,
     codexHookEvent, claudeHookEvent);
   const publicSearchResult = observedSearchResult !== undefined
+    && (agentHost !== 'hermes' || raw?.status === 'ok')
     && !isFailedToolResult(observedSearchResult) && isVisiblePublicSearchResult(observedSearchResult)
     ? observedSearchResult : undefined;
   const publicSearchSensitive = publicSearchResult !== undefined
@@ -835,14 +839,14 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
-      ...(claudeBatch && process.env.TOOL_INPUT ? { claudeBatchSensitive: undefined } : {}),
+      ...(claudeBatch && process.env.TOOL_INPUT
+        ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
       ...(claudeConfig ? {
         configBytesRead: claudeConfig.bytesRead,
         configDangerous: claudeConfig.dangerous,
         configSensitive: claudeConfig.sensitive,
       } : {}),
       ...(verifiedOutput !== undefined ? { claudeUpdatedToolOutput: verifiedOutput } : {}),
-      ...(claudeWebSearchSensitive !== undefined && !process.env.TOOL_INPUT ? { claudeWebSearchSensitive } : {}),
       ...(publicSearchResult !== undefined && !process.env.TOOL_INPUT
         ? { publicSearchOutput: true, publicSearchSensitive }
         : {}),
@@ -1243,6 +1247,13 @@ function claudeBatchFacts(
   const serialized = JSON.stringify(responses);
   const filePaths = collectClaudeBatchFilePaths(responses);
   const containsSensitiveContent = hasSensitiveClaudeBatchContent(responses);
+  const verifiedSearchCalls = Array.isArray(responses)
+    ? responses.filter((call): call is Record<string, unknown> =>
+      isPlainRecord(call) && call.tool_name === 'WebSearch')
+    : [];
+  const allSearchResultsVerified = verifiedSearchCalls.length > 0
+    && verifiedSearchCalls.every((call) =>
+      redactVerifiedClaudeToolOutput('WebSearch', call.tool_response ?? call.toolResponse) !== undefined);
   return {
     llm: {
       schemaVersion: 1,
@@ -1263,6 +1274,7 @@ function claudeBatchFacts(
         ? Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8')
         : 0,
       claudeBatchSensitive: containsSensitiveContent,
+      claudeBatchVerified: allSearchResultsVerified,
       filePaths,
     },
   };
@@ -1314,7 +1326,8 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
   const verifiedTool = toolName === 'Read' || toolName === 'Bash' || toolName === 'PowerShell'
     || toolName === 'WebFetch' || toolName === 'WebSearch' || lower.startsWith('mcp__');
   if (!verifiedTool) return undefined;
-  if (typeof output === 'string') return redactText(output, { skipBareNumericIdentifiers: toolName === 'WebSearch' });
+  if (typeof output === 'string') return toolName === 'WebSearch'
+    ? redactPublicSearchResult(output) : redactText(output);
   if (!isPlainRecord(output)) return undefined;
   const hasVerifiedShape = toolName === 'Read'
     ? typeof output.content === 'string'

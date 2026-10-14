@@ -287,7 +287,6 @@ export async function observeDshToolResult(
       publicSearchSensitive: (searchResult.verified
         ? hasSensitivePublicSearchResult(searchResult.value)
         : redactText(JSON.stringify(searchResult.value)) !== JSON.stringify(searchResult.value))
-        || redactText(JSON.stringify(exec.arguments)) !== JSON.stringify(exec.arguments),
     } : {}),
     ...responseMetadata(result),
   };
@@ -330,7 +329,6 @@ export async function protectDshToolResult(
       publicSearchSensitive: (searchResult.verified
         ? hasSensitivePublicSearchResult(searchResult.value)
         : redactText(JSON.stringify(searchResult.value)) !== JSON.stringify(searchResult.value))
-        || redactText(JSON.stringify(exec.arguments)) !== JSON.stringify(exec.arguments),
     } : {}),
     ...responseMetadata(result),
   };

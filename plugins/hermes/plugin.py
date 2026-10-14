@@ -126,7 +126,8 @@ def _make_post_tool_call(guard: AgentGuardBridge):
                 session_id=kwargs.get("session_id"),
                 cwd=kwargs.get("cwd"),
                 task_id=kwargs.get("task_id"),
-                result=kwargs.get("result", kwargs.get("tool_result", kwargs.get("output"))),
+                result=kwargs.get("result"),
+                status=kwargs.get("status"),
             )
         except Exception:
             pass  # audit-only

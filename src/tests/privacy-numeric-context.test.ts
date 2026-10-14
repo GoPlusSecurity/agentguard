@@ -9,6 +9,7 @@ import { AgentGuardCloudClient } from '../cloud/client.js';
 import { observeDshToolResult, protectDshToolCall, protectDshToolResult } from '../dsh/runtime.js';
 import { buildDshLlmRequestAction } from '../dsh/llm-privacy.js';
 import { resetPublicSearchProvenanceForTests } from '../runtime/public-search.js';
+import { hasSensitivePublicSearchResult, redactPublicSearchResult } from '../runtime/public-search.js';
 import { shouldReportAuditEventToCloud } from '../runtime/audit.js';
 import { redactText, summarizeSensitiveData } from '../runtime/redaction.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
@@ -61,6 +62,29 @@ describe('Numeric PII context', () => {
       assert.ok(summarizeSensitiveData(text).some((item) => item.kind === category), text);
       assert.ok(candidatesOf(text).some((item) => item.category === category), text);
     }
+  });
+
+  it('never exempts numeric identifiers in unknown nested search fields or embedded JSON', () => {
+    const card = '5284917302468138';
+    const id = '2026101215253008';
+    const structured = { content: [{ type: 'text', text: 'Public market result', id,
+      customer: { payment: { pan: card } } }] };
+    const nested = redactPublicSearchResult(structured) as typeof structured;
+    assert.equal(nested.content[0]?.id, id);
+    assert.equal(nested.content[0]?.customer.payment.pan, '[REDACTED:PII_BANK_ACCOUNT]');
+    assert.equal(hasSensitivePublicSearchResult(structured), true);
+
+    const sameKeyAtDifferentDepth = redactPublicSearchResult({
+      results: [{ id, customer: { id: card } }],
+    }) as { results: Array<{ id: string; customer: { id: string } }> };
+    assert.equal(sameKeyAtDifferentDepth.results[0]?.id, id);
+    assert.equal(sameKeyAtDifferentDepth.results[0]?.customer.id, '[REDACTED:PII_BANK_ACCOUNT]');
+
+    const text = JSON.stringify({ results: [{ id, customer: { payment: { pan: card } } }] });
+    const embedded = redactPublicSearchResult({ content: text }) as { content: string };
+    assert.equal(JSON.parse(embedded.content).results[0].id, id);
+    assert.equal(JSON.parse(embedded.content).results[0].customer.payment.pan, '[REDACTED:PII_BANK_ACCOUNT]');
+    assert.equal(hasSensitivePublicSearchResult({ content: JSON.stringify({ id, rank: '1234567890123452' }) }), false);
   });
 
   it('does not block coin-price search results or the following model continuation', async () => {
@@ -229,6 +253,34 @@ describe('Numeric PII context', () => {
     } });
     assert.equal(structuredBatch?.decision.decision, 'block');
 
+    const nestedPan = { content: [{ type: 'text', text: 'Public price', id: opaqueId,
+      customer: { payment: { pan: '5284917302468138' } } }] };
+    const nestedPost = await protectAction({ config, agentHost: 'claude-code', rawInput: {
+      hook_event_name: 'PostToolUse', session_id: 'sess-public', tool_name: 'WebSearch',
+      tool_input: { query: 'price' }, tool_response: nestedPan,
+    } });
+    assert.equal(nestedPost?.decision.decision, 'block');
+    assert.equal(nestedPost?.decision.riskScore, 100);
+    assert.ok(nestedPost);
+    assert.doesNotMatch(formatProtectResult(nestedPost), /5284917302468138/);
+    assert.match(formatProtectResult(nestedPost), /2026101215253008/);
+
+    const nestedBatch = await protectAction({ config, agentHost: 'claude-code', rawInput: {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-public', tool_calls: [{
+        tool_name: 'WebSearch', tool_input: { query: 'price' }, tool_response: nestedPan,
+      }],
+    } });
+    assert.equal(nestedBatch?.decision.decision, 'block');
+
+    const unsupportedBatch = await protectAction({ config, agentHost: 'claude-code', rawInput: {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-public', tool_calls: [{
+        tool_name: 'WebSearch', tool_input: { query: 'price' },
+        tool_response: { opaque: { pan: '5284917302468138' } },
+      }],
+    } });
+    assert.equal(unsupportedBatch?.decision.decision, 'block');
+    assert.equal(unsupportedBatch?.event.metadata?.claudeBatchVerified, false);
+
     const labeledProse = await protectAction({ config, agentHost: 'claude-code', rawInput: {
       hook_event_name: 'PostToolUse', session_id: 'sess-public', tool_name: 'WebSearch',
       tool_input: { query: 'price' }, tool_response: { content: '银行卡号.5284917302468138' },
@@ -281,7 +333,7 @@ describe('Numeric PII context', () => {
       ['qclaw', 'web_search', { toolName: 'web_search', params: { query: 'coin price' },
         result: { content: JSON.stringify({ id: number }) } }],
       ['hermes', 'web_search', { hook_event_name: 'post_tool_call', tool_name: 'web_search',
-        tool_input: { query: 'coin price' }, tool_response: { content: JSON.stringify({ id: number }) } }],
+        status: 'ok', tool_input: { query: 'coin price' }, tool_response: { content: JSON.stringify({ id: number }) } }],
     ] as const) {
       const result = await protectAction({ config, agentHost, actionType: 'web_search', toolName,
         phase: 'post', auditSafe: true, rawInput: { session_id: `sess-${agentHost}`, ...raw } });
@@ -324,6 +376,18 @@ describe('Numeric PII context', () => {
             : { tool_response: { opaque: number } }) } });
       assert.equal(unverified?.event.metadata?.publicSearchOutput, undefined, agentHost);
       assert.equal(unverified?.decision.decision, 'block', agentHost);
+
+      if (agentHost === 'hermes') {
+        for (const status of [undefined, 'error'] as const) {
+          const unsupportedStatus = await protectAction({ config, agentHost,
+            actionType: 'web_search', toolName, phase: 'post', auditSafe: true,
+            rawInput: { session_id: `sess-${agentHost}`, ...raw,
+              status, tool_response: { content: JSON.stringify({ id: number }) } },
+          });
+          assert.equal(unsupportedStatus?.event.metadata?.publicSearchOutput, undefined);
+          assert.equal(unsupportedStatus?.decision.decision, 'block', `hermes:${status ?? 'missing-status'}`);
+        }
+      }
     }
   });
 
@@ -386,6 +450,18 @@ describe('Numeric PII context', () => {
     const preQuery = await protectDshToolCall({ ...exec, arguments: { query: '银行卡号 5284917302468138' } },
       dependencies);
     assert.equal(preQuery?.evaluation.decision.decision, 'block');
+
+    const benignResultWithSensitiveQuery = await protectDshToolResult({
+      ...exec, arguments: { query: 'price 5284917302468138' },
+    }, { isError: false, content: [{ type: 'text', text: 'Bitcoin $1.00' }] }, dependencies);
+    assert.equal(benignResultWithSensitiveQuery?.evaluation.decision.decision, 'allow');
+    assert.equal(benignResultWithSensitiveQuery?.action.metadata?.publicSearchSensitive, false);
+
+    const nestedSensitiveResult = await protectDshToolResult(exec, {
+      isError: false, content: [{ type: 'text', text: JSON.stringify({ results: [{ id: '2026101215253008',
+        customer: { payment: { pan: '5284917302468138' } } }] }) }],
+    }, dependencies);
+    assert.equal(nestedSensitiveResult?.evaluation.decision.decision, 'block');
   });
 
   it('keeps Hermes and OpenClaw model-request observers from reclassifying exact search results as user PII', async () => {
@@ -403,7 +479,7 @@ describe('Numeric PII context', () => {
         const source = await protectAction({ config, agentHost: host, actionType: 'web_search',
           toolName: 'web_search', phase: 'post', rawInput: host === 'hermes'
             ? { hook_event_name: 'post_tool_call', tool_name: 'web_search',
-              session_id: sessionId, tool_input: { query: 'price' }, tool_response: { content: publicText } }
+              status: 'ok', session_id: sessionId, tool_input: { query: 'price' }, tool_response: { content: publicText } }
             : { toolName: 'web_search', session_id: sessionId,
               params: { query: 'price' }, result: { content: publicText } },
         });

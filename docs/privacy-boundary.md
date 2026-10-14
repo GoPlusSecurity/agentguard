@@ -24,7 +24,9 @@ data egress. Successful results remain local and are not uploaded to Cloud.
 Search queries, user prompts, workspace files, web-fetch responses, unknown
 tool names, and unrecognized result shapes retain the strict privacy rules.
 Explicitly labeled personal data and credentials in search results remain
-protected. A numeric field name alone (`price`, `rank`, `id`) does not exempt a
+protected. Only an exact ambiguous numeric metadata *leaf* (`price`, `rank`,
+`id`, etc.) in a verified search result is exempt; unrelated nested objects
+and arrays are checked strictly. A numeric field name does not exempt a
 number anywhere else in the application.
 
 | Host | Verified result boundary | Limitation |
@@ -32,7 +34,7 @@ number anywhere else in the application.
 | Claude Code | Native `WebSearch` post-tool and post-tool batch | Only known rewriteable result shapes receive the numeric exception. |
 | Codex | `PostToolUse` when the hook exposes an exact `web_search`/`WebSearch` result | Hosted searches that bypass native hooks cannot be observed. |
 | OpenClaw / QClaw | Native `after_tool_call` result of `web_search` | Results cannot be rewritten; this is an observer boundary. |
-| Hermes | `post_tool_call` result of `web_search`, when the host supplies it | Older hooks that provide only arguments cannot establish result provenance. `pre_api_request` is observe-only. |
+| Hermes | `post_tool_call` result of `web_search` with a host-provided `result` and `status: ok` | Aliases such as `output` and `tool_result`, malformed/failed results, and older hooks that provide only arguments cannot establish result provenance. `pre_api_request` is observe-only. |
 | DSH | Native `web_search`/`search_query` post-execute result | Result suppression requires `postResponseMode: block-malicious`; ordinary audit mode does not block. |
 
 For supported model-request evaluations, only an exact previously observed

@@ -21,9 +21,21 @@ export function isVisiblePublicSearchResult(value: unknown): boolean {
     typeof record[key] === 'string' || Array.isArray(record[key]));
 }
 
-const SENSITIVE_IDENTIFIER_FIELD = /(?:card.?number|credit.?card|debit.?card|bank.?account|national.?id|identity.?number|passport|ssn|身份证|银行卡)/i;
 // A plain `token` field is often the name of a cryptocurrency, not a credential.
 const SENSITIVE_CREDENTIAL_FIELD = /^(?:api[_-]?key|access[_-]?(?:key|token)|authorization|bearer|password|passwd|secret(?:[_-]?key)?|private[_-]?key|client[_-]?secret)$/i;
+// Only these *leaf values* in verified search results can be ambiguous numeric
+// metadata. A parent field never exempts all of its descendants.
+const SEARCH_NUMERIC_FIELDS = new Set([
+  'id', 'result_id', 'resultid', 'search_id', 'searchid', 'search_result_id',
+  'searchresultid', 'timestamp', 'time_stamp', 'created_at', 'updated_at',
+  'createdat', 'updatedat', 'rank', 'ranking', 'status', 'status_code',
+  'statuscode', 'price', 'token_price', 'tokenprice', 'market_price',
+  'marketprice', 'market_cap', 'marketcap', 'volume', 'liquidity', 'rate',
+  'block_number', 'blocknumber', 'block_height', 'blockheight', 'decimals',
+]);
+const SEARCH_TEXT_FIELDS = new Set(['content', 'text', 'output', 'body']);
+const SEARCH_RESULT_FIELDS = new Set(['results', 'items', 'metadata']);
+const BARE_LONG_NUMBER = /^\d{12,19}$/;
 
 const RESULT_TTL_MS = 10 * 60_000;
 const MAX_SESSIONS = 256;
@@ -104,23 +116,42 @@ function resultTexts(value: unknown): string[] {
   return content;
 }
 
-/** Skip only bare numeric identifiers in visible public-search output. */
+/** Only verified search text and exact numeric metadata leaves get the exception. */
 export function redactPublicSearchResult(value: unknown): unknown {
-  return redactStructured(value, true);
+  return redactSearchValue(value, true);
 }
 
 export function hasSensitivePublicSearchResult(value: unknown): boolean {
   return JSON.stringify(redactPublicSearchResult(value)) !== JSON.stringify(value);
 }
 
-function redactStructured(value: unknown, publicSearch: boolean): unknown {
-  if (typeof value === 'string') return redactText(value, { skipBareNumericIdentifiers: publicSearch });
-  if (Array.isArray(value)) return value.map((item) => redactStructured(item, publicSearch));
+function redactSearchText(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === 'object') {
+      const redacted = redactSearchValue(parsed, true);
+      // JSON.stringify would alter formatting and trigger a false security
+      // finding even if nothing actually needed redaction.
+      return JSON.stringify(parsed) === JSON.stringify(redacted) ? text : JSON.stringify(redacted);
+    }
+  } catch { /* Plain search text retains narrow local redaction. */ }
+  return redactText(text, { skipBareNumericIdentifiers: true });
+}
+
+function redactSearchValue(value: unknown, searchResult: boolean, searchText = false): unknown {
+  if (typeof value === 'string') return searchText ? redactSearchText(value) : redactText(value);
+  if (Array.isArray(value)) return value.map((item) => redactSearchValue(item, searchResult, searchText));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .map(([key, item]) => [key,
-      publicSearch && SENSITIVE_CREDENTIAL_FIELD.test(key) && typeof item === 'string' && item.length >= 8
+      SENSITIVE_CREDENTIAL_FIELD.test(key) && typeof item === 'string' && item.length >= 8
         ? '[REDACTED]'
-        : redactStructured(item, publicSearch && !SENSITIVE_IDENTIFIER_FIELD.test(key)),
+        : searchResult && SEARCH_NUMERIC_FIELDS.has(key.toLowerCase())
+          && typeof item === 'string' && BARE_LONG_NUMBER.test(item)
+          ? redactText(item, { skipBareNumericIdentifiers: true })
+          : searchResult && SEARCH_TEXT_FIELDS.has(key.toLowerCase())
+            && (typeof item === 'string' || Array.isArray(item))
+            ? redactSearchValue(item, true, true)
+            : redactSearchValue(item, searchResult && SEARCH_RESULT_FIELDS.has(key.toLowerCase())),
     ]));
 }
