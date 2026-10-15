@@ -85,11 +85,11 @@ summary remain Cloud-eligible. Their Cloud payload uses a bounded semantic
 summary and bounded status metadata. Pre-execute shell events retain a redacted
 command preview capped at 2,000 characters so operators can distinguish command
 arguments, pipelines, and shell syntax; recognized credentials and PII are
-masked, while protected-file access and unmaskable sensitive findings fall back
-to a command name plus static finding title. File actions retain a basename and
-network actions retain a sanitized destination. Raw tool output,
-request/response bodies, header values, protected absolute paths, and evaluator
-reason text remain local.
+masked, absolute user-home prefixes are normalized to `~`, and unmaskable
+sensitive findings fall back to a command name plus static finding title. File
+actions retain a basename and network actions retain a sanitized destination.
+Raw tool output, request/response bodies, header values, user-home identities,
+and evaluator reason text remain local.
 
 `runtime.attribution.toolOwners` is an exact, case-sensitive map from a DSH tool name to a stable plugin or package id. It is operator-authored trust metadata, not a tool-name heuristic. Owner ids are bounded and validated, duplicate/ambiguous wildcard matching is not supported, and an unmapped tool remains `unknown`. Do not bind a name when another agent scope may shadow it with a different implementation.
 

@@ -368,7 +368,6 @@ function dshCloudFindingSummary(event: RuntimeAuditEvent, findingTitle?: string)
  */
 function safeDshShellPreview(event: RuntimeAuditEvent): string | undefined {
   if (event.metadata?.runtimePhase !== 'pre') return undefined;
-  if (event.reasons.some((reason) => reason.code === 'SECRET_ACCESS')) return undefined;
 
   const redacted = redactText(event.input);
   const hasUnmaskedSensitiveFinding = event.reasons.some((reason) => (
@@ -376,7 +375,13 @@ function safeDshShellPreview(event: RuntimeAuditEvent): string | undefined {
   )) && redacted === event.input;
   if (hasUnmaskedSensitiveFinding) return undefined;
 
-  return redacted.slice(0, 2000).trim() || undefined;
+  return redactDshHomePaths(redacted).slice(0, 2000).trim() || undefined;
+}
+
+function redactDshHomePaths(value: string): string {
+  return value
+    .replace(/\/(?:Users|home)\/[^/\s"'`|;&]+(?=\/)/gi, '~')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s"'`|;&]+(?=\\)/gi, '~');
 }
 
 function safeDshToolName(event: RuntimeAuditEvent): string {
