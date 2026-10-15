@@ -354,10 +354,29 @@ function dshCloudFindingSummary(event: RuntimeAuditEvent, findingTitle?: string)
     if (target) return `${event.actionType === 'file_read' ? 'read' : 'write'} ${target}`;
   }
   if (event.actionType === 'shell') {
+    const preview = safeDshShellPreview(event);
+    if (preview) return preview;
     const command = safeDshCommandName(event.input) ?? safeDshToolName(event);
     return `${command}: ${finding}`.slice(0, 500);
   }
   return `${safeDshToolName(event)}: ${finding}`.slice(0, 500);
+}
+
+/**
+ * Keep DSH pre-execute shell actions useful in Cloud without widening the
+ * boundary for tool results or content that cannot be safely masked.
+ */
+function safeDshShellPreview(event: RuntimeAuditEvent): string | undefined {
+  if (event.metadata?.runtimePhase !== 'pre') return undefined;
+  if (event.reasons.some((reason) => reason.code === 'SECRET_ACCESS')) return undefined;
+
+  const redacted = redactText(event.input);
+  const hasUnmaskedSensitiveFinding = event.reasons.some((reason) => (
+    DSH_SENSITIVE_CONTENT_RULES.has(reason.code)
+  )) && redacted === event.input;
+  if (hasUnmaskedSensitiveFinding) return undefined;
+
+  return redacted.slice(0, 2000).trim() || undefined;
 }
 
 function safeDshToolName(event: RuntimeAuditEvent): string {
@@ -371,6 +390,11 @@ function safeDshCommandName(input: string): string | undefined {
   )?.[1]?.toLowerCase();
   return command && redactPreview(command, 80) === command ? command : undefined;
 }
+
+const DSH_SENSITIVE_CONTENT_RULES = new Set([
+  'PII_EGRESS', 'DATA_EXFILTRATION', 'LLM_KEY_TO_UNKNOWN_HOST',
+  'WORKSPACE_BULK_EGRESS', 'DANGEROUS_CONFIG_CHANGE',
+]);
 
 function safeDshFileName(input: string): string | undefined {
   const normalized = input.trim().replace(/^['"]|['"]$/g, '').replace(/[\\/]+$/, '');

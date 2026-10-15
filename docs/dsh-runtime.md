@@ -82,9 +82,13 @@ Events are written to `~/.agentguard/audit.jsonl` with:
 Clean DSH events remain in this local audit and are not uploaded to AgentGuard
 Cloud. Events with a decision, non-zero risk, finding, failure, anomaly, or PII
 summary remain Cloud-eligible. Their Cloud payload uses a bounded semantic
-summary (for example, a command name plus static finding title, a file basename,
-or a sanitized network destination) and bounded status metadata. Raw tool
-output, request/response bodies, header values, absolute paths, and evaluator
+summary and bounded status metadata. Pre-execute shell events retain a redacted
+command preview capped at 2,000 characters so operators can distinguish command
+arguments, pipelines, and shell syntax; recognized credentials and PII are
+masked, while protected-file access and unmaskable sensitive findings fall back
+to a command name plus static finding title. File actions retain a basename and
+network actions retain a sanitized destination. Raw tool output,
+request/response bodies, header values, protected absolute paths, and evaluator
 reason text remain local.
 
 `runtime.attribution.toolOwners` is an exact, case-sensitive map from a DSH tool name to a stable plugin or package id. It is operator-authored trust metadata, not a tool-name heuristic. Owner ids are bounded and validated, duplicate/ambiguous wildcard matching is not supported, and an unmapped tool remains `unknown`. Do not bind a name when another agent scope may shadow it with a different implementation.
