@@ -4,7 +4,7 @@
 
 ### Changed
 - Clean runtime events (`allow`, zero risk, safe level, no findings or failure) now remain local across DSH, Codex, and Claude Code instead of being uploaded to Cloud.
-- Reportable DSH events now use a Cloud-only semantic summary and bounded status metadata; raw request/response previews, headers, output, absolute paths, and evaluator reason text remain local.
+- Reportable DSH events now use a Cloud-only projection and bounded status metadata. Pre-execute shell events retain a bounded, redacted command preview instead of collapsing every command to its executable name and finding title; protected-file access and unmaskable sensitive findings still use safe summaries, while raw responses, headers, output, protected absolute paths, and evaluator reason text remain local.
 - Reportable native-hook events now retain a safe action summary from the original tool input, including post-tool commands and file basenames; when raw values cannot be retained, Cloud receives a bounded tool-and-finding summary instead of a generic placeholder.
 - Native `PreToolUse` actions remain the primary Cloud records, while routine successful `PostToolUse` observations now stay local and only failures, elevated risks, anomalous results, or material new findings are uploaded as separate redacted events.
 - Native web-fetch audit events now retain a bounded sanitized destination instead of a generic placeholder, without uploading URL credentials, fragments, query values, or sensitive path segments.

@@ -86,10 +86,12 @@ Only redacted, Cloud-eligible runtime audit previews are uploaded by default:
   retained safely, the preview falls back to a bounded tool name plus static
   finding title rather than an opaque placeholder.
 - Reportable DSH events use the same local-first boundary through a Cloud-only
-  projection: command names, file basenames, sanitized network destinations,
-  static finding titles, and bounded status fields may be sent; raw tool output,
-  request/response previews, headers, absolute paths, and evaluator reason text
-  remain local.
+  projection. Pre-execute shell events retain a redacted command preview capped
+  at 2,000 characters; protected-file access and unmaskable sensitive findings
+  fall back to a command name plus static finding title. File basenames,
+  sanitized network destinations, static finding titles, and bounded status
+  fields may also be sent. Raw tool output, request/response previews, headers,
+  protected absolute paths, and evaluator reason text remain local.
 - Raw stdout and stderr are never uploaded from either lifecycle stage.
   Reportable post-tool events contain only the safe original-action summary,
   redacted risk summary, and bounded status metadata.
