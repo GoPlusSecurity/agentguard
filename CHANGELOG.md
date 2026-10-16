@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Native Codex and Claude Code hooks no longer block standalone `agentguard` CLI results when output contains sensitive data. Codex replaces model-visible tool results with locally redacted feedback, Claude Code rewrites supported post-tool results, and the exact pending Agent JWT activation URL remains clickable. Compound commands and other tools remain protected.
+- OpenClaw and QClaw integrations now rewrite correlated AgentGuard CLI text in supported OpenClaw-owned `tool_result_persist` transcripts; the native Hermes `transform_tool_result` hook and DSH `tools/post-execute` accept path provide equivalent non-blocking redaction where supported. An exact saved activation link stays clickable; other hooks and downstream policy decisions retain their existing boundaries.
+
 ## [1.2.2] - 2026-10-16
 
 ### Changed
