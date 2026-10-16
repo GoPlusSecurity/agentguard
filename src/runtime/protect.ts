@@ -212,7 +212,10 @@ function isAgentGuardStatusResult(action: RuntimeAction): boolean {
 
 function isSafelyMaskedAgentGuardStatusOutput(output: unknown): boolean {
   const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-  return redactText(serialized) === serialized;
+  // The status help intentionally prints this literal placeholder. Normalize only
+  // that documented value so real keys and unrelated sensitive output stay strict.
+  const normalized = serialized.replaceAll('TYPESAFE_API_KEY=<key>', 'TYPESAFE_API_KEY=[REDACTED]');
+  return redactText(normalized) === normalized;
 }
 
 function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
