@@ -40,6 +40,8 @@ import {
 } from '../runtime/protect.js';
 import type { RuntimeActionType } from '../runtime/types.js';
 import type { AgentGuardConfig } from '../config.js';
+import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
+import { redactAgentGuardSelfToolOutput } from '../runtime/self-output.js';
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -74,8 +76,8 @@ interface OpenClawPluginApi {
   source: string;
   registrationMode?: string;
   pluginConfig?: Record<string, unknown>;
-  on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
-  on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
+  on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown> | unknown): void;
+  on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown> | unknown): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +370,9 @@ export function registerOpenClawPlugin(
   const trustRegistry = options.registry ?? new SkillRegistry();
   const runProtectAction = options.protectAction ?? protectAction;
   const runtimeProtectionEnabled = options.runtimeProtection !== false;
+  // Only a verified before_tool_call can mark a later persisted tool result as
+  // AgentGuard-owned. tool_result_persist does not expose tool arguments.
+  const pendingSelfResults = new Map<string, { toolName: string; sessionKey?: string; expiresAt: number }>();
 
   // Simple logger
   const logger = (msg: string) => console.log(msg);
@@ -497,6 +502,22 @@ export function registerOpenClawPlugin(
       // Try to infer plugin from tool name
       const toolName = normalized.toolName;
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
+      const rawEvent = event && typeof event === 'object' ? event as Record<string, unknown> : {};
+      const rawCtx = ctx && typeof ctx === 'object' ? ctx as Record<string, unknown> : {};
+      const callId = rawEvent.toolCallId ?? rawCtx.toolCallId;
+      const args = rawEvent.params ?? rawEvent.toolInput ?? rawEvent.args;
+      const command = args && typeof args === 'object'
+        ? (args as Record<string, unknown>).command ?? (args as Record<string, unknown>).cmd : undefined;
+      if (runtimeProtectionEnabled && normalized.actionType === 'shell'
+          && typeof command === 'string' && isStandaloneAgentGuardCliCommand(command)
+          && typeof callId === 'string' && callId.length > 0 && callId.length <= 160) {
+        if (pendingSelfResults.size >= 512) pendingSelfResults.delete(pendingSelfResults.keys().next().value!);
+        pendingSelfResults.set(callId, {
+          toolName,
+          sessionKey: typeof rawCtx.sessionKey === 'string' ? rawCtx.sessionKey : undefined,
+          expiresAt: Date.now() + 60_000,
+        });
+      }
 
       // Check if plugin is untrusted
       if (pluginId) {
@@ -585,6 +606,12 @@ export function registerOpenClawPlugin(
     try {
       const input = adapter.parseInput(event);
       const [normalized] = adapter.normalizeLifecycleEvent('after_tool_call', event, ctx);
+      const actionArgs = event && typeof event === 'object' ? event as Record<string, unknown> : {};
+      const args = actionArgs.params ?? actionArgs.toolInput ?? actionArgs.args;
+      const command = args && typeof args === 'object'
+        ? (args as Record<string, unknown>).command ?? (args as Record<string, unknown>).cmd : undefined;
+      if (normalized.actionType === 'shell' && typeof command === 'string'
+          && isStandaloneAgentGuardCliCommand(command)) return;
       const toolName = normalized.toolName;
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
       if (runtimeProtectionEnabled) {
@@ -602,6 +629,48 @@ export function registerOpenClawPlugin(
       // Non-critical
     }
   });
+
+  // OpenClaw-owned transcripts expose a synchronous result rewrite hook.
+  // This cannot rewrite Codex-native records or results already shown in a UI.
+  try {
+    api.on('tool_result_persist', (rawEvent: unknown, rawContext?: unknown) => {
+      const event = rawEvent && typeof rawEvent === 'object' ? rawEvent as Record<string, unknown> : {};
+      const ctx = rawContext && typeof rawContext === 'object' ? rawContext as Record<string, unknown> : {};
+      const toolMessage = event.message && typeof event.message === 'object'
+        ? event.message as Record<string, unknown> : {};
+      const callId = event.toolCallId ?? ctx.toolCallId ?? toolMessage.toolCallId;
+      if (event.isSynthetic === true || typeof callId !== 'string') return undefined;
+      const pending = pendingSelfResults.get(callId);
+      if (!pending) return undefined;
+      pendingSelfResults.delete(callId);
+      if (pending.expiresAt < Date.now() || pending.toolName !== (event.toolName ?? ctx.toolName ?? toolMessage.toolName)
+          || (pending.sessionKey && pending.sessionKey !== ctx.sessionKey)) return undefined;
+      const message = event.message;
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined;
+      const toolResult = message as Record<string, unknown>;
+      if (toolResult.role !== 'toolResult') return undefined;
+      const current = toolResult.content;
+      let changed = false;
+      const sanitize = (text: string) => {
+        let safe: string;
+        try { safe = redactAgentGuardSelfToolOutput(text, loadAgentGuardConfig()); }
+        catch { safe = 'AgentGuard output could not be safely redacted; run the command in your terminal.'; }
+        if (safe !== text) changed = true;
+        return safe;
+      };
+      const content = Array.isArray(current)
+        ? current.map((block) => {
+          if (!block || typeof block !== 'object' || Array.isArray(block)) return block;
+          const part = block as Record<string, unknown>;
+          return part.type === 'text' && typeof part.text === 'string'
+            ? { ...part, text: sanitize(part.text) } : block;
+        })
+        : typeof current === 'string' ? sanitize(current) : current;
+      return changed ? { message: { ...toolResult, content } } : undefined;
+    });
+  } catch {
+    logger('[AgentGuard] tool_result_persist is unavailable; AgentGuard CLI output rewrite is limited to supported hosts.');
+  }
 
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
 }

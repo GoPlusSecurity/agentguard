@@ -9,6 +9,7 @@ Hermes loads this package and calls :func:`register` at plugin-load time.
 from __future__ import annotations
 
 import os
+import shlex
 import logging
 import shutil
 import subprocess
@@ -33,6 +34,7 @@ def register(ctx: Any, bridge: Optional[AgentGuardBridge] = None) -> None:
     ctx.register_hook("post_api_request", _make_post_api_request(guard))
     ctx.register_hook("pre_tool_call", _make_pre_tool_call(guard))
     ctx.register_hook("post_tool_call", _make_post_tool_call(guard))
+    ctx.register_hook("transform_tool_result", _make_transform_tool_result(guard))
     ctx.register_hook("on_session_start", _make_session_start(guard))
 
     register_command = getattr(ctx, "register_command", None)
@@ -134,6 +136,37 @@ def _make_post_tool_call(guard: AgentGuardBridge):
         return None
 
     return post_tool_call
+
+
+def _is_standalone_agentguard_command(command: Any) -> bool:
+    if not isinstance(command, str) or any(c in command for c in ";&|<>`\n\r\t") or "$(" in command:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(tokens) and tokens[0] == "agentguard"
+
+
+def _make_transform_tool_result(guard: AgentGuardBridge):
+    def transform_tool_result(tool_name: str, args: Optional[Dict[str, Any]] = None, **kwargs: Any):
+        if tool_name not in ("terminal", "execute_code") or not isinstance(args, dict):
+            return None
+        command = args.get("command") or args.get("code")
+        if not _is_standalone_agentguard_command(command):
+            return None
+        result = kwargs.get("result")
+        if not isinstance(result, str):
+            return None
+        try:
+            redacted = guard.redact_self_output(result)
+            return redacted if redacted != result else None
+        except Exception:
+            # This hook runs before Hermes puts the result in model context.
+            # Never hand raw credentials to the model if the local redactor fails.
+            return "AgentGuard output could not be safely redacted; run the command directly in your terminal."
+
+    return transform_tool_result
 
 
 def _make_session_start(guard: AgentGuardBridge):

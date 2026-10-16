@@ -258,6 +258,19 @@ class AgentGuardBridge:
             request_id=request_id,
         )
 
+    def redact_self_output(self, text: str) -> str:
+        """Use AgentGuard's shared local redactor for one own-command result."""
+        bin_path = os.environ.get("AGENTGUARD_BIN") or shutil.which("agentguard")
+        if not bin_path:
+            raise RuntimeError("AgentGuard redactor is not installed")
+        proc = subprocess.run(
+            [bin_path, "self-output"], input=text, capture_output=True,
+            text=True, timeout=self.timeout, encoding="utf-8",
+        )
+        if proc.returncode != 0:
+            raise RuntimeError("AgentGuard redactor failed")
+        return proc.stdout
+
     def run_cli(self, args: list) -> str:
         """Run an ``agentguard`` subcommand and return stdout (for /agentguard)."""
         bin_path = os.environ.get("AGENTGUARD_BIN") or shutil.which("agentguard")
@@ -274,7 +287,11 @@ class AgentGuardBridge:
             )
         except subprocess.SubprocessError as exc:
             return "AgentGuard CLI failed: %s" % exc
-        return (proc.stdout or proc.stderr or "").strip()
+        output = (proc.stdout or proc.stderr or "").strip()
+        try:
+            return self.redact_self_output(output)
+        except Exception:
+            return "AgentGuard output could not be safely redacted; run the command directly in your terminal."
 
     # -- internals ---------------------------------------------------------
 

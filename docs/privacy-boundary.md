@@ -16,6 +16,25 @@ Redacted request and response observations may be written to the local audit
 file, but routine model-request records and all model-response records are not
 uploaded to Cloud.
 
+## AgentGuard-owned CLI results
+
+A standalone `agentguard` shell invocation is not blocked by AgentGuard merely
+because its own result contains sensitive text. Supported native result hooks
+redact recognized secrets in host-specific result or persistence surfaces. The **exact**
+pending Agent JWT activation URL saved in the local AgentGuard configuration
+remains unchanged so the user can open it. Other tokenized URLs are still
+redacted. Compound commands, alternate executable paths, and unrelated tools
+retain their ordinary protection; `agentguard approve` is not exempt from
+agent-self-approval checks.
+
+| Host | Own-command result handling | Limit |
+|---|---|---|
+| Codex | `PostToolUse` replaces sensitive results with redacted feedback. | Requires the native hook; no raw output replacement for unsupported lifecycle events. |
+| Claude Code | `PostToolUse` rewrites supported result shapes; `PostToolBatch` excludes the own-command call from content scanning. | `PostToolUseFailure` has no output rewrite channel. |
+| OpenClaw / QClaw | `tool_result_persist` synchronously rewrites matched text in OpenClaw-owned session transcripts. | Requires host support and a matching `toolCallId`; cannot change results already displayed or Codex-native records. |
+| Hermes | Native `transform_tool_result` rewrites results before model context; `/agentguard` uses the same redactor. | Legacy shell hooks expose only an audit-only post event and cannot rewrite tool output. |
+| DSH | `tools/post-execute` can return redacted text content with `kind: accept`. | Structured results without rendered text and results blocked by another policy are not rewritten by this hook. |
+
 ## Public web-search results
 
 Bare card- or national-ID-shaped digits in a **verified, host-owned web-search

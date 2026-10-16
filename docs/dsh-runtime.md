@@ -61,6 +61,8 @@ The reason passed into DSH contains only a bounded risk score, normalized policy
 
 ## Response containment boundary
 
+Standalone AgentGuard CLI shell commands are exempt from AgentGuard's own pre-execute policy evaluation (except `agentguard approve`). When their post-execute result exposes text content, the runtime can return an `accept` decision with locally redacted text while preserving the exact saved pending Agent JWT activation URL. It never weakens a downstream `block` decision. This does not claim to rewrite arbitrary structured result values without rendered text.
+
 Network results pass through `tools/post-execute`. AgentGuard extracts a bounded response preview plus available status, content type, headers, and byte count, then evaluates response and network-volume anomalies.
 
 Post-execute remains audit-only in `observe` and in the default `protect` configuration. Set `postResponseMode: block-malicious` together with `mode: protect` to suppress only results whose final AgentGuard post-execute decision is `block`. The original result value and rendered content are not returned; DSH receives bounded AgentGuard feedback that excludes the untrusted preview and evidence. A stronger downstream block is preserved.

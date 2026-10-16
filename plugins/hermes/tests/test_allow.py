@@ -17,6 +17,7 @@ def test_register_wires_all_hooks_and_command():
         "post_api_request",
         "pre_tool_call",
         "post_tool_call",
+        "transform_tool_result",
         "on_session_start",
     }
     assert "agentguard" in ctx.commands

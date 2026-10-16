@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { cwd } from 'node:process';
 import { dirname, join } from 'node:path';
 import { closeSync, openSync, readSync } from 'node:fs';
@@ -9,6 +8,7 @@ import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardStatusCommand, isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
+import { redactAgentGuardSelfToolOutput } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -253,28 +253,6 @@ function codexSelfToolFeedback(value: unknown, fallback: string): string {
     ? `Exit code: ${exitCode}\n${display}` : display;
 }
 
-function redactAgentGuardSelfToolOutput(response: unknown, config: AgentGuardConfig): string {
-  const text = typeof response === 'string' ? response : JSON.stringify(response);
-  const activationUrl = config.agentJwt && config.agentRegisterUrl;
-  if (!activationUrl || activationUrl.length > 2048 || /[\x00-\x1f\x7f]/.test(activationUrl)) {
-    return redactText(text);
-  }
-  try {
-    const url = new URL(activationUrl);
-    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) {
-      return redactText(text);
-    }
-    // The exact URL saved after registration is user-facing and must remain
-    // clickable. A fresh per-call marker keeps every other credential subject
-    // to normal redaction, even elsewhere in the same result.
-    const marker = `AGENTGUARDLINK${randomBytes(16).toString('hex')}END`;
-    const protectedText = text.replace(/https?:\/\/[^\s\"'`<>\\]+/gi, (candidate) =>
-      candidate === activationUrl ? marker : candidate);
-    return redactText(protectedText).replaceAll(marker, activationUrl);
-  } catch {
-    return redactText(text);
-  }
-}
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
