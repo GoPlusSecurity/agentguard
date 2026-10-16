@@ -207,12 +207,16 @@ describe('Claude Code native lifecycle hooks', () => {
         tool_calls: [{ ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 } }],
       },
     });
-    assert.ok(forgedBatch);
-    assert.equal(forgedBatch.decision.decision, 'block');
-    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /pending-claude-link/);
+    assert.equal(forgedBatch, null, 'self-only batches do not block for output content');
+    const forgedPost = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-forged-post', cwd: fixture.root,
+      ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 },
+    });
+    assert.equal(forgedPost.result.decision.decision, 'allow');
+    assert.doesNotMatch(forgedPost.text, /pending-claude-link-123456-forged/);
   });
 
-  it('does not exempt wrapped, prefixed, alternate-path, or extended status commands', async () => {
+  it('does not exempt wrapped, prefixed, or alternate-path status commands', async () => {
     const commands = [
       "sh -c 'agentguard status'",
       'env MODE=test agentguard status',
@@ -221,7 +225,6 @@ describe('Claude Code native lifecycle hooks', () => {
       'builtin agentguard status',
       '/tmp/agentguard status',
       'agentguard-mcp status',
-      'agentguard status --json',
     ];
     for (const [index, command] of commands.entries()) {
       const fixture = lifecycleFixture();
@@ -243,14 +246,16 @@ describe('Claude Code native lifecycle hooks', () => {
     }
   });
 
-  it('still protects an unexpectedly unmasked secret in agentguard status output', async () => {
+  it('rewrites an unexpectedly unmasked secret in agentguard status output', async () => {
     const fixture = lifecycleFixture();
     const leaked = await runHook(fixture.config, {
       hook_event_name: 'PostToolUse', session_id: 'sess-status-leak', cwd: fixture.root,
       tool_name: 'Bash', tool_input: { command: 'agentguard status' },
       tool_response: { stdout: 'api_key=sk-status-leak-1234567890', exit_code: 0 },
     });
-    assert.equal(leaked.result.decision.decision, 'block');
+    assert.equal(leaked.result.decision.decision, 'allow');
+    assert.match(leaked.text, /updatedToolOutput/);
+    assert.match(leaked.text, /api_key=\[REDACTED\]/);
     assert.doesNotMatch(leaked.text, /status-leak/);
   });
 
@@ -352,8 +357,7 @@ describe('Claude Code native lifecycle hooks', () => {
         }],
       },
     });
-    assert.ok(unsafeStatus);
-    assert.equal(unsafeStatus.decision.decision, 'block');
+    assert.equal(unsafeStatus, null, 'AgentGuard-only tool batches must never block');
 
     for (const [index, command] of [
       "sh -c 'agentguard status'",
@@ -361,7 +365,6 @@ describe('Claude Code native lifecycle hooks', () => {
       'command agentguard status',
       'builtin agentguard status',
       '/tmp/agentguard status',
-      'agentguard status --json',
     ].entries()) {
       const nonExempt = await protectAction({
         config: fixture.config,

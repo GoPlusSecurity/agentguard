@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Native Codex and Claude Code hooks no longer block standalone `agentguard` CLI results when output contains sensitive data. Codex replaces model-visible tool results with locally redacted feedback, Claude Code rewrites supported post-tool results, and the exact pending Agent JWT activation URL remains clickable. Compound commands and other tools remain protected.
+
 ## [1.2.2] - 2026-10-16
 
 ### Changed

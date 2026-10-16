@@ -6,7 +6,9 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { AgentGuardConfig } from '../config.js';
 import type { Advisory } from '../feed/types.js';
+import { protectAction } from '../runtime/protect.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
@@ -335,10 +337,12 @@ describe('CLI subscribe command modes', () => {
         eventSpoolPath: join(home, 'events-spool.jsonl'),
       }));
 
-      const result = await runCliNoConfigWrite(['subscribe', '--json'], home);
+      const result = await runCliNoConfigWrite(['subscribe'], home);
 
       assert.equal(result.exitCode, 0);
       assert.equal(result.stderr, '');
+      assert.match(result.stdout, /AgentGuard Cloud activation is ready:/);
+      assert.match(result.stdout, /https:\/\/agentguard\.example\/activate\?token=hermes-subscribe/);
       assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
         'POST /api/agent/register',
         'POST /api/v1/feed/subscribe',
@@ -357,6 +361,12 @@ describe('CLI subscribe command modes', () => {
       assert.equal(config.agentId, 'agt_hermes_subscribe');
       assert.equal(config.agentJwt, 'agent.jwt.hermes-subscribe');
       assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=hermes-subscribe');
+      const native = await protectAction({ config: config as AgentGuardConfig, agentHost: 'codex', auditSafe: true, rawInput: {
+        hook_event_name: 'PostToolUse', session_id: 'sess-subscribe', cwd: home,
+        tool_name: 'functions.exec_command', tool_input: { cmd: 'agentguard subscribe' },
+        tool_response: { output: result.stdout, exit_code: result.exitCode },
+      } });
+      assert.equal(native, null, 'real subscribe output and registration link remain untouched');
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }

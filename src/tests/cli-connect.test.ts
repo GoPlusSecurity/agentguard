@@ -6,7 +6,9 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { AgentGuardConfig } from '../config.js';
 import { getDefaultEffectiveRuntimePolicy } from '../runtime/policy.js';
+import { protectAction } from '../runtime/protect.js';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const CLI_PATH = join(projectRoot, 'dist', 'cli.js');
@@ -99,16 +101,17 @@ describe('CLI connect Agent JWT mode', () => {
       assert.match(result.stdout, /Registered local AgentGuard agent \(agt_cli_test\)/);
       assert.match(result.stdout, /https:\/\/agentguard\.example\/activate\?token=cli-test/);
       assert.equal(requests[0].url, '/api/agent/register');
-      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
-        agentId?: string;
-        agentJwt?: string;
-        agentRegisterUrl?: string;
-        cloudUrl?: string;
-      };
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as AgentGuardConfig;
       assert.equal(config.cloudUrl, cloudUrl);
       assert.equal(config.agentId, 'agt_cli_test');
       assert.equal(config.agentJwt, 'agent.jwt.cli-test');
       assert.equal(config.agentRegisterUrl, 'https://agentguard.example/activate?token=cli-test');
+      const native = await protectAction({ config, agentHost: 'codex', auditSafe: true, rawInput: {
+        hook_event_name: 'PostToolUse', session_id: 'sess-connect', cwd: home,
+        tool_name: 'functions.exec_command', tool_input: { cmd: `agentguard connect --url ${cloudUrl}` },
+        tool_response: { output: result.stdout, exit_code: result.exitCode },
+      } });
+      assert.equal(native, null, 'real connect output and registration link remain untouched');
     } finally {
       await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
     }

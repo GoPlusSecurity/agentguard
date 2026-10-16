@@ -20,6 +20,14 @@ export function isAgentGuardCliCommand(command: string): boolean {
   return isAgentGuardCliCommandInner(command, 0);
 }
 
+/** Only the bare AgentGuard CLI can use the native self-output rewrite.
+ * Wrapped, alternate-path and compound shell calls remain on the normal guard.
+ */
+export function isStandaloneAgentGuardCliCommand(command: string): boolean {
+  const trimmed = command.trim();
+  return /^agentguard(?:[ \t]|$)/.test(trimmed) && isAgentGuardCliCommand(trimmed);
+}
+
 export function isAgentGuardStatusCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!trimmed || /[\r\n]/.test(trimmed)) return false;
