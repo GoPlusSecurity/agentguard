@@ -175,6 +175,43 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(existsSync(fixture.config.auditPath), false);
   });
 
+  it('allows only the configured activation link in native status and batch results', async () => {
+    const fixture = lifecycleFixture();
+    const activationUrl = 'https://agentguard.example/activate?token=pending-claude-link-123456';
+    fixture.config.agentJwt = 'test.jwt.pending';
+    fixture.config.agentRegisterUrl = activationUrl;
+    const statusOutput = `Agent activation URL: ${activationUrl}\nAPI key: not used for this connection`;
+    const statusCall = {
+      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
+      tool_response: { stdout: statusOutput, exit_code: 0 },
+    };
+    const post = await protectAction({
+      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
+        hook_event_name: 'PostToolUse', session_id: 'sess-pending-status', cwd: fixture.root,
+        ...statusCall,
+      },
+    });
+    assert.equal(post, null);
+    const batch = await protectAction({
+      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-pending-batch', cwd: fixture.root,
+        tool_calls: [statusCall],
+      },
+    });
+    assert.equal(batch, null);
+    assert.equal(existsSync(fixture.config.auditPath), false);
+
+    const forgedBatch = await protectAction({
+      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-forged-batch', cwd: fixture.root,
+        tool_calls: [{ ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 } }],
+      },
+    });
+    assert.ok(forgedBatch);
+    assert.equal(forgedBatch.decision.decision, 'block');
+    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /pending-claude-link/);
+  });
+
   it('does not exempt wrapped, prefixed, alternate-path, or extended status commands', async () => {
     const commands = [
       "sh -c 'agentguard status'",

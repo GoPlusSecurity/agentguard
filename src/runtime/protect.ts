@@ -210,11 +210,34 @@ function isAgentGuardStatusResult(action: RuntimeAction): boolean {
     && action.metadata?.claudeBatchOnlyAgentGuardStatus === true;
 }
 
-function isSafelyMaskedAgentGuardStatusOutput(output: unknown): boolean {
+function isSafelyMaskedAgentGuardStatusOutput(
+  output: unknown,
+  config: AgentGuardConfig,
+  originalResponse: unknown = output,
+): boolean {
   const serialized = typeof output === 'string' ? output : JSON.stringify(output);
   // The status help intentionally prints this literal placeholder. Normalize only
   // that documented value so real keys and unrelated sensitive output stay strict.
-  const normalized = serialized.replaceAll('TYPESAFE_API_KEY=<key>', 'TYPESAFE_API_KEY=[REDACTED]');
+  let normalized = serialized.replaceAll('TYPESAFE_API_KEY=<key>', 'TYPESAFE_API_KEY=[REDACTED]');
+  const activationUrl = config.agentJwt && config.agentRegisterUrl;
+  if (activationUrl && activationUrl.length <= 2048 && !/[\x00-\x1f\x7f]/.test(activationUrl)) {
+    try {
+      const url = new URL(activationUrl);
+      if (url.protocol === 'https:' && !url.username && !url.password) {
+        const statusLine = `Agent activation URL: ${activationUrl}`;
+        const stdout = typeof originalResponse === 'string' ? originalResponse
+          : isPlainRecord(originalResponse) ? firstString(originalResponse.stdout, originalResponse.output) : '';
+        // Only the exact link printed by this installation's pending status is
+        // exempt. A forged or additional credential in the tool result is not.
+        if (stdout.split(/\r?\n/).filter((line) => line === statusLine).length === 1) {
+          normalized = normalized.replace(
+            JSON.stringify(statusLine).slice(1, -1),
+            'Agent activation URL: [validated activation link]',
+          );
+        }
+      }
+    } catch { /* Invalid stored URLs do not weaken the content scan. */ }
+  }
   return redactText(normalized) === normalized;
 }
 
@@ -771,7 +794,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     : codexLifecycleFields(codexHookEvent);
   const sessionId = options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw);
   const claudeBatchProjection = claudeHookEvent === 'PostToolBatch'
-    ? projectClaudeBatchForInspection(raw?.tool_calls)
+    ? projectClaudeBatchForInspection(raw?.tool_calls, options.config)
     : undefined;
   const claudeBatch = claudeBatchProjection
     ? claudeBatchFacts(
@@ -846,7 +869,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const agentGuardStatusOutputSuppressed = nativePostToolEvent
     && nativeToolActionType === 'shell'
     && isAgentGuardStatusCommand(nativeToolInput)
-    && isSafelyMaskedAgentGuardStatusOutput(actionInput);
+    && isSafelyMaskedAgentGuardStatusOutput(actionInput, options.config, raw?.tool_response ?? raw?.toolResponse);
   if (agentGuardStatusOutputSuppressed) actionInput = AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER;
   const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse'
     && verifiedOutput === undefined && redactText(actionInput) !== actionInput;
@@ -1337,18 +1360,19 @@ function claudeBatchFacts(
 
 function projectClaudeBatchForInspection(
   responses: unknown,
+  config: AgentGuardConfig,
 ): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number } {
   if (!Array.isArray(responses)) {
     return { originalCalls: [], inspectionCalls: [], suppressedCount: 0 };
   }
   let suppressedCount = 0;
   const inspectionCalls = responses.map((call) => {
-    if (!isClaudeAgentGuardStatusCall(call) || !isPlainRecord(call)) return call;
+    if (!isClaudeAgentGuardStatusCall(call, config) || !isPlainRecord(call)) return call;
     const outputKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
       ? 'tool_response'
       : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
     if (!outputKey) return call;
-    const outputProjection = projectAgentGuardStatusOutput(call[outputKey]);
+    const outputProjection = projectAgentGuardStatusOutput(call[outputKey], config);
     if (!outputProjection.suppressed) return call;
     const projected = { ...call };
     projected[outputKey] = outputProjection.value;
@@ -1358,8 +1382,8 @@ function projectClaudeBatchForInspection(
   return { originalCalls: responses, inspectionCalls, suppressedCount };
 }
 
-function projectAgentGuardStatusOutput(output: unknown): { value: unknown; suppressed: boolean } {
-  if (!isSafelyMaskedAgentGuardStatusOutput(output)) return { value: output, suppressed: false };
+function projectAgentGuardStatusOutput(output: unknown, config: AgentGuardConfig): { value: unknown; suppressed: boolean } {
+  if (!isSafelyMaskedAgentGuardStatusOutput(output, config)) return { value: output, suppressed: false };
   if (typeof output === 'string') {
     return { value: AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER, suppressed: true };
   }
@@ -1375,7 +1399,7 @@ function projectAgentGuardStatusOutput(output: unknown): { value: unknown; suppr
   return { value: suppressed ? projected : output, suppressed };
 }
 
-function isClaudeAgentGuardStatusCall(call: unknown): boolean {
+function isClaudeAgentGuardStatusCall(call: unknown, config: AgentGuardConfig): boolean {
   if (!isPlainRecord(call)) return false;
   const toolName = firstString(call.tool_name, call.toolName, call.name);
   const toolInput = pickToolInput(call);
@@ -1384,7 +1408,7 @@ function isClaudeAgentGuardStatusCall(call: unknown): boolean {
   const command = pickNativeToolAuditInput(actionType, toolInput);
   if (!command || !isAgentGuardStatusCommand(command)) return false;
   const output = call.tool_response ?? call.toolResponse;
-  return projectAgentGuardStatusOutput(output).suppressed;
+  return projectAgentGuardStatusOutput(output, config).suppressed;
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {

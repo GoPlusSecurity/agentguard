@@ -309,6 +309,46 @@ describe('installed Codex native hooks', () => {
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
   });
 
+  it('keeps the actual pending activation link visible without blocking status', () => {
+    const fixture = installFixture();
+    const activationUrl = 'https://agentguard.example/activate?token=pending-activation-link-123456';
+    writeFileSync(join(fixture.home, 'config.json'), JSON.stringify({
+      version: 1, level: 'balanced', cloudUrl: 'http://127.0.0.1:9',
+      agentHost: 'codex', agentId: 'agt_pending', agentJwt: 'test.jwt.pending',
+      agentRegisterUrl: activationUrl,
+      policyCachePath: join(fixture.home, 'policy-cache.json'),
+      auditPath: join(fixture.home, 'audit.jsonl'),
+      eventSpoolPath: join(fixture.home, 'events-spool.jsonl'),
+    }));
+    const status = fixture.runCli('status');
+    assert.equal(status.status, 0);
+    assert.match(status.stdout, /TYPESAFE_API_KEY=<key>/);
+    assert.ok(status.stdout.includes(`Agent activation URL: ${activationUrl}`));
+
+    const payload = (output: string, command = 'agentguard status') => ({
+      hook_event_name: 'PostToolUse', session_id: 'sess_pending', turn_id: 'turn_pending',
+      cwd: fixture.project, tool_name: 'functions.exec_command', tool_use_id: 'tool_pending',
+      tool_input: { cmd: command }, tool_response: { output, exit_code: 0 },
+    });
+    const allowed = fixture.run('agentguard-post-tool.sh', payload(status.stdout));
+    assert.equal(allowed.status, 0);
+    assert.equal(allowed.stdout.trim(), '');
+    assert.equal(allowed.stderr.trim(), '');
+    assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
+
+    // Matching the local URL is necessary, not a blanket exception for URLs.
+    for (const [index, result] of [
+      payload(status.stdout.replace(activationUrl, `${activationUrl}-forged`)),
+      payload(`${status.stdout}api_key=sk-unsafe-addition-1234567890\n`),
+      payload(status.stdout, 'agentguard status; echo extra'),
+    ].entries()) {
+      const blocked = fixture.run('agentguard-post-tool.sh', { ...result, session_id: `sess_pending_${index}` });
+      assert.equal(blocked.status, 0);
+      assert.equal(JSON.parse(blocked.stdout).decision, 'block');
+      assert.doesNotMatch(`${blocked.stdout}\n${blocked.stderr}`, /pending-activation-link|unsafe-addition/);
+    }
+  });
+
   it('still blocks an unexpectedly unmasked secret in agentguard status output', () => {
     const fixture = installFixture();
     const run = fixture.run('agentguard-post-tool.sh', {
