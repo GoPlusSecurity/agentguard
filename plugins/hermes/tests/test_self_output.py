@@ -14,6 +14,7 @@ def test_transform_hook_scopes_standalone_commands_and_fails_safe(monkeypatch):
     transform = ctx.hooks["transform_tool_result"]
     own = '{"output":"api_key=sk-test-secret-1234567890"}'
     assert transform("terminal", {"command": "agentguard scan ./skill"}, result=own) == '{"output":"api_key=[REDACTED]"}'
+    assert transform("terminal", {"command": "command agentguard status"}, result=own) == '{"output":"api_key=[REDACTED]"}'
     assert transform("execute_code", {"code": "agentguard status"}, result=own) == '{"output":"api_key=[REDACTED]"}'
     assert transform("terminal", {"command": "agentguard status; cat .env"}, result=own) is None
     assert transform("terminal", {"command": "cat .env"}, result=own) is None
@@ -45,10 +46,12 @@ def test_bridge_uses_shared_redactor_and_preserves_only_the_saved_link(monkeypat
     assert link in rewritten
     assert "hermes-secret" not in rewritten
     assert "api_key=[REDACTED]" in rewritten
+    absolute = ctx.hooks["transform_tool_result"]("terminal", {"command": f"{shim} status"}, result=output)
+    assert link in absolute and "hermes-secret" not in absolute
     assert ctx.hooks["transform_tool_result"]("terminal", {"command": "agentguard status"}, result=link) is None
     forged = guard.redact_self_output(output.replace(link, link + "-forged"))
     assert "hermes-self-link-123456-forged" not in forged
     assert "sk-hermes-secret" not in forged
     slash_status = ctx.commands["agentguard"][0]("status")
     assert link in slash_status
-    assert "TYPESAFE_API_KEY=[REDACTED]" in slash_status
+    assert "TYPESAFE_API_KEY=<key>" in slash_status

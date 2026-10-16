@@ -207,7 +207,8 @@ describe('Claude Code native lifecycle hooks', () => {
         tool_calls: [{ ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 } }],
       },
     });
-    assert.equal(forgedBatch, null, 'self-only batches do not block for output content');
+    assert.equal(forgedBatch?.decision.decision, 'block',
+      'the batch must catch a result that was not rewritten before model use');
     const forgedPost = await runHook(fixture.config, {
       hook_event_name: 'PostToolUse', session_id: 'sess-forged-post', cwd: fixture.root,
       ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 },
@@ -216,13 +217,8 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.doesNotMatch(forgedPost.text, /pending-claude-link-123456-forged/);
   });
 
-  it('does not exempt wrapped, prefixed, or alternate-path status commands', async () => {
+  it('rewrites simple wrappers but does not trust unrelated executable paths', async () => {
     const commands = [
-      "sh -c 'agentguard status'",
-      'env MODE=test agentguard status',
-      'MODE=test agentguard status',
-      'command agentguard status',
-      'builtin agentguard status',
       '/tmp/agentguard status',
       'agentguard-mcp status',
     ];
@@ -244,6 +240,18 @@ describe('Claude Code native lifecycle hooks', () => {
       assert.ok(result, command);
       assert.notEqual(result.event.metadata?.agentGuardStatusOutputSuppressed, true, command);
     }
+    for (const command of ["sh -c 'agentguard status'", 'env MODE=test agentguard status',
+      'MODE=test agentguard status', 'command agentguard status']) {
+      const fixture = lifecycleFixture();
+      const rewritten = await runHook(fixture.config, {
+        hook_event_name: 'PostToolUse', session_id: 'sess-wrapped-status', cwd: fixture.root,
+        tool_name: 'Bash', tool_input: { command },
+        tool_response: { stdout: 'api_key=sk-wrapped-secret-1234567890', exit_code: 0 },
+      });
+      assert.equal(rewritten.result.decision.decision, 'allow', command);
+      assert.match(rewritten.text, /updatedToolOutput/, command);
+      assert.doesNotMatch(rewritten.text, /wrapped-secret/, command);
+    }
   });
 
   it('rewrites an unexpectedly unmasked secret in agentguard status output', async () => {
@@ -257,6 +265,14 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.match(leaked.text, /updatedToolOutput/);
     assert.match(leaked.text, /api_key=\[REDACTED\]/);
     assert.doesNotMatch(leaked.text, /status-leak/);
+
+    const structured = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-status-structured', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
+      tool_response: { stdout: 'healthy', token: 'sk-structured-secret-1234567890', count: 4 },
+    });
+    assert.deepEqual(structured.output.hookSpecificOutput.updatedToolOutput,
+      { stdout: 'healthy', token: '[REDACTED]', count: 4 });
   });
 
   it('suppresses only agentguard status output while preserving PostToolBatch protection', async () => {
@@ -357,14 +373,12 @@ describe('Claude Code native lifecycle hooks', () => {
         }],
       },
     });
-    assert.equal(unsafeStatus, null, 'AgentGuard-only tool batches must never block');
+    assert.equal(unsafeStatus?.decision.decision, 'block',
+      'an unsafe model-visible result cannot be hidden from the batch gate');
 
     for (const [index, command] of [
-      "sh -c 'agentguard status'",
-      'env MODE=test agentguard status',
-      'command agentguard status',
-      'builtin agentguard status',
       '/tmp/agentguard status',
+      'agentguard status; echo extra',
     ].entries()) {
       const nonExempt = await protectAction({
         config: fixture.config,
@@ -380,6 +394,16 @@ describe('Claude Code native lifecycle hooks', () => {
       assert.ok(nonExempt, command);
       assert.equal(nonExempt.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, undefined, command);
     }
+
+    const failedOwnCall = await protectAction({
+      config: fixture.config, agentHost: 'claude-code', auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-failed-own-call', cwd: fixture.root,
+        tool_calls: [{ ...statusCall,
+          tool_response: 'Exit code 1\napi_key=sk-failed-own-secret-1234567890' }],
+      },
+    });
+    assert.equal(failedOwnCall?.decision.decision, 'block');
   });
 
   it('blocks a sensitive PostToolBatch before the next model call with bounded counts', async () => {

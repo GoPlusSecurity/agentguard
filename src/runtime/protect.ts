@@ -8,7 +8,7 @@ import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardStatusCommand, isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { redactAgentGuardSelfToolOutput } from './self-output.js';
+import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -216,14 +216,10 @@ function nativeAgentGuardSelfOutput(
   if (claudeEvent === 'PostToolUseFailure') return null; // No output-rewrite contract for failure hooks.
   const response = raw?.tool_response ?? raw?.toolResponse;
   if (response === undefined) return null;
-  const safeText = redactAgentGuardSelfToolOutput(response, options.config);
+  const safeValue = redactAgentGuardSelfToolValue(response, options.config);
+  const safeText = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue);
   const originalText = typeof response === 'string' ? response : JSON.stringify(response);
   if (safeText === originalText) return null;
-
-  let safeValue: unknown = safeText;
-  if (typeof response !== 'string') {
-    try { safeValue = JSON.parse(safeText) as unknown; } catch { /* Safe text fallback. */ }
-  }
   const decision: RuntimeDecision = {
     actionId: 'act_agentguard_self_output', decision: 'allow', riskScore: 0,
     riskLevel: 'low', reasons: [], policyVersion: 'local-self-output',
@@ -305,6 +301,12 @@ function isSafelyMaskedAgentGuardStatusOutput(
 function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
   if (action.actionType !== 'shell') return false;
   const normalized = action.input.replace(/\\(.)/gs, '$1').replace(/["']/g, ' ');
+  // Approval is the immediate subcommand. A scan path named "approve" is not
+  // an attempt to approve an action.
+  if (/(?:^|[^A-Za-z0-9_-])(?:[^\s;|&()]*[\\/])?agentguard[ \t]+approve(?:[ \t]|$|[;|&()])/i.test(normalized))
+    return true;
+  if (isStandaloneAgentGuardCliCommand(action.input)) return false;
+  // Keep detecting indirect self-approval through aliases and shell expansion.
   return /(?:^|[^A-Za-z0-9_-])(?:[^\s;|&()]*[\\/])?agentguard(?:[^A-Za-z0-9_-]|$)/i.test(normalized)
     && /(?:^|[^A-Za-z0-9_-])approve(?:[^A-Za-z0-9_-]|$)/i.test(normalized);
 }
@@ -1444,9 +1446,12 @@ function projectClaudeBatchForInspection(
     const responseKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
       ? 'tool_response' : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
     if (!responseKey) return call;
-    // Batch inspection never includes AgentGuard's own output or arguments;
-    // PostToolUse already provides the redacted model-visible replacement.
     const response = call[responseKey];
+    const originalText = typeof response === 'string' ? response : JSON.stringify(response);
+    // PostToolBatch carries model-visible content. Suppress only content that
+    // is already safe. Failed or rejected PostToolUse rewrites remain visible
+    // to the batch privacy gate.
+    if (redactAgentGuardSelfToolOutput(response, config) !== originalText) return call;
     const projectedResponse = isPlainRecord(response)
       ? { exit_code: nonNegativeInteger(response.exit_code ?? response.exitCode),
         output: AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER }

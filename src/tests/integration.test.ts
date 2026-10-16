@@ -400,6 +400,15 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
         toolName: 'exec', toolCallId: 'own-3', params: { command: 'agentguard status' },
       }, { sessionKey: 'sess-one' });
       assert.equal(handlers.tool_result_persist({ ...event, toolCallId: 'own-3' }, { sessionKey: 'other-session' }), undefined);
+      const afterMismatch = handlers.tool_result_persist({ ...event, toolCallId: 'own-3' },
+        { sessionKey: 'sess-one' }) as { message?: { content: Array<{ text?: string }> } };
+      assert.match(afterMismatch.message?.content[0]?.text || '', /api_key=\[REDACTED\]/);
+      await handlers.before_tool_call({
+        toolName: 'exec', toolCallId: 'own-4', params: { command: 'command agentguard status' },
+      }, { sessionKey: 'sess-one' });
+      const missingContext = handlers.tool_result_persist({ ...event, toolCallId: 'own-4' },
+        {}) as { message?: { content: Array<{ text?: string }> } };
+      assert.match(missingContext.message?.content[0]?.text || '', /api_key=\[REDACTED\]/);
     } finally {
       if (oldHome === undefined) delete process.env.AGENTGUARD_HOME;
       else process.env.AGENTGUARD_HOME = oldHome;

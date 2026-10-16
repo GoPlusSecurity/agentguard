@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+
 const SUPPORTED_AGENT_COMMANDS = [
   'agentguard',
   'agentguard-mcp',
@@ -20,12 +23,11 @@ export function isAgentGuardCliCommand(command: string): boolean {
   return isAgentGuardCliCommandInner(command, 0);
 }
 
-/** Only the bare AgentGuard CLI can use the native self-output rewrite.
- * Wrapped, alternate-path and compound shell calls remain on the normal guard.
+/** Accept a single AgentGuard invocation, including simple shell wrappers.
+ * An explicit executable path must resolve to this package's CLI entrypoint.
  */
 export function isStandaloneAgentGuardCliCommand(command: string): boolean {
-  const trimmed = command.trim();
-  return /^agentguard(?:[ \t]|$)/.test(trimmed) && isAgentGuardCliCommand(trimmed);
+  return isStandaloneAgentGuardCliCommandInner(command, 0);
 }
 
 export function isAgentGuardStatusCommand(command: string): boolean {
@@ -59,6 +61,36 @@ function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
 
   const wrappedCommand = shellWrapperCommand(tokens, index);
   return wrappedCommand ? isAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
+}
+
+function isStandaloneAgentGuardCliCommandInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
+  const trimmed = command.trim();
+  if (!trimmed || SHELL_CONTROL_RE.test(trimmed)) return false;
+  const tokens = shellTokens(trimmed);
+  if (!tokens.length) return false;
+
+  let index = skipAssignments(tokens, 0);
+  if (basename(tokens[index]) === 'env') {
+    index += 1;
+    while (tokens[index]?.startsWith('-')) index += 1;
+    index = skipAssignments(tokens, index);
+  }
+  while (['command', 'builtin'].includes(basename(tokens[index] || ''))) index += 1;
+  if (isVerifiedAgentGuardExecutable(tokens[index])) return true;
+
+  const wrappedCommand = shellWrapperCommand(tokens, index);
+  return wrappedCommand ? isStandaloneAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
+}
+
+function isVerifiedAgentGuardExecutable(executable: string | undefined): boolean {
+  if (executable === 'agentguard') return true;
+  if (!executable || basename(executable) !== 'agentguard' || !isAbsolute(executable)) return false;
+  try {
+    return realpathSync(executable) === realpathSync(join(__dirname, '..', 'cli.js'));
+  } catch {
+    return false;
+  }
 }
 
 function matchesCommand(tokens: string[], start: number, command: string): boolean {

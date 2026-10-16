@@ -13,7 +13,7 @@ import {
 } from '../runtime/public-search.js';
 import { redactText } from '../runtime/redaction.js';
 import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
-import { redactAgentGuardSelfToolOutput } from '../runtime/self-output.js';
+import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue } from '../runtime/self-output.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
   mergeDshPostDecisions,
@@ -256,11 +256,9 @@ function rewriteDshAgentGuardResult(
     const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
     if (downstream.value !== undefined) {
       // DSH forbids replacing value and content in the same accept decision.
-      const original = JSON.stringify(downstream.value);
-      const safe = redactAgentGuardSelfToolOutput(downstream.value, config);
-      if (safe === original) return downstream;
-      try { return { ...downstream, value: JSON.parse(safe) as unknown }; }
-      catch { return { ...downstream, value: 'AgentGuard output could not be safely redacted.' }; }
+      const safe = redactAgentGuardSelfToolValue(downstream.value, config);
+      return JSON.stringify(safe) === JSON.stringify(downstream.value)
+        ? downstream : { ...downstream, value: safe };
     }
     if (!content) return downstream;
     let changed = false;

@@ -642,13 +642,19 @@ export function registerOpenClawPlugin(
       if (event.isSynthetic === true || typeof callId !== 'string') return undefined;
       const pending = pendingSelfResults.get(callId);
       if (!pending) return undefined;
-      pendingSelfResults.delete(callId);
-      if (pending.expiresAt < Date.now() || pending.toolName !== (event.toolName ?? ctx.toolName ?? toolMessage.toolName)
-          || (pending.sessionKey && pending.sessionKey !== ctx.sessionKey)) return undefined;
+      if (pending.expiresAt < Date.now()) {
+        pendingSelfResults.delete(callId);
+        return undefined;
+      }
+      const sessionKey = typeof ctx.sessionKey === 'string' ? ctx.sessionKey
+        : typeof event.sessionKey === 'string' ? event.sessionKey : undefined;
+      if (pending.toolName !== (event.toolName ?? ctx.toolName ?? toolMessage.toolName)
+          || (pending.sessionKey && sessionKey && pending.sessionKey !== sessionKey)) return undefined;
       const message = event.message;
       if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined;
       const toolResult = message as Record<string, unknown>;
       if (toolResult.role !== 'toolResult') return undefined;
+      pendingSelfResults.delete(callId);
       const current = toolResult.content;
       let changed = false;
       const sanitize = (text: string) => {

@@ -18,22 +18,25 @@ uploaded to Cloud.
 
 ## AgentGuard-owned CLI results
 
-A standalone `agentguard` shell invocation is not blocked by AgentGuard merely
-because its own result contains sensitive text. Supported native result hooks
-redact recognized secrets in host-specific result or persistence surfaces. The **exact**
+A single `agentguard` shell invocation is not blocked by AgentGuard merely
+because its own result contains sensitive text. Simple `command`, `env`, and
+shell wrappers are recognized; an explicit executable path must resolve to this
+package's CLI. Supported native result hooks redact recognized secrets in
+host-specific result or persistence surfaces. The documented
+`TYPESAFE_API_KEY=<key>` example remains unchanged. The **exact**
 pending Agent JWT activation URL saved in the local AgentGuard configuration
 remains unchanged so the user can open it. Other tokenized URLs are still
-redacted. Compound commands, alternate executable paths, and unrelated tools
+redacted. Compound commands, unverified executable paths, and unrelated tools
 retain their ordinary protection; `agentguard approve` is not exempt from
 agent-self-approval checks.
 
 | Host | Own-command result handling | Limit |
 |---|---|---|
 | Codex | `PostToolUse` replaces sensitive results with redacted feedback. | Requires the native hook; no raw output replacement for unsupported lifecycle events. |
-| Claude Code | `PostToolUse` rewrites supported result shapes; `PostToolBatch` excludes the own-command call from content scanning. | `PostToolUseFailure` has no output rewrite channel. |
+| Claude Code | `PostToolUse` rewrites supported result shapes; `PostToolBatch` excludes an own-command result only after confirming that its model-visible content is already safe. | `PostToolUseFailure` has no output rewrite channel; a sensitive failure result in the batch stops continuation. |
 | OpenClaw / QClaw | `tool_result_persist` synchronously rewrites matched text in OpenClaw-owned session transcripts. | Requires host support and a matching `toolCallId`; cannot change results already displayed or Codex-native records. |
 | Hermes | Native `transform_tool_result` rewrites results before model context; `/agentguard` uses the same redactor. | Legacy shell hooks expose only an audit-only post event and cannot rewrite tool output. |
-| DSH | `tools/post-execute` can return redacted text content with `kind: accept`. | Structured results without rendered text and results blocked by another policy are not rewritten by this hook. |
+| DSH | `tools/post-execute` can return redacted text or structured values with `kind: accept`. | Results blocked by another policy are not rewritten by this hook. |
 
 ## Public web-search results
 

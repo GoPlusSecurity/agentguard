@@ -180,6 +180,10 @@ describe('DSH runtime Phase 2A observer', () => {
       assert.doesNotMatch(JSON.stringify(structured.value), /dsh-value-secret/);
       assert.equal(structured.additionalContexts?.length, 1);
     }
+    const keyedValue = await createDshPostExecuteProtector(dependencies)(exec, result,
+      async () => ({ kind: 'accept' as const,
+        value: { token: 'sk-dsh-keyed-secret-1234567890', count: 4 } }));
+    assert.deepEqual(keyedValue, { kind: 'accept', value: { token: '[REDACTED]', count: 4 } });
     assert.equal(evaluations, 0);
     const compound = execution({ arguments: { command: 'agentguard status; echo secret' } });
     assert.ok(await protectDshToolCall(compound, dependencies), 'compound calls remain protected');

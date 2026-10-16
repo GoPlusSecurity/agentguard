@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { installAgentTemplates } from '../installers.js';
+import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 
 interface HookRun {
   status: number | null;
@@ -13,6 +14,16 @@ interface HookRun {
 }
 
 describe('installed Codex native hooks', () => {
+  it('recognizes the installed CLI symlink but rejects unrelated absolute executables', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentguard-self-command-'));
+    const installed = join(root, 'agentguard');
+    symlinkSync(join(__dirname, '..', 'cli.js'), installed);
+    assert.equal(isStandaloneAgentGuardCliCommand(`${installed} status`), true);
+    assert.equal(isStandaloneAgentGuardCliCommand(`command ${installed} status`), true);
+    assert.equal(isStandaloneAgentGuardCliCommand('/tmp/agentguard status'), false);
+    assert.equal(isStandaloneAgentGuardCliCommand(`${installed} status; echo extra`), false);
+  });
+
   it('blocks sensitive user prompts before the model request without echoing secrets', () => {
     const fixture = installFixture();
     const sensitivePrompts = [
@@ -191,7 +202,8 @@ describe('installed Codex native hooks', () => {
       assert.equal(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision, 'deny', command);
     }
 
-    for (const command of ['agentguard status', "sh -c 'agentguard status'"]) {
+    for (const command of ['agentguard status', "sh -c 'agentguard status'",
+      'agentguard scan ./approve', 'agentguard scan ./approve.json']) {
       const run = fixture.run('agentguard-pre-tool.sh', {
         hook_event_name: 'PreToolUse',
         session_id: 'sess_safe_self_command',
@@ -304,10 +316,7 @@ describe('installed Codex native hooks', () => {
     });
 
     assert.equal(run.status, 0);
-    const feedback = JSON.parse(run.stdout);
-    assert.equal(feedback.continue, false);
-    assert.match(feedback.stopReason, /TYPESAFE_API_KEY=\[REDACTED\]/);
-    assert.doesNotMatch(feedback.stopReason, /TYPESAFE_API_KEY=<key>/);
+    assert.equal(run.stdout.trim(), '', 'a public placeholder needs no output rewrite');
     assert.equal(run.stderr.trim(), '');
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
   });
@@ -335,10 +344,7 @@ describe('installed Codex native hooks', () => {
     });
     const allowed = fixture.run('agentguard-post-tool.sh', payload(status.stdout));
     assert.equal(allowed.status, 0);
-    const allowedFeedback = JSON.parse(allowed.stdout);
-    assert.equal(allowedFeedback.continue, false);
-    assert.ok(allowedFeedback.stopReason.includes(activationUrl));
-    assert.match(allowedFeedback.stopReason, /TYPESAFE_API_KEY=\[REDACTED\]/);
+    assert.equal(allowed.stdout.trim(), '', 'the saved link and public hint stay in the original result');
     assert.equal(allowed.stderr.trim(), '');
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
 
@@ -359,7 +365,7 @@ describe('installed Codex native hooks', () => {
     }
   });
 
-  it('keeps real init and privacy status working with a sanitized key hint', () => {
+  it('keeps real init and privacy status working with the public key example', () => {
     const fixture = installFixture();
     const post = (cmd: string, output: string) => fixture.run('agentguard-post-tool.sh', {
       hook_event_name: 'PostToolUse', session_id: 'sess-self-hints', turn_id: 'turn-self-hints',
@@ -369,10 +375,7 @@ describe('installed Codex native hooks', () => {
     const init = fixture.runCli('init', '--agent', 'codex');
     assert.equal(init.status, 0);
     assert.match(init.stdout, /TYPESAFE_API_KEY=<key>/);
-    const initFeedback = JSON.parse(post('agentguard init --agent codex', init.stdout).stdout);
-    assert.equal(initFeedback.continue, false);
-    assert.match(initFeedback.stopReason, /AgentGuard initialized/);
-    assert.match(initFeedback.stopReason, /TYPESAFE_API_KEY=\[REDACTED\]/);
+    assert.equal(post('agentguard init --agent codex', init.stdout).stdout.trim(), '');
 
     writeFileSync(join(fixture.home, 'config.json'), JSON.stringify({
       version: 1, level: 'balanced', agentHost: 'codex', privacy: { mode: 'jev' },
@@ -383,9 +386,7 @@ describe('installed Codex native hooks', () => {
     const privacy = fixture.runCli('privacy', 'status');
     assert.equal(privacy.status, 0);
     assert.match(privacy.stdout, /TYPESAFE_API_KEY=<key>/);
-    const privacyFeedback = JSON.parse(post('agentguard privacy status', privacy.stdout).stdout);
-    assert.equal(privacyFeedback.continue, false);
-    assert.match(privacyFeedback.stopReason, /TYPESAFE_API_KEY=\[REDACTED\]/);
+    assert.equal(post('agentguard privacy status', privacy.stdout).stdout.trim(), '');
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
   });
 
@@ -455,13 +456,8 @@ describe('installed Codex native hooks', () => {
     assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, /status-leak/);
   });
 
-  it('does not exempt wrapped, prefixed, or alternate-path status output', () => {
+  it('keeps unverified executable paths on the ordinary guard', () => {
     const commands = [
-      "sh -c 'agentguard status'",
-      'env MODE=test agentguard status',
-      'MODE=test agentguard status',
-      'command agentguard status',
-      'builtin agentguard status',
       '/tmp/agentguard status',
       'agentguard-mcp status',
     ];
@@ -485,6 +481,26 @@ describe('installed Codex native hooks', () => {
       assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), true, command);
       const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
       assert.doesNotMatch(audit, /agentGuardStatusOutputSuppressed/, command);
+    }
+  });
+
+  it('redacts simple wrappers without blocking their AgentGuard output', () => {
+    const fixture = installFixture();
+    for (const [index, command] of ["sh -c 'agentguard status'",
+      'env MODE=test agentguard status', 'MODE=test agentguard status',
+      'command agentguard status'].entries()) {
+      const run = fixture.run('agentguard-post-tool.sh', {
+        hook_event_name: 'PostToolUse', session_id: `sess_wrapped_${index}`,
+        turn_id: `turn_wrapped_${index}`, cwd: fixture.project,
+        tool_name: 'Bash', tool_use_id: `tool_wrapped_${index}`,
+        tool_input: { command },
+        tool_response: { output: 'api_key=sk-wrapped-secret-1234567890', exit_code: 0 },
+      });
+      assert.equal(run.status, 0, command);
+      const feedback = JSON.parse(run.stdout);
+      assert.equal(feedback.continue, false, command);
+      assert.match(feedback.stopReason, /api_key=\[REDACTED\]/, command);
+      assert.doesNotMatch(run.stdout, /wrapped-secret/, command);
     }
   });
 

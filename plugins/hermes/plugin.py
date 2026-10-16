@@ -138,14 +138,50 @@ def _make_post_tool_call(guard: AgentGuardBridge):
     return post_tool_call
 
 
-def _is_standalone_agentguard_command(command: Any) -> bool:
+def _is_standalone_agentguard_command(command: Any, depth: int = 0) -> bool:
+    if depth > 2:
+        return False
     if not isinstance(command, str) or any(c in command for c in ";&|<>`\n\r\t") or "$(" in command:
         return False
     try:
         tokens = shlex.split(command)
     except ValueError:
         return False
-    return bool(tokens) and tokens[0] == "agentguard"
+    if not tokens:
+        return False
+    index = 0
+    while index < len(tokens) and _is_shell_assignment(tokens[index]):
+        index += 1
+    if index < len(tokens) and os.path.basename(tokens[index]) == "env":
+        index += 1
+        while index < len(tokens) and tokens[index].startswith("-"):
+            index += 1
+        while index < len(tokens) and _is_shell_assignment(tokens[index]):
+            index += 1
+    while index < len(tokens) and tokens[index] in ("command", "builtin"):
+        index += 1
+    if index >= len(tokens):
+        return False
+    executable = tokens[index]
+    if executable == "agentguard":
+        return True
+    installed = os.environ.get("AGENTGUARD_BIN") or shutil.which("agentguard")
+    if (os.path.isabs(executable) and os.path.basename(executable) == "agentguard"
+            and installed and os.path.realpath(executable) == os.path.realpath(installed)):
+        return True
+    if os.path.basename(executable) in ("sh", "bash", "zsh", "dash", "fish"):
+        for flag_index in range(index + 1, len(tokens) - 1):
+            flag = tokens[flag_index]
+            if not flag.startswith("-"):
+                break
+            if "c" in flag:
+                return _is_standalone_agentguard_command(tokens[flag_index + 1], depth + 1)
+    return False
+
+
+def _is_shell_assignment(token: str) -> bool:
+    name, separator, _value = token.partition("=")
+    return bool(separator) and name.isidentifier()
 
 
 def _make_transform_tool_result(guard: AgentGuardBridge):
