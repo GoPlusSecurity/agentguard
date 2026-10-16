@@ -18,17 +18,19 @@ uploaded to Cloud.
 
 ## AgentGuard-owned CLI results
 
-A single `agentguard` shell invocation is not blocked by AgentGuard merely
-because its own result contains sensitive text. Simple `command`, `env`, and
+A single `agentguard` shell invocation with a supported result shape is locally
+redacted when its result contains recognized sensitive text. Unknown or malformed
+result shapes are blocked. Simple `command`, `env`, and
 shell wrappers are recognized; an explicit executable path must resolve to this
 package's CLI. Supported native result hooks redact recognized secrets in
 host-specific result or persistence surfaces. The documented
 `TYPESAFE_API_KEY=<key>` example remains unchanged. The **exact**
 pending Agent JWT activation URL saved in the local AgentGuard configuration
-remains unchanged so the user can open it. Other tokenized URLs are still
-redacted. Compound commands, unverified executable paths, and unrelated tools
-retain their ordinary protection; `agentguard approve` is not exempt from
-agent-self-approval checks.
+remains unchanged when it appears as an exact value, including a structured
+`agentRegisterUrl` field or a link followed by sentence punctuation. Encoded
+links and other tokenized URLs are not exempt. Compound commands, unverified
+executable paths, and unrelated tools retain their ordinary protection;
+`agentguard approve` is not exempt from agent-self-approval checks.
 
 | Host | Own-command result handling | Limit |
 |---|---|---|

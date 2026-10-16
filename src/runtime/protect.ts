@@ -213,12 +213,28 @@ function nativeAgentGuardSelfOutput(
   // buildRuntimeAction already validated native payloads. Inspect the original
   // result here, not action.input (which can contain an inspection projection).
   const raw = parseRawInput(options.rawInput, options.stdinText);
-  if (claudeEvent === 'PostToolUseFailure') return null; // No output-rewrite contract for failure hooks.
+  if (claudeEvent === 'PostToolUseFailure') {
+    const error = firstString(raw?.error, raw?.error_message);
+    return hasUnmaskedSelfCredential(error) || hasEncodedSensitiveSelfText(error, options.config)
+      || redactText(error) !== error
+      ? blockedAgentGuardSelfOutput(action) : null;
+  }
   const response = raw?.tool_response ?? raw?.toolResponse;
   if (response === undefined) return null;
-  const safeValue = redactAgentGuardSelfToolValue(response, options.config);
-  const safeText = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue);
-  const originalText = typeof response === 'string' ? response : JSON.stringify(response);
+  if (!isSupportedNativeSelfOutput(response, options.config)
+      || hasEncodedSensitiveSelfText(response, options.config)) return blockedAgentGuardSelfOutput(action);
+  let safeValue: unknown;
+  let safeText: string;
+  let originalText: string;
+  try {
+    safeValue = redactAgentGuardSelfToolValue(response, options.config);
+    safeText = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue);
+    originalText = typeof response === 'string' ? response : JSON.stringify(response);
+    if (redactAgentGuardSelfToolOutput(safeValue, options.config) !== safeText
+        || hasUnmaskedSelfCredential(safeValue)) return blockedAgentGuardSelfOutput(action);
+  } catch {
+    return blockedAgentGuardSelfOutput(action);
+  }
   if (safeText === originalText) return null;
   const decision: RuntimeDecision = {
     actionId: 'act_agentguard_self_output', decision: 'allow', riskScore: 0,
@@ -234,6 +250,82 @@ function nativeAgentGuardSelfOutput(
     policySource: 'default',
     selfToolOutput: { text: codexSelfToolFeedback(safeValue, safeText), value: safeValue },
   };
+}
+
+function blockedAgentGuardSelfOutput(action: RuntimeAction): ProtectResult {
+  const decision: RuntimeDecision = {
+    actionId: 'act_agentguard_self_output_unsafe', decision: 'block', riskScore: 100,
+    riskLevel: 'critical', policyVersion: 'local-self-output',
+    reasons: [{ code: 'SELF_OUTPUT_UNSAFE', severity: 'critical',
+      title: 'AgentGuard output could not be safely rewritten',
+      description: 'The result shape or remaining sensitive content was not safe for model use.' }],
+  };
+  const { claudeUpdatedToolOutput: _unsafeOutput, ...metadata } = action.metadata || {};
+  return {
+    decision,
+    event: { ...action, input: '[AgentGuard CLI output withheld locally]',
+      actionId: decision.actionId, decision: 'block', riskScore: 100,
+      riskLevel: 'critical', reasons: decision.reasons, policyVersion: decision.policyVersion,
+      metadata },
+    policySource: 'default',
+  };
+}
+
+function isSupportedNativeSelfOutput(response: unknown, config: AgentGuardConfig): boolean {
+  if (typeof response === 'string') {
+    const trimmed = response.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return true;
+    try { return isSupportedNativeSelfOutput(JSON.parse(response) as unknown, config); }
+    catch { return false; }
+  }
+  if (!isPlainRecord(response) || Object.keys(response).length === 0) return false;
+  return Object.entries(response).every(([key, value]) => {
+    if (key === 'stdout' || key === 'output' || key === 'stderr' || key === 'content')
+      return typeof value === 'string' && isSupportedNativeSelfOutput(value, config);
+    if (key === 'exit_code' || key === 'exitCode') return Number.isSafeInteger(value);
+    if (key === 'interrupted' || key === 'isImage') return typeof value === 'boolean';
+    return key === 'agentRegisterUrl' && Boolean(config.agentJwt)
+      && value === config.agentRegisterUrl;
+  });
+}
+
+function hasEncodedSensitiveSelfText(value: unknown, config: AgentGuardConfig): boolean {
+  if (typeof value === 'string') {
+    if (!/%[0-9a-f]{2}/i.test(value)) return false;
+    try {
+      let inspected = value;
+      const savedUrl = config.agentJwt && config.agentRegisterUrl;
+      if (savedUrl && savedUrl.length <= 2048) {
+        const url = new URL(savedUrl);
+        if ((url.protocol === 'https:' || url.protocol === 'http:')
+            && !url.username && !url.password) {
+          inspected = inspected.replaceAll(savedUrl, '[validated activation link]');
+        }
+      }
+      const decoded = decodeURIComponent(inspected);
+      return decoded !== inspected && redactText(decoded) !== decoded;
+    } catch {
+      return true;
+    }
+  }
+  if (Array.isArray(value)) return value.some((item) => hasEncodedSensitiveSelfText(item, config));
+  return isPlainRecord(value) && Object.values(value).some((item) => hasEncodedSensitiveSelfText(item, config));
+}
+
+function hasUnmaskedSelfCredential(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.split(/\r?\n/).some((line) => {
+      const match = line.match(/^\s*(?:api[_ -]?key|authorization|token|secret|password|passwd|agent[_ -]?jwt)\s*[:=]\s*(.+)$/i);
+      if (!match) return false;
+      const detail = match[1]!.trim();
+      if (/^(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(detail)) return true;
+      const first = detail.split(/\s+/)[0]!.replace(/[.,;!?]+$/, '');
+      return !/^(?:configured|disabled|enabled|inactive|missing|not|none|present|redacted|unset|unavailable)$/i.test(first)
+        && /^[A-Za-z0-9._~+/-]{8,}$/.test(first);
+    });
+  }
+  if (Array.isArray(value)) return value.some(hasUnmaskedSelfCredential);
+  return isPlainRecord(value) && Object.values(value).some(hasUnmaskedSelfCredential);
 }
 
 function codexSelfToolFeedback(value: unknown, fallback: string): string {
@@ -348,6 +440,7 @@ function enforceNativeHookDecision(
     && action.metadata.claudeBatchSensitive === false;
   const visibleContentNeedsProtection = action.metadata?.publicSearchSensitive === true
     || action.metadata?.claudeBatchSensitive === true
+    || action.metadata?.claudeBatchUnsafeAgentGuardOutput === true
     || (strictSensitive && !verifiedSearchException && !verifiedBatchException);
   const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
     && (visibleContentNeedsProtection || action.metadata?.configSensitive === true);
@@ -746,8 +839,11 @@ function formatClaudeHookResult(result: ProtectResult): string | null {
     return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
   }
   if (event === 'PostToolUse') {
-    if (Object.prototype.hasOwnProperty.call(result.event.metadata || {}, 'claudeUpdatedToolOutput')) {
+    const hasUpdatedOutput = Object.prototype.hasOwnProperty.call(
+      result.event.metadata || {}, 'claudeUpdatedToolOutput');
+    if (hasUpdatedOutput) {
       return JSON.stringify({
+        ...(denied ? { decision: 'block', reason } : {}),
         hookSpecificOutput: {
           hookEventName: 'PostToolUse',
           updatedToolOutput: result.event.metadata?.claudeUpdatedToolOutput,
@@ -755,7 +851,8 @@ function formatClaudeHookResult(result: ProtectResult): string | null {
       });
     }
     return denied || decision === 'warn'
-      ? JSON.stringify({ systemMessage: `${reason} Output schema was not rewritten; PostToolBatch remains the continuation gate.` })
+      ? JSON.stringify({ ...(denied ? { decision: 'block', reason } : {}),
+        systemMessage: `${reason} Output schema was not rewritten; PostToolBatch remains the continuation gate.` })
       : '';
   }
   if (event === 'PostToolBatch') {
@@ -987,6 +1084,9 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
         claudeBatchAgentGuardStatusOutputsSuppressed: claudeBatchProjection.suppressedCount,
         claudeBatchOnlyAgentGuardStatus:
           claudeBatchProjection.suppressedCount === claudeBatchProjection.originalCalls.length,
+      } : {}),
+      ...(claudeBatchProjection?.unsafeSelfOutputCount ? {
+        claudeBatchUnsafeAgentGuardOutput: true,
       } : {}),
       ...(claudeBatch && process.env.TOOL_INPUT
         ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
@@ -1434,9 +1534,12 @@ function claudeBatchFacts(
 function projectClaudeBatchForInspection(
   responses: unknown,
   config: AgentGuardConfig,
-): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number } {
-  if (!Array.isArray(responses)) return { originalCalls: [], inspectionCalls: [], suppressedCount: 0 };
+): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number; unsafeSelfOutputCount: number } {
+  if (!Array.isArray(responses)) return {
+    originalCalls: [], inspectionCalls: [], suppressedCount: 0, unsafeSelfOutputCount: 0,
+  };
   let suppressedCount = 0;
+  let unsafeSelfOutputCount = 0;
   const inspectionCalls = responses.map((call) => {
     if (!isPlainRecord(call)) return call;
     const toolName = firstString(call.tool_name, call.toolName, call.name);
@@ -1445,13 +1548,29 @@ function projectClaudeBatchForInspection(
         || !isStandaloneAgentGuardCliCommand(pickNativeToolAuditInput('shell', toolInput))) return call;
     const responseKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
       ? 'tool_response' : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
-    if (!responseKey) return call;
+    if (!responseKey) {
+      const error = firstString(call.error, call.error_message);
+      if (redactText(error) !== error || hasUnmaskedSelfCredential(error)
+          || hasEncodedSensitiveSelfText(error, config)) unsafeSelfOutputCount += 1;
+      return call;
+    }
     const response = call[responseKey];
-    const originalText = typeof response === 'string' ? response : JSON.stringify(response);
     // PostToolBatch carries model-visible content. Suppress only content that
     // is already safe. Failed or rejected PostToolUse rewrites remain visible
     // to the batch privacy gate.
-    if (redactAgentGuardSelfToolOutput(response, config) !== originalText) return call;
+    try {
+      const originalText = typeof response === 'string' ? response : JSON.stringify(response);
+      if (!isSupportedNativeSelfOutput(response, config)
+          || hasEncodedSensitiveSelfText(response, config)
+          || redactAgentGuardSelfToolOutput(response, config) !== originalText
+          || hasUnmaskedSelfCredential(response)) {
+        unsafeSelfOutputCount += 1;
+        return call;
+      }
+    } catch {
+      unsafeSelfOutputCount += 1;
+      return call;
+    }
     const projectedResponse = isPlainRecord(response)
       ? { exit_code: nonNegativeInteger(response.exit_code ?? response.exitCode),
         output: AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER }
@@ -1465,7 +1584,7 @@ function projectClaudeBatchForInspection(
     suppressedCount += 1;
     return projected;
   });
-  return { originalCalls: responses, inspectionCalls, suppressedCount };
+  return { originalCalls: responses, inspectionCalls, suppressedCount, unsafeSelfOutputCount };
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {

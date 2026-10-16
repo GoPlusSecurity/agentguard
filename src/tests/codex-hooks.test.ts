@@ -434,6 +434,14 @@ describe('installed Codex native hooks', () => {
     assert.doesNotMatch(failedFeedback.stopReason, /failed-secret/);
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
     assert.equal(JSON.parse(run('cat ./other-tool-output', output).stdout).decision, 'block');
+    const unsupported = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse', session_id: 'sess-self-unknown', turn_id: 'turn-self-unknown',
+      cwd: fixture.project, tool_name: 'functions.exec_command', tool_use_id: 'tool-self-unknown',
+      tool_input: { cmd: 'agentguard status' },
+      tool_response: { output: 'healthy', card: 5284917302468138, exit_code: 0 },
+    });
+    assert.equal(JSON.parse(unsupported.stdout).decision, 'block');
+    assert.doesNotMatch(`${unsupported.stdout}\n${unsupported.stderr}`, /5284917302468138/);
   });
 
   it('redacts an unexpectedly unmasked secret without blocking agentguard status output', () => {
