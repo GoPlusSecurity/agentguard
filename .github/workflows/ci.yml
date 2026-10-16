@@ -33,3 +33,17 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Use Python for Hermes tests
+        if: matrix.node-version == 22
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Hermes test dependencies
+        if: matrix.node-version == 22
+        run: python -m pip install pytest==8.4.2
+
+      - name: Test Hermes plugin
+        if: matrix.node-version == 22
+        run: python -m pytest plugins/hermes/tests -q
