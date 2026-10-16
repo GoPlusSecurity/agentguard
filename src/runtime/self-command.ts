@@ -20,6 +20,12 @@ export function isAgentGuardCliCommand(command: string): boolean {
   return isAgentGuardCliCommandInner(command, 0);
 }
 
+export function isAgentGuardStatusCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed || /[\r\n]/.test(trimmed)) return false;
+  return trimmed.replace(/[ \t]+/g, ' ') === 'agentguard status';
+}
+
 function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
   if (depth > 2) return false;
   const trimmed = command.trim();

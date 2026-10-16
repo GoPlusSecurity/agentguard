@@ -131,6 +131,26 @@ describe('DSH runtime Phase 2A observer', () => {
     });
   });
 
+  it('allows agentguard status and does not rescan its shell result', async () => {
+    const statusExec = execution({ arguments: { command: 'agentguard status' } });
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      writeAudit() {},
+    };
+
+    const before = await protectDshToolCall(statusExec, dependencies);
+    assert.ok(before);
+    assert.equal(before.evaluation.decision.decision, 'allow');
+    assert.equal(before.evaluation.decision.riskScore, 0);
+
+    const after = await protectDshToolResult(statusExec, {
+      isError: false,
+      content: [{ type: 'text', text: 'API key: ag_live_st…3456\nAgent JWT: configured' }],
+    }, dependencies);
+    assert.equal(after, null);
+  });
+
   it('attributes exact configured tool owners and preserves verified DSH call context', () => {
     const attribution = normalizeDshRuntimeAttribution({
       toolOwners: { bash: '@deepseek-ai/dsh-tool-bash' },

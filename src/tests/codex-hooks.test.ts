@@ -264,6 +264,101 @@ describe('installed Codex native hooks', () => {
     assert.equal(auditEvent.metadata?.toolFailed, undefined);
   });
 
+  it('does not rescan agentguard status output in PostToolUse', () => {
+    const fixture = installFixture();
+    const run = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess_status',
+      turn_id: 'turn_status',
+      cwd: fixture.project,
+      tool_name: 'Bash',
+      tool_use_id: 'tool_status',
+      tool_input: { command: 'agentguard status' },
+      tool_response: {
+        output: 'API key: ag_live_st…3456\nAgent JWT: configured',
+        exit_code: 0,
+      },
+    });
+
+    assert.equal(run.status, 0);
+    assert.equal(run.stdout.trim(), '');
+    assert.equal(run.stderr.trim(), '');
+    assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
+  });
+
+  it('still blocks an unexpectedly unmasked secret in agentguard status output', () => {
+    const fixture = installFixture();
+    const run = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess_unsafe_status',
+      turn_id: 'turn_unsafe_status',
+      cwd: fixture.project,
+      tool_name: 'Bash',
+      tool_use_id: 'tool_unsafe_status',
+      tool_input: { command: 'agentguard status' },
+      tool_response: { output: 'api_key=sk-status-leak-1234567890', exit_code: 0 },
+    });
+
+    assert.equal(run.status, 0);
+    assert.equal(JSON.parse(run.stdout).decision, 'block');
+    assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, /status-leak/);
+  });
+
+  it('does not exempt wrapped, prefixed, alternate-path, or extended status output', () => {
+    const commands = [
+      "sh -c 'agentguard status'",
+      'env MODE=test agentguard status',
+      'MODE=test agentguard status',
+      'command agentguard status',
+      'builtin agentguard status',
+      '/tmp/agentguard status',
+      'agentguard-mcp status',
+      'agentguard status --json',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const fixture = installFixture();
+      const run = fixture.run('agentguard-post-tool.sh', {
+        hook_event_name: 'PostToolUse',
+        session_id: `sess_status_negative_${index}`,
+        turn_id: `turn_status_negative_${index}`,
+        cwd: fixture.project,
+        tool_name: 'Bash',
+        tool_use_id: `tool_status_negative_${index}`,
+        tool_input: { command },
+        tool_response: {
+          output: 'API key: ag_live_st…3456\nAgent JWT: configured',
+          exit_code: 0,
+        },
+      });
+
+      assert.equal(run.status, 0, command);
+      assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), true, command);
+      const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
+      assert.doesNotMatch(audit, /agentGuardStatusOutputSuppressed/, command);
+    }
+  });
+
+  it('keeps post-tool protection for non-status and compound AgentGuard commands', () => {
+    const commands = ['agentguard scan', 'agentguard status; printf unsafe'];
+    for (const [index, command] of commands.entries()) {
+      const fixture = installFixture();
+      const run = fixture.run('agentguard-post-tool.sh', {
+        hook_event_name: 'PostToolUse',
+        session_id: `sess_non_status_${index}`,
+        turn_id: `turn_non_status_${index}`,
+        cwd: fixture.project,
+        tool_name: 'Bash',
+        tool_use_id: `tool_non_status_${index}`,
+        tool_input: { command },
+        tool_response: { output: 'api_key=sk-non-status-secret-1234567890', exit_code: 0 },
+      });
+
+      assert.equal(run.status, 0, command);
+      assert.equal(JSON.parse(run.stdout).decision, 'block', command);
+      assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, /non-status-secret/, command);
+    }
+  });
+
   it('keeps routine post-tool output in the local audit without retaining stdout', () => {
     const fixture = installFixture();
     const stdoutMarker = 'routine-private-stdout-marker';

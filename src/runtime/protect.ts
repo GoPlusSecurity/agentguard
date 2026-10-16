@@ -6,7 +6,7 @@ import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
-import { isAgentGuardCliCommand } from './self-command.js';
+import { isAgentGuardCliCommand, isAgentGuardStatusCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
@@ -78,6 +78,7 @@ type ClaudeHookEvent =
 
 const CLAUDE_CONFIG_READ_LIMIT = 256 * 1024;
 const CLAUDE_LARGE_CONTEXT_TOKENS = 100_000;
+const AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER = '[AgentGuard status output suppressed after local validation]';
 
 export async function protectAction(options: ProtectOptions): Promise<ProtectResult | null> {
   const action = buildRuntimeAction(options);
@@ -85,6 +86,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   const claudeHookEvent = pickClaudeHookEventFromAction(action);
   const selfApprovalAttempt = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
     && isAgentGuardApprovalCommand(action);
+  const suppressAgentGuardStatusResult = isAgentGuardStatusResult(action);
   if (!action.input) return null;
   if (isAgentGuardRuntimeAction(action) && !selfApprovalAttempt) return null;
   const approvalStorePath = resolveApprovalStorePath(options.config);
@@ -113,6 +115,8 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     policySource = evaluation.policySource;
   }
   decision = enforceNativeHookDecision(action, decision, selfApprovalAttempt);
+  if (suppressAgentGuardStatusResult
+      && decision.decision !== 'block' && decision.decision !== 'require_approval') return null;
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
@@ -191,6 +195,24 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+}
+
+function isAgentGuardStatusResult(action: RuntimeAction): boolean {
+  const codexEvent = pickCodexHookEventFromAction(action);
+  const claudeEvent = pickClaudeHookEventFromAction(action);
+  const postToolResult = codexEvent === 'PostToolUse'
+    || claudeEvent === 'PostToolUse'
+    || claudeEvent === 'PostToolUseFailure';
+  if (postToolResult) {
+    return action.metadata?.agentGuardStatusOutputSuppressed === true;
+  }
+  return claudeEvent === 'PostToolBatch'
+    && action.metadata?.claudeBatchOnlyAgentGuardStatus === true;
+}
+
+function isSafelyMaskedAgentGuardStatusOutput(output: unknown): boolean {
+  const serialized = typeof output === 'string' ? output : JSON.stringify(output);
+  return redactText(serialized) === serialized;
 }
 
 function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
@@ -745,7 +767,16 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     ? claudeLifecycleFields(claudeHookEvent)
     : codexLifecycleFields(codexHookEvent);
   const sessionId = options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw);
-  const claudeBatch = claudeHookEvent === 'PostToolBatch' ? claudeBatchFacts(raw, sessionId) : undefined;
+  const claudeBatchProjection = claudeHookEvent === 'PostToolBatch'
+    ? projectClaudeBatchForInspection(raw?.tool_calls)
+    : undefined;
+  const claudeBatch = claudeBatchProjection
+    ? claudeBatchFacts(
+      claudeBatchProjection.originalCalls,
+      claudeBatchProjection.inspectionCalls,
+      sessionId,
+    )
+    : undefined;
   const claudeConfig = claudeHookEvent === 'ConfigChange' ? readClaudeConfigChange(raw) : undefined;
   const verifiedOutput = claudeHookEvent === 'PostToolUse'
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
@@ -766,7 +797,15 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   let actionInput = process.env.TOOL_INPUT
     || (observedSearchResult !== undefined
       ? typeof observedSearchResult === 'string' ? observedSearchResult : JSON.stringify(observedSearchResult)
-      : pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input));
+      : pickInput(
+        raw,
+        actionType,
+        toolInput,
+        codexHookEvent,
+        claudeHookEvent,
+        claudeConfig?.input,
+        claudeBatchProjection?.inspectionCalls,
+      ));
   let suppressedPublicSearchValues = 0;
   if (!process.env.TOOL_INPUT && actionType === 'llm_request'
       && (agentHost === 'hermes' && toolName === 'hermes.pre_api_request'
@@ -801,6 +840,11 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     toolInput,
     claudeHookEvent,
   );
+  const agentGuardStatusOutputSuppressed = nativePostToolEvent
+    && nativeToolActionType === 'shell'
+    && isAgentGuardStatusCommand(nativeToolInput)
+    && isSafelyMaskedAgentGuardStatusOutput(actionInput);
+  if (agentGuardStatusOutputSuppressed) actionInput = AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER;
   const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse'
     && verifiedOutput === undefined && redactText(actionInput) !== actionInput;
 
@@ -834,11 +878,17 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...(nativeToolInput ? { nativeToolInput } : {}),
       ...(nativeToolArgumentKeys.length > 0 ? { nativeToolArgumentKeys } : {}),
       ...(nativeFileTargets.length > 0 ? { nativeFileTargets } : {}),
+      ...(agentGuardStatusOutputSuppressed ? { agentGuardStatusOutputSuppressed: true } : {}),
       ...pickNetworkMetadata(raw, toolInput),
       ...pickPostToolOutcomeMetadata(codexHookEvent, claudeHookEvent, raw),
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
+      ...(claudeBatchProjection && claudeBatchProjection.suppressedCount > 0 ? {
+        claudeBatchAgentGuardStatusOutputsSuppressed: claudeBatchProjection.suppressedCount,
+        claudeBatchOnlyAgentGuardStatus:
+          claudeBatchProjection.suppressedCount === claudeBatchProjection.originalCalls.length,
+      } : {}),
       ...(claudeBatch && process.env.TOOL_INPUT
         ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
       ...(claudeConfig ? {
@@ -1240,15 +1290,16 @@ function claudeEventMetadata(
 }
 
 function claudeBatchFacts(
-  raw: Record<string, unknown> | null,
+  originalResponses: unknown,
+  inspectionResponses: unknown,
   sessionId: string,
 ): { llm: LlmEgressRequestMetadata; metadata: Record<string, unknown> } {
-  const responses = raw?.tool_calls ?? [];
-  const serialized = JSON.stringify(responses);
-  const filePaths = collectClaudeBatchFilePaths(responses);
-  const containsSensitiveContent = hasSensitiveClaudeBatchContent(responses);
-  const verifiedSearchCalls = Array.isArray(responses)
-    ? responses.filter((call): call is Record<string, unknown> =>
+  const serialized = JSON.stringify(originalResponses);
+  const inspectionSerialized = JSON.stringify(inspectionResponses);
+  const filePaths = collectClaudeBatchFilePaths(originalResponses);
+  const containsSensitiveContent = hasSensitiveClaudeBatchContent(inspectionResponses);
+  const verifiedSearchCalls = Array.isArray(inspectionResponses)
+    ? inspectionResponses.filter((call): call is Record<string, unknown> =>
       isPlainRecord(call) && call.tool_name === 'WebSearch')
     : [];
   const allSearchResultsVerified = verifiedSearchCalls.length > 0
@@ -1271,13 +1322,66 @@ function claudeBatchFacts(
       filePathCount: filePaths.length,
       serializedResultBytes: Buffer.byteLength(serialized, 'utf8'),
       redactedBytes: containsSensitiveContent
-        ? Buffer.byteLength(serialized, 'utf8') - Buffer.byteLength(redactText(serialized), 'utf8')
+        ? Buffer.byteLength(inspectionSerialized, 'utf8')
+          - Buffer.byteLength(redactText(inspectionSerialized), 'utf8')
         : 0,
       claudeBatchSensitive: containsSensitiveContent,
       claudeBatchVerified: allSearchResultsVerified,
       filePaths,
     },
   };
+}
+
+function projectClaudeBatchForInspection(
+  responses: unknown,
+): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number } {
+  if (!Array.isArray(responses)) {
+    return { originalCalls: [], inspectionCalls: [], suppressedCount: 0 };
+  }
+  let suppressedCount = 0;
+  const inspectionCalls = responses.map((call) => {
+    if (!isClaudeAgentGuardStatusCall(call) || !isPlainRecord(call)) return call;
+    const outputKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
+      ? 'tool_response'
+      : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
+    if (!outputKey) return call;
+    const outputProjection = projectAgentGuardStatusOutput(call[outputKey]);
+    if (!outputProjection.suppressed) return call;
+    const projected = { ...call };
+    projected[outputKey] = outputProjection.value;
+    suppressedCount += 1;
+    return projected;
+  });
+  return { originalCalls: responses, inspectionCalls, suppressedCount };
+}
+
+function projectAgentGuardStatusOutput(output: unknown): { value: unknown; suppressed: boolean } {
+  if (!isSafelyMaskedAgentGuardStatusOutput(output)) return { value: output, suppressed: false };
+  if (typeof output === 'string') {
+    return { value: AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER, suppressed: true };
+  }
+  if (!isPlainRecord(output)) return { value: output, suppressed: false };
+
+  const projected = { ...output };
+  let suppressed = false;
+  for (const key of ['stdout', 'output']) {
+    if (typeof projected[key] !== 'string') continue;
+    projected[key] = AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER;
+    suppressed = true;
+  }
+  return { value: suppressed ? projected : output, suppressed };
+}
+
+function isClaudeAgentGuardStatusCall(call: unknown): boolean {
+  if (!isPlainRecord(call)) return false;
+  const toolName = firstString(call.tool_name, call.toolName, call.name);
+  const toolInput = pickToolInput(call);
+  const actionType = mapToolToRuntimeAction(toolName, call);
+  if (actionType !== 'shell') return false;
+  const command = pickNativeToolAuditInput(actionType, toolInput);
+  if (!command || !isAgentGuardStatusCommand(command)) return false;
+  const output = call.tool_response ?? call.toolResponse;
+  return projectAgentGuardStatusOutput(output).suppressed;
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
@@ -1421,6 +1525,7 @@ function pickInput(
   codexHookEvent?: CodexHookEvent,
   claudeHookEvent?: ClaudeHookEvent,
   claudeConfigInput?: string,
+  claudeBatchCalls?: unknown[],
 ): string {
   if (!raw) return '';
   if (codexHookEvent === 'UserPromptSubmit') return firstString(raw.prompt);
@@ -1449,7 +1554,7 @@ function pickInput(
     return typeof failure === 'string' ? failure : failure === undefined ? 'tool failure' : JSON.stringify(failure);
   }
   if (claudeHookEvent === 'PostToolBatch') {
-    return JSON.stringify(raw.tool_calls ?? []);
+    return JSON.stringify(claudeBatchCalls ?? raw.tool_calls ?? []);
   }
   if (claudeHookEvent === 'ConfigChange') return claudeConfigInput ?? 'config change';
   if (claudeHookEvent === 'PreModelSwitch' || claudeHookEvent === 'PostModelSwitch') {

@@ -1137,7 +1137,7 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
-  it('keeps redacted DSH pre-execute shell commands visible in Cloud', () => {
+  it('keeps redacted DSH pre-execute shell commands visible in Cloud', async () => {
     const commands = [
       'tail -n 20 /var/log/app.log | grep ERROR',
       'grep -R "needle" src | tail -n 5',
@@ -1169,6 +1169,185 @@ describe('Runtime Cloud bridge', () => {
       assert.equal(event.input, input);
       assert.doesNotMatch(JSON.stringify(event), /unsafe raw/);
     }
+
+    const environmentLookup = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: 'env | grep -i key',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [
+        {
+          code: 'SECRET_ACCESS',
+          severity: 'high',
+          title: 'unsafe raw title',
+          description: 'unsafe raw description',
+          evidence: 'env',
+        },
+        {
+          code: 'SHELL_INJECTION_RISK',
+          severity: 'low',
+          title: 'unsafe shell title',
+          description: 'unsafe shell description',
+        },
+      ],
+      metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+    });
+    assert.equal(environmentLookup.input, 'env | grep -i key');
+    assert.doesNotMatch(JSON.stringify(environmentLookup), /unsafe raw|unsafe shell/);
+
+    const systemReadInput = 'echo "Testing sensitive operation..." && cat /etc/passwd 2>/dev/null | head -5';
+    const systemReadDecision = await evaluateLocalAction(getDefaultEffectiveRuntimePolicy(), {
+      sessionId: 'sess_dsh_system_read_preview',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: systemReadInput,
+      metadata: { runtimePhase: 'pre' },
+    });
+    assert.ok(systemReadDecision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
+    assert.ok(systemReadDecision.reasons.some((reason) => reason.code === 'SHELL_INJECTION_RISK'));
+
+    const systemRead = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: systemReadInput,
+      decision: systemReadDecision.decision,
+      policyDecision: systemReadDecision.policyDecision,
+      riskScore: systemReadDecision.riskScore,
+      riskLevel: systemReadDecision.riskLevel,
+      reasons: systemReadDecision.reasons,
+      metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+    });
+    assert.equal(systemRead.input, systemReadInput);
+
+    const sshReadInput = 'cat ~/.ssh/id_rsa 2>/dev/null || echo "No SSH key found"';
+    const sshReadDecision = await evaluateLocalAction(getDefaultEffectiveRuntimePolicy(), {
+      sessionId: 'sess_dsh_ssh_read_preview',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: sshReadInput,
+      metadata: { runtimePhase: 'pre' },
+    });
+    assert.ok(sshReadDecision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
+    assert.ok(sshReadDecision.reasons.some((reason) => reason.code === 'SHELL_INJECTION_RISK'));
+
+    const sshRead = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: sshReadInput,
+      decision: sshReadDecision.decision,
+      policyDecision: sshReadDecision.policyDecision,
+      riskScore: sshReadDecision.riskScore,
+      riskLevel: sshReadDecision.riskLevel,
+      reasons: sshReadDecision.reasons,
+      metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+    });
+    assert.equal(sshRead.input, sshReadInput);
+
+    const absoluteSshListInput = `ls -la ${join(homedir(), '.ssh')}/`;
+    const absoluteSshListDecision = await evaluateLocalAction(getDefaultEffectiveRuntimePolicy(), {
+      sessionId: 'sess_dsh_absolute_ssh_list_preview',
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: absoluteSshListInput,
+      metadata: { runtimePhase: 'pre' },
+    });
+    assert.ok(absoluteSshListDecision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'));
+
+    const absoluteSshList = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: absoluteSshListInput,
+      decision: absoluteSshListDecision.decision,
+      policyDecision: absoluteSshListDecision.policyDecision,
+      riskScore: absoluteSshListDecision.riskScore,
+      riskLevel: absoluteSshListDecision.riskLevel,
+      reasons: absoluteSshListDecision.reasons,
+      metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+    });
+    assert.equal(absoluteSshList.input, 'ls -la ~/.ssh/');
+    assert.doesNotMatch(JSON.stringify(absoluteSshList), new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    const protectedCommandCases = [
+      {
+        input: `stat ${join(homedir(), '.ssh', 'id_rsa')}`,
+        expected: 'stat ~/.ssh/id_rsa',
+      },
+      {
+        input: `ls ${join(homedir(), '.aws', 'credentials')} 2>/dev/null || echo "AWS credentials not found or blocked"`,
+        expected: 'ls ~/.aws/credentials 2>/dev/null || echo "AWS credentials not found or blocked"',
+      },
+      {
+        input: 'echo "private key content" > /tmp/test_private-key.txt && cat /tmp/test_private-key.txt',
+        expected: 'echo "private key content" > /tmp/test_private-key.txt && cat /tmp/test_private-key.txt',
+      },
+      {
+        input: 'chmod 600 ~/.openclaw/identity/device.json 2>/dev/null; chmod 600 ~/.hermes/.env 2>/dev/null; chmod 600 ~/.codex/.codex-global-state.json 2>/dev/null; echo "权限已收紧"',
+        expected: 'chmod 600 ~/.openclaw/identity/device.json 2>/dev/null; chmod 600 ~/.hermes/.env 2>/dev/null; chmod 600 ~/.codex/.codex-global-state.json 2>/dev/null; echo "权限已收紧"',
+      },
+    ];
+
+    for (const { input, expected } of protectedCommandCases) {
+      const decision = await evaluateLocalAction(getDefaultEffectiveRuntimePolicy(), {
+        sessionId: 'sess_dsh_protected_command_preview',
+        agentHost: 'dsh',
+        actionType: 'shell',
+        toolName: 'bash',
+        input,
+        metadata: { runtimePhase: 'pre' },
+      });
+      assert.ok(decision.reasons.some((reason) => reason.code === 'SECRET_ACCESS'), input);
+
+      const event = buildCloudAuditEvent({
+        ...sampleEvent(),
+        agentHost: 'dsh',
+        actionType: 'shell',
+        toolName: 'bash',
+        input,
+        decision: decision.decision,
+        policyDecision: decision.policyDecision,
+        riskScore: decision.riskScore,
+        riskLevel: decision.riskLevel,
+        reasons: decision.reasons,
+        metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+      });
+      assert.equal(event.input, expected);
+    }
+
+    const protectedPath = buildCloudAuditEvent({
+      ...sampleEvent(),
+      agentHost: 'dsh',
+      actionType: 'shell',
+      toolName: 'bash',
+      input: 'cat /Users/private-user/.ssh/id_rsa',
+      decision: 'require_approval',
+      policyDecision: 'require_approval',
+      riskScore: 55,
+      riskLevel: 'high',
+      reasons: [{
+        code: 'SECRET_ACCESS',
+        severity: 'high',
+        title: 'unsafe raw title',
+        description: 'unsafe raw description',
+        evidence: '~/.ssh/**',
+      }],
+      metadata: { runtimePhase: 'pre', evaluation: 'local-oss' },
+    });
+    assert.equal(protectedPath.input, 'cat ~/.ssh/id_rsa');
+    assert.doesNotMatch(JSON.stringify(protectedPath), /private-user|unsafe raw/);
   });
 
   it('redacts secrets in DSH shell previews and falls back when sensitive content is not maskable', () => {
@@ -2592,6 +2771,58 @@ describe('Runtime Cloud bridge', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('does not rescan AgentGuard CLI results on OpenClaw, QClaw, or Hermes post hooks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-self-cli-post-hosts-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    const statusOutput = 'API key: ag_live_st…3456\nAgent JWT: configured';
+    const cases = [
+      {
+        agentHost: 'openclaw' as const,
+        toolName: 'exec',
+        rawInput: {
+          toolName: 'exec', params: { command: 'agentguard status' },
+          result: { output: statusOutput },
+        },
+      },
+      {
+        agentHost: 'qclaw' as const,
+        toolName: 'exec',
+        rawInput: {
+          toolName: 'exec', params: { command: 'agentguard status' },
+          result: { output: statusOutput },
+        },
+      },
+      {
+        agentHost: 'hermes' as const,
+        toolName: 'terminal',
+        rawInput: {
+          hook_event_name: 'post_tool_call', tool_name: 'terminal',
+          tool_input: { command: 'agentguard status' },
+          tool_response: { stdout: statusOutput },
+        },
+      },
+    ];
+
+    for (const item of cases) {
+      const result = await protectAction({
+        config,
+        agentHost: item.agentHost,
+        actionType: 'shell',
+        toolName: item.toolName,
+        rawInput: item.rawInput,
+        phase: 'post',
+      });
+      assert.equal(result, null, item.agentHost);
+    }
+    assert.equal(existsSync(config.auditPath), false);
   });
 
   it('honors allowed command patterns without allowing compound shell commands', async () => {

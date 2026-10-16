@@ -4,7 +4,7 @@
 
 ### Changed
 - Clean runtime events (`allow`, zero risk, safe level, no findings or failure) now remain local across DSH, Codex, and Claude Code instead of being uploaded to Cloud.
-- Reportable DSH events now use a Cloud-only projection and bounded status metadata. Pre-execute shell events retain a bounded, redacted command preview instead of collapsing every command to its executable name and finding title; protected-file access and unmaskable sensitive findings still use safe summaries, while raw responses, headers, output, protected absolute paths, and evaluator reason text remain local.
+- Reportable DSH events now use a Cloud-only projection and bounded status metadata. Pre-execute shell events retain a bounded, redacted command preview, including protected-path commands, instead of collapsing every command to its executable name and finding title; absolute user-home prefixes are normalized to `~`, and unmaskable sensitive findings still use safe summaries, while raw responses, headers, output, user-home identities, and evaluator reason text remain local.
 - Reportable native-hook events now retain a safe action summary from the original tool input, including post-tool commands and file basenames; when raw values cannot be retained, Cloud receives a bounded tool-and-finding summary instead of a generic placeholder.
 - Native `PreToolUse` actions remain the primary Cloud records, while routine successful `PostToolUse` observations now stay local and only failures, elevated risks, anomalous results, or material new findings are uploaded as separate redacted events.
 - Native web-fetch audit events now retain a bounded sanitized destination instead of a generic placeholder, without uploading URL credentials, fragments, query values, or sensitive path segments.
@@ -12,6 +12,7 @@
 
 ### Fixed
 - Blocked Claude Code `PostToolBatch` findings now reach Cloud ingest with a bounded semantic summary and batch counts, while raw tool results, sensitive values, and absolute paths remain local.
+- Native Codex and Claude Code hooks no longer reclassify safely masked `agentguard status` output as PII or bulk egress. The exception is limited to the exact standalone status command; shell wrappers, command prefixes, alternate executable paths, and extra arguments remain inspected. Claude batches preserve their original call order and structural statistics while suppressing only the verified status response in the content-scanning projection, unexpectedly unmasked secrets remain protected, and status paths under the local AgentGuard or user home are abbreviated.
 
 ## [1.2.1] - 2026-09-29
 
