@@ -2773,6 +2773,58 @@ describe('Runtime Cloud bridge', () => {
     }
   });
 
+  it('does not rescan AgentGuard CLI results on OpenClaw, QClaw, or Hermes post hooks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentguard-self-cli-post-hosts-'));
+    const config: AgentGuardConfig = {
+      version: 1,
+      level: 'balanced',
+      policyCachePath: join(dir, 'policy.json'),
+      auditPath: join(dir, 'audit.jsonl'),
+      eventSpoolPath: join(dir, 'spool.jsonl'),
+    };
+    const statusOutput = 'API key: ag_live_st…3456\nAgent JWT: configured';
+    const cases = [
+      {
+        agentHost: 'openclaw' as const,
+        toolName: 'exec',
+        rawInput: {
+          toolName: 'exec', params: { command: 'agentguard status' },
+          result: { output: statusOutput },
+        },
+      },
+      {
+        agentHost: 'qclaw' as const,
+        toolName: 'exec',
+        rawInput: {
+          toolName: 'exec', params: { command: 'agentguard status' },
+          result: { output: statusOutput },
+        },
+      },
+      {
+        agentHost: 'hermes' as const,
+        toolName: 'terminal',
+        rawInput: {
+          hook_event_name: 'post_tool_call', tool_name: 'terminal',
+          tool_input: { command: 'agentguard status' },
+          tool_response: { stdout: statusOutput },
+        },
+      },
+    ];
+
+    for (const item of cases) {
+      const result = await protectAction({
+        config,
+        agentHost: item.agentHost,
+        actionType: 'shell',
+        toolName: item.toolName,
+        rawInput: item.rawInput,
+        phase: 'post',
+      });
+      assert.equal(result, null, item.agentHost);
+    }
+    assert.equal(existsSync(config.auditPath), false);
+  });
+
   it('honors allowed command patterns without allowing compound shell commands', async () => {
     const policy = getDefaultEffectiveRuntimePolicy();
     policy.blockedCommandPatterns = ['agentguard'];

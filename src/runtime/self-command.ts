@@ -20,6 +20,10 @@ export function isAgentGuardCliCommand(command: string): boolean {
   return isAgentGuardCliCommandInner(command, 0);
 }
 
+export function isAgentGuardStatusCommand(command: string): boolean {
+  return isAgentGuardStatusCommandInner(command, 0);
+}
+
 function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
   if (depth > 2) return false;
   const trimmed = command.trim();
@@ -45,6 +49,33 @@ function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
 
   const wrappedCommand = shellWrapperCommand(tokens, index);
   return wrappedCommand ? isAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
+}
+
+function isAgentGuardStatusCommandInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
+  const trimmed = command.trim();
+  if (!trimmed || SHELL_CONTROL_RE.test(trimmed)) return false;
+
+  const tokens = shellTokens(trimmed);
+  if (!tokens.length) return false;
+
+  let index = skipAssignments(tokens, 0);
+  if (basename(tokens[index]) === 'env') {
+    index += 1;
+    while (tokens[index]?.startsWith('-')) index += 1;
+    index = skipAssignments(tokens, index);
+  }
+
+  while (['command', 'builtin'].includes(basename(tokens[index] || ''))) {
+    index += 1;
+  }
+
+  if (['agentguard', 'agentguard-mcp'].includes(basename(tokens[index] || ''))) {
+    return tokens[index + 1] === 'status' && tokens.length === index + 2;
+  }
+
+  const wrappedCommand = shellWrapperCommand(tokens, index);
+  return wrappedCommand ? isAgentGuardStatusCommandInner(wrappedCommand, depth + 1) : false;
 }
 
 function matchesCommand(tokens: string[], start: number, command: string): boolean {

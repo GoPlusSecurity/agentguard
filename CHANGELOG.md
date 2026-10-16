@@ -12,6 +12,7 @@
 
 ### Fixed
 - Blocked Claude Code `PostToolBatch` findings now reach Cloud ingest with a bounded semantic summary and batch counts, while raw tool results, sensitive values, and absolute paths remain local.
+- Native Codex and Claude Code hooks no longer reclassify safely masked `agentguard status` output as PII or bulk egress. The exception is limited to the exact standalone status command, mixed Claude batches still inspect every other tool result, unexpectedly unmasked secrets remain protected, and status paths under the local AgentGuard or user home are abbreviated.
 
 ## [1.2.1] - 2026-09-29
 

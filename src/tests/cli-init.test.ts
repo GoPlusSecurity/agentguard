@@ -51,6 +51,8 @@ describe('init CLI', () => {
     });
 
     assert.match(stdout, /Agent host: not configured/);
+    assert.match(stdout, /Config: <agentguard-home>\/config\.json/);
+    assert.doesNotMatch(stdout, new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(stdout, /  agentguard init\n/);
     assert.doesNotMatch(stdout, /agentguard init --agent auto/);
     assert.doesNotMatch(stdout, /agentguard connect/);

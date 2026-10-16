@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -149,6 +149,113 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(unknown.result.event.coverageLevel, 'partial');
     assert.equal(unknown.result.event.enforcementStatus, 'would_block');
     assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), new RegExp(secret.replace('.', '\\.')));
+  });
+
+  it('does not rescan agentguard status results in PostToolUse or PostToolUseFailure', async () => {
+    const fixture = lifecycleFixture();
+    const statusOutput = 'API key: ag_live_st…3456\nAgent JWT: configured';
+    for (const event of ['PostToolUse', 'PostToolUseFailure'] as const) {
+      const result = await protectAction({
+        config: fixture.config,
+        agentHost: 'claude-code',
+        auditSafe: true,
+        rawInput: {
+          hook_event_name: event,
+          session_id: `sess-status-${event}`,
+          cwd: fixture.root,
+          tool_name: 'Bash',
+          tool_input: { command: "sh -c 'agentguard status'" },
+          ...(event === 'PostToolUse'
+            ? { tool_response: { stdout: statusOutput, exit_code: 0 } }
+            : { error: statusOutput }),
+        },
+      });
+      assert.equal(result, null, event);
+    }
+    assert.equal(existsSync(fixture.config.auditPath), false);
+  });
+
+  it('still protects an unexpectedly unmasked secret in agentguard status output', async () => {
+    const fixture = lifecycleFixture();
+    const leaked = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-status-leak', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
+      tool_response: { stdout: 'api_key=sk-status-leak-1234567890', exit_code: 0 },
+    });
+    assert.equal(leaked.result.decision.decision, 'block');
+    assert.doesNotMatch(leaked.text, /status-leak/);
+  });
+
+  it('excludes only agentguard status results from PostToolBatch protection', async () => {
+    const fixture = lifecycleFixture();
+    const statusCall = {
+      tool_name: 'Bash',
+      tool_input: { command: 'agentguard status' },
+      tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured' },
+    };
+
+    const statusOnly = await protectAction({
+      config: fixture.config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-status-only', cwd: fixture.root,
+        tool_calls: [statusCall],
+      },
+    });
+    assert.equal(statusOnly, null);
+    assert.equal(existsSync(fixture.config.auditPath), false);
+
+    const mixedPublic = await protectAction({
+      config: fixture.config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-status-mixed', cwd: fixture.root,
+        tool_calls: [
+          statusCall,
+          { tool_name: 'Read', tool_input: { file_path: '/workspace/public.txt' }, tool_response: { content: 'public' } },
+        ],
+      },
+    });
+    assert.ok(mixedPublic);
+    assert.notEqual(mixedPublic.decision.decision, 'block');
+    assert.equal(mixedPublic.event.metadata?.claudeBatchAgentGuardStatusCallsExcluded, 1);
+    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /ag_live_st/);
+
+    const mixedSensitive = await protectAction({
+      config: fixture.config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-status-sensitive', cwd: fixture.root,
+        tool_calls: [
+          statusCall,
+          {
+            tool_name: 'Read',
+            tool_input: { file_path: '/workspace/private.txt' },
+            tool_response: { content: 'api_key=sk-other-tool-secret-1234567890' },
+          },
+        ],
+      },
+    });
+    assert.ok(mixedSensitive);
+    assert.equal(mixedSensitive.decision.decision, 'block');
+
+    const unsafeStatus = await protectAction({
+      config: fixture.config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-status-leak', cwd: fixture.root,
+        tool_calls: [{
+          ...statusCall,
+          tool_response: { stdout: 'api_key=sk-status-batch-leak-1234567890' },
+        }],
+      },
+    });
+    assert.ok(unsafeStatus);
+    assert.equal(unsafeStatus.decision.decision, 'block');
   });
 
   it('blocks a sensitive PostToolBatch before the next model call with bounded counts', async () => {

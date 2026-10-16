@@ -272,14 +272,14 @@ async function main() {
     .action(async () => {
       const config = await refreshAgentAccountBinding(ensureConfig());
       const paths = getAgentGuardPaths();
-      console.log(`Config: ${paths.configPath}`);
+      console.log(`Config: ${statusPath(paths.configPath, paths.home)}`);
       console.log(`Protection level: ${config.level}`);
       console.log(`Cloud URL: ${config.cloudUrl || 'not configured'}`);
       printCloudAuthStatus(config);
       console.log(`Agent host: ${config.agentHost || 'not configured'}`);
       console.log(`Agent hosts: ${config.agentHosts?.join(', ') || 'not configured'}`);
-      console.log(`Policy cache: ${config.policyCachePath}`);
-      console.log(`Audit log: ${config.auditPath}`);
+      console.log(`Policy cache: ${statusPath(config.policyCachePath, paths.home)}`);
+      console.log(`Audit log: ${statusPath(config.auditPath, paths.home)}`);
       console.log(`Privacy enhancement: ${describePrivacyMode(config)}`);
       printInitGuidanceIfNeeded(config);
       printPrivacyEnhancementHint(config);
@@ -1368,6 +1368,20 @@ function printCloudAuthStatus(config: AgentGuardConfig): void {
   console.log('Cloud auth: not connected');
   console.log('API key: not configured');
   console.log('Agent JWT: not configured');
+}
+
+function statusPath(value: string, agentGuardHome: string): string {
+  const roots: Array<[string, string]> = [
+    [agentGuardHome, '<agentguard-home>'],
+    [homedir(), '~'],
+  ];
+  for (const [root, label] of roots) {
+    if (value === root) return label;
+    if (value.startsWith(`${root}${sep}`)) {
+      return `${label}/${relative(root, value).split(sep).join('/')}`;
+    }
+  }
+  return value;
 }
 
 function networkDefaultOutboundWarning(value: string): string | undefined {

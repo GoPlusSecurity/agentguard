@@ -6,7 +6,7 @@ import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
-import { isAgentGuardCliCommand } from './self-command.js';
+import { isAgentGuardCliCommand, isAgentGuardStatusCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
@@ -87,6 +87,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     && isAgentGuardApprovalCommand(action);
   if (!action.input) return null;
   if (isAgentGuardRuntimeAction(action) && !selfApprovalAttempt) return null;
+  if (isAgentGuardStatusResult(action)) return null;
   const approvalStorePath = resolveApprovalStorePath(options.config);
 
   const client = new AgentGuardCloudClient(options.config);
@@ -191,6 +192,27 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+}
+
+function isAgentGuardStatusResult(action: RuntimeAction): boolean {
+  const codexEvent = pickCodexHookEventFromAction(action);
+  const claudeEvent = pickClaudeHookEventFromAction(action);
+  const postToolResult = codexEvent === 'PostToolUse'
+    || claudeEvent === 'PostToolUse'
+    || claudeEvent === 'PostToolUseFailure';
+  if (postToolResult) {
+    return action.metadata?.nativeToolActionType === 'shell'
+      && typeof action.metadata.nativeToolInput === 'string'
+      && isAgentGuardStatusCommand(action.metadata.nativeToolInput)
+      && isSafelyMaskedAgentGuardStatusOutput(action.input);
+  }
+  return claudeEvent === 'PostToolBatch'
+    && action.metadata?.claudeBatchOnlyAgentGuardStatus === true;
+}
+
+function isSafelyMaskedAgentGuardStatusOutput(output: unknown): boolean {
+  const serialized = typeof output === 'string' ? output : JSON.stringify(output);
+  return redactText(serialized) === serialized;
 }
 
 function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
@@ -745,7 +767,12 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     ? claudeLifecycleFields(claudeHookEvent)
     : codexLifecycleFields(codexHookEvent);
   const sessionId = options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw);
-  const claudeBatch = claudeHookEvent === 'PostToolBatch' ? claudeBatchFacts(raw, sessionId) : undefined;
+  const claudeBatchCalls = claudeHookEvent === 'PostToolBatch'
+    ? filterClaudeBatchAgentGuardStatusCalls(raw?.tool_calls)
+    : undefined;
+  const claudeBatch = claudeBatchCalls
+    ? claudeBatchFacts(claudeBatchCalls.calls, sessionId)
+    : undefined;
   const claudeConfig = claudeHookEvent === 'ConfigChange' ? readClaudeConfigChange(raw) : undefined;
   const verifiedOutput = claudeHookEvent === 'PostToolUse'
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
@@ -766,7 +793,15 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   let actionInput = process.env.TOOL_INPUT
     || (observedSearchResult !== undefined
       ? typeof observedSearchResult === 'string' ? observedSearchResult : JSON.stringify(observedSearchResult)
-      : pickInput(raw, actionType, toolInput, codexHookEvent, claudeHookEvent, claudeConfig?.input));
+      : pickInput(
+        raw,
+        actionType,
+        toolInput,
+        codexHookEvent,
+        claudeHookEvent,
+        claudeConfig?.input,
+        claudeBatchCalls?.calls,
+      ));
   let suppressedPublicSearchValues = 0;
   if (!process.env.TOOL_INPUT && actionType === 'llm_request'
       && (agentHost === 'hermes' && toolName === 'hermes.pre_api_request'
@@ -839,6 +874,10 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
+      ...(claudeBatchCalls && claudeBatchCalls.excludedCount > 0 ? {
+        claudeBatchAgentGuardStatusCallsExcluded: claudeBatchCalls.excludedCount,
+        claudeBatchOnlyAgentGuardStatus: claudeBatchCalls.calls.length === 0,
+      } : {}),
       ...(claudeBatch && process.env.TOOL_INPUT
         ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
       ...(claudeConfig ? {
@@ -1240,10 +1279,9 @@ function claudeEventMetadata(
 }
 
 function claudeBatchFacts(
-  raw: Record<string, unknown> | null,
+  responses: unknown,
   sessionId: string,
 ): { llm: LlmEgressRequestMetadata; metadata: Record<string, unknown> } {
-  const responses = raw?.tool_calls ?? [];
   const serialized = JSON.stringify(responses);
   const filePaths = collectClaudeBatchFilePaths(responses);
   const containsSensitiveContent = hasSensitiveClaudeBatchContent(responses);
@@ -1278,6 +1316,26 @@ function claudeBatchFacts(
       filePaths,
     },
   };
+}
+
+function filterClaudeBatchAgentGuardStatusCalls(
+  responses: unknown,
+): { calls: unknown[]; excludedCount: number } {
+  if (!Array.isArray(responses)) return { calls: [], excludedCount: 0 };
+  const calls = responses.filter((call) => !isClaudeAgentGuardStatusCall(call));
+  return { calls, excludedCount: responses.length - calls.length };
+}
+
+function isClaudeAgentGuardStatusCall(call: unknown): boolean {
+  if (!isPlainRecord(call)) return false;
+  const toolName = firstString(call.tool_name, call.toolName, call.name);
+  const toolInput = pickToolInput(call);
+  const actionType = mapToolToRuntimeAction(toolName, call);
+  if (actionType !== 'shell') return false;
+  const command = pickNativeToolAuditInput(actionType, toolInput);
+  if (!command || !isAgentGuardStatusCommand(command)) return false;
+  const output = call.tool_response ?? call.toolResponse;
+  return isSafelyMaskedAgentGuardStatusOutput(output);
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
@@ -1421,6 +1479,7 @@ function pickInput(
   codexHookEvent?: CodexHookEvent,
   claudeHookEvent?: ClaudeHookEvent,
   claudeConfigInput?: string,
+  claudeBatchCalls?: unknown[],
 ): string {
   if (!raw) return '';
   if (codexHookEvent === 'UserPromptSubmit') return firstString(raw.prompt);
@@ -1449,7 +1508,7 @@ function pickInput(
     return typeof failure === 'string' ? failure : failure === undefined ? 'tool failure' : JSON.stringify(failure);
   }
   if (claudeHookEvent === 'PostToolBatch') {
-    return JSON.stringify(raw.tool_calls ?? []);
+    return JSON.stringify(claudeBatchCalls ?? raw.tool_calls ?? []);
   }
   if (claudeHookEvent === 'ConfigChange') return claudeConfigInput ?? 'config change';
   if (claudeHookEvent === 'PreModelSwitch' || claudeHookEvent === 'PostModelSwitch') {
