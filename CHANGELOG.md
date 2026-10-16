@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.2] - 2026-10-16
+## [1.2.3] - 2026-10-16
 
 ### Changed
 - Clean runtime events stay local across DSH, Codex, and Claude Code.
