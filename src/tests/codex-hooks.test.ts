@@ -304,6 +304,40 @@ describe('installed Codex native hooks', () => {
     assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, /status-leak/);
   });
 
+  it('does not exempt wrapped, prefixed, alternate-path, or extended status output', () => {
+    const commands = [
+      "sh -c 'agentguard status'",
+      'env MODE=test agentguard status',
+      'MODE=test agentguard status',
+      'command agentguard status',
+      'builtin agentguard status',
+      '/tmp/agentguard status',
+      'agentguard-mcp status',
+      'agentguard status --json',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const fixture = installFixture();
+      const run = fixture.run('agentguard-post-tool.sh', {
+        hook_event_name: 'PostToolUse',
+        session_id: `sess_status_negative_${index}`,
+        turn_id: `turn_status_negative_${index}`,
+        cwd: fixture.project,
+        tool_name: 'Bash',
+        tool_use_id: `tool_status_negative_${index}`,
+        tool_input: { command },
+        tool_response: {
+          output: 'API key: ag_live_st…3456\nAgent JWT: configured',
+          exit_code: 0,
+        },
+      });
+
+      assert.equal(run.status, 0, command);
+      assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), true, command);
+      const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
+      assert.doesNotMatch(audit, /agentGuardStatusOutputSuppressed/, command);
+    }
+  });
+
   it('keeps post-tool protection for non-status and compound AgentGuard commands', () => {
     const commands = ['agentguard scan', 'agentguard status; printf unsafe'];
     for (const [index, command] of commands.entries()) {

@@ -164,7 +164,7 @@ describe('Claude Code native lifecycle hooks', () => {
           session_id: `sess-status-${event}`,
           cwd: fixture.root,
           tool_name: 'Bash',
-          tool_input: { command: "sh -c 'agentguard status'" },
+          tool_input: { command: 'agentguard status' },
           ...(event === 'PostToolUse'
             ? { tool_response: { stdout: statusOutput, exit_code: 0 } }
             : { error: statusOutput }),
@@ -173,6 +173,37 @@ describe('Claude Code native lifecycle hooks', () => {
       assert.equal(result, null, event);
     }
     assert.equal(existsSync(fixture.config.auditPath), false);
+  });
+
+  it('does not exempt wrapped, prefixed, alternate-path, or extended status commands', async () => {
+    const commands = [
+      "sh -c 'agentguard status'",
+      'env MODE=test agentguard status',
+      'MODE=test agentguard status',
+      'command agentguard status',
+      'builtin agentguard status',
+      '/tmp/agentguard status',
+      'agentguard-mcp status',
+      'agentguard status --json',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const fixture = lifecycleFixture();
+      const result = await protectAction({
+        config: fixture.config,
+        agentHost: 'claude-code',
+        auditSafe: true,
+        rawInput: {
+          hook_event_name: 'PostToolUse',
+          session_id: `sess-status-negative-${index}`,
+          cwd: fixture.root,
+          tool_name: 'Bash',
+          tool_input: { command },
+          tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured', exit_code: 0 },
+        },
+      });
+      assert.ok(result, command);
+      assert.notEqual(result.event.metadata?.agentGuardStatusOutputSuppressed, true, command);
+    }
   });
 
   it('still protects an unexpectedly unmasked secret in agentguard status output', async () => {
@@ -186,12 +217,12 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.doesNotMatch(leaked.text, /status-leak/);
   });
 
-  it('excludes only agentguard status results from PostToolBatch protection', async () => {
+  it('suppresses only agentguard status output while preserving PostToolBatch protection', async () => {
     const fixture = lifecycleFixture();
     const statusCall = {
       tool_name: 'Bash',
       tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured' },
+      tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured', exit_code: 0 },
     };
 
     const statusOnly = await protectAction({
@@ -220,7 +251,21 @@ describe('Claude Code native lifecycle hooks', () => {
     });
     assert.ok(mixedPublic);
     assert.notEqual(mixedPublic.decision.decision, 'block');
-    assert.equal(mixedPublic.event.metadata?.claudeBatchAgentGuardStatusCallsExcluded, 1);
+    assert.equal(mixedPublic.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, 1);
+    assert.equal(
+      mixedPublic.event.llm?.payloadBytes,
+      Buffer.byteLength(JSON.stringify([
+        statusCall,
+        { tool_name: 'Read', tool_input: { file_path: '/workspace/public.txt' }, tool_response: { content: 'public' } },
+      ]), 'utf8'),
+    );
+    const inspectedCalls = JSON.parse(mixedPublic.event.input) as Array<Record<string, unknown>>;
+    assert.equal(inspectedCalls.length, 2);
+    assert.equal(inspectedCalls[0]?.tool_name, 'Bash');
+    assert.equal(inspectedCalls[1]?.tool_name, 'Read');
+    assert.equal((inspectedCalls[0]?.tool_response as Record<string, unknown>)?.exit_code, 0);
+    assert.doesNotMatch(JSON.stringify(inspectedCalls[0]), /ag_live_st/);
+    assert.match(JSON.stringify(inspectedCalls[0]), /status output suppressed/i);
     assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /ag_live_st/);
 
     const mixedSensitive = await protectAction({
@@ -242,6 +287,22 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.ok(mixedSensitive);
     assert.equal(mixedSensitive.decision.decision, 'block');
 
+    const statusWithSensitiveMetadata = await protectAction({
+      config: fixture.config,
+      agentHost: 'claude-code',
+      auditSafe: true,
+      rawInput: {
+        hook_event_name: 'PostToolBatch', session_id: 'sess-status-sensitive-metadata', cwd: fixture.root,
+        tool_calls: [{
+          ...statusCall,
+          metadata: { note: 'api_key=sk-status-metadata-secret-1234567890' },
+        }],
+      },
+    });
+    assert.ok(statusWithSensitiveMetadata);
+    assert.equal(statusWithSensitiveMetadata.decision.decision, 'block');
+    assert.equal(statusWithSensitiveMetadata.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, 1);
+
     const unsafeStatus = await protectAction({
       config: fixture.config,
       agentHost: 'claude-code',
@@ -256,6 +317,29 @@ describe('Claude Code native lifecycle hooks', () => {
     });
     assert.ok(unsafeStatus);
     assert.equal(unsafeStatus.decision.decision, 'block');
+
+    for (const [index, command] of [
+      "sh -c 'agentguard status'",
+      'env MODE=test agentguard status',
+      'command agentguard status',
+      'builtin agentguard status',
+      '/tmp/agentguard status',
+      'agentguard status --json',
+    ].entries()) {
+      const nonExempt = await protectAction({
+        config: fixture.config,
+        agentHost: 'claude-code',
+        auditSafe: true,
+        rawInput: {
+          hook_event_name: 'PostToolBatch',
+          session_id: `sess-status-non-exempt-${index}`,
+          cwd: fixture.root,
+          tool_calls: [{ ...statusCall, tool_input: { command } }],
+        },
+      });
+      assert.ok(nonExempt, command);
+      assert.equal(nonExempt.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, undefined, command);
+    }
   });
 
   it('blocks a sensitive PostToolBatch before the next model call with bounded counts', async () => {
