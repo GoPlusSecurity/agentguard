@@ -286,6 +286,29 @@ describe('installed Codex native hooks', () => {
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
   });
 
+  it('does not block the real status output when it contains documented key placeholders', () => {
+    const fixture = installFixture();
+    const status = fixture.runCli('status');
+    assert.equal(status.status, 0);
+    assert.match(status.stdout, /TYPESAFE_API_KEY=<key>/);
+
+    const run = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess_real_status',
+      turn_id: 'turn_real_status',
+      cwd: fixture.project,
+      tool_name: 'functions.exec_command',
+      tool_use_id: 'tool_real_status',
+      tool_input: { cmd: 'agentguard status' },
+      tool_response: { output: status.stdout, exit_code: status.status },
+    });
+
+    assert.equal(run.status, 0);
+    assert.equal(run.stdout.trim(), '');
+    assert.equal(run.stderr.trim(), '');
+    assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
+  });
+
   it('still blocks an unexpectedly unmasked secret in agentguard status output', () => {
     const fixture = installFixture();
     const run = fixture.run('agentguard-post-tool.sh', {
@@ -466,6 +489,7 @@ function installFixture(): {
   home: string;
   run: (script: string, event: unknown) => HookRun;
   runRaw: (script: string, input: string) => HookRun;
+  runCli: (...args: string[]) => HookRun;
 } {
   const project = mkdtempSync(join(tmpdir(), 'agentguard-codex-hooks-'));
   const home = mkdtempSync(join(tmpdir(), 'agentguard-codex-home-'));
@@ -494,6 +518,19 @@ function installFixture(): {
     home,
     run: (script, event) => runRaw(script, JSON.stringify(event)),
     runRaw,
+    runCli: (...args) => {
+      const result = spawnSync(shim, args, {
+        cwd: project,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH || ''}`,
+          AGENTGUARD_HOME: home,
+          TYPESAFE_API_KEY: '',
+        },
+      });
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    },
   };
 }
 
