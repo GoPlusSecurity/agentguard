@@ -9,7 +9,7 @@ import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardOwnedOutputResult,
   isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { redactTextPreservingSavedActivationUrl } from './self-output.js';
+import { maskActivationUrlsForInspection, redactTextPreservingSavedActivationUrl } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -844,6 +844,11 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const nativePostToolEvent = codexHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUseFailure';
+  // An activation link is safe to show after a tool has run. Do not exempt it
+  // from pre-tool or model-request checks, where the URL may be an egress target.
+  if (nativePostToolEvent || claudeHookEvent === 'MessageDisplay' || claudeHookEvent === 'Stop') {
+    actionInput = maskActivationUrlsForInspection(actionInput);
+  }
   const nativeToolActionType = nativePostToolEvent
     ? mapToolToRuntimeAction(toolName, raw)
     : actionType;
@@ -1368,7 +1373,24 @@ function projectClaudeBatchForInspection(
     suppressedCount += 1;
     return projected;
   });
-  return { originalCalls: responses, inspectionCalls, suppressedCount };
+  return { originalCalls: responses,
+    inspectionCalls: inspectionCalls.map((call) => {
+      if (!isPlainRecord(call)) return call;
+      const projected = { ...call };
+      for (const key of ['tool_response', 'toolResponse', 'result', 'error', 'error_message',
+        'stdout', 'stderr', 'output']) {
+        if (key in projected) projected[key] = maskActivationUrlsInValue(projected[key]);
+      }
+      return projected;
+    }), suppressedCount };
+}
+
+function maskActivationUrlsInValue(value: unknown): unknown {
+  if (typeof value === 'string') return maskActivationUrlsForInspection(value);
+  if (Array.isArray(value)) return value.map(maskActivationUrlsInValue);
+  if (!isPlainRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value)
+    .map(([key, item]) => [key, maskActivationUrlsInValue(item)]));
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
@@ -1418,7 +1440,7 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
     || toolName === 'WebFetch' || toolName === 'WebSearch' || lower.startsWith('mcp__');
   if (!verifiedTool) return undefined;
   if (typeof output === 'string') return toolName === 'WebSearch'
-    ? redactPublicSearchResult(output) : redactText(output);
+    ? redactPublicSearchResult(output) : redactTextPreservingSavedActivationUrl(output);
   if (!isPlainRecord(output)) return undefined;
   const hasVerifiedShape = toolName === 'Read'
     ? typeof output.content === 'string'
@@ -1432,7 +1454,7 @@ function redactVerifiedClaudeToolOutput(toolName: string, output: unknown): unkn
 
 function redactStructuredClaudeOutput(value: unknown, publicSearch = false): unknown {
   if (publicSearch) return redactPublicSearchResult(value);
-  if (typeof value === 'string') return redactText(value, { skipBareNumericIdentifiers: publicSearch });
+  if (typeof value === 'string') return redactTextPreservingSavedActivationUrl(value);
   if (Array.isArray(value)) return value.map((item) => redactStructuredClaudeOutput(item, publicSearch));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)

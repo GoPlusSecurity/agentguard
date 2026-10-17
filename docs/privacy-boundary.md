@@ -25,8 +25,10 @@ recognized; an explicit executable path must resolve to this package's CLI.
 Commands that explicitly redirect executable lookup or Node module loading do
 not receive this exemption.
 An HTTPS `curl -fsSL …/install.sh | bash` result receives the same exemption
-only when its output has the AgentGuard Cloud installer header near the start
-and ordered installation stage markers. The URL host is not used as an allowlist. These
+when its output has the AgentGuard Cloud installer header and ordered early
+stages, or the ordered final stage and next-step lines if the host retained
+only the output tail. Supported installer settings may be assigned to `bash`
+in the pipeline. The URL host is not used as an allowlist. These
 markers can be imitated by another script; this is the accepted limit of
 attributing a merged shell result without a trusted process identity. In Claude Code,
 `PostToolBatch` excludes the whole recognized call from its inspection copy,
@@ -40,6 +42,17 @@ commands can reach the agent unchanged. AgentGuard also does not rewrite those
 results in OpenClaw, QClaw, Hermes, or DSH. Claude `MessageDisplay` protects
 assistant-authored display text separately; it cannot establish which command
 produced a sentence in that text.
+
+An HTTP(S) URL span ending in `/activate?token=<value>` is exempt in tool
+results and assistant display text, regardless of domain. The token value must
+be nonempty and use ordinary URL token characters. This lets an activation
+link survive a Bash result even when the installer output is incomplete. Only
+that URL span is exempt: extra query parameters and other credentials in the
+same result still trigger normal protection.
+Pre-tool commands and model requests retain their normal egress checks.
+Local audit and Cloud previews keep the activation token masked or omit the
+link. A different site can imitate this URL shape, so the exception should
+not be treated as proof that the link came from AgentGuard.
 
 ## Public web-search results
 

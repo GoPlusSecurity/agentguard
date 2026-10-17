@@ -12,6 +12,7 @@
 
 ### Fixed
 - Blocked Claude Code `PostToolBatch` findings now reach Cloud with a redacted summary and batch counts.
+- Installer pipelines with inline AgentGuard settings still require execution approval, while their full or tail-only results and locally saved activation links avoid post-tool and display redaction.
 
 ## [1.2.1] - 2026-09-29
 

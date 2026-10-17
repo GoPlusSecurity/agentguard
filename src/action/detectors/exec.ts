@@ -80,7 +80,7 @@ const DANGEROUS_COMMANDS = [
 ];
 
 const DOWNLOAD_AND_EXEC_PATTERNS = [
-  /\b(?:curl|wget)\b(?:(?!&&|\|\||;|\n|\r).)*\|\s*(?:(?:sudo(?:\s+(?:-[^\s]+|--[^\s]+|env))*\s+))?(?:bash|sh)\b/i,
+  /\b(?:curl|wget)\b(?:(?!&&|\|\||;|\n|\r).)*\|\s*(?:(?:sudo(?:\s+(?:-[^\s]+|--[^\s]+|env))*\s+))?(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s|;&]+)\s+)*(?:bash|sh)\b/i,
   /\b(?:bash|sh)\s+<\s*\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
   /\beval\s+["']?\$\(\s*(?:curl|wget)\b[^;)\n\r]*\)/i,
 ];

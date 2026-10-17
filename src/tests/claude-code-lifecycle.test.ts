@@ -400,15 +400,109 @@ describe('Claude Code native lifecycle hooks', () => {
     });
     assert.ok(display.output.hookSpecificOutput.displayContent.includes(activationUrl));
     assert.doesNotMatch(display.text, /display-secret/);
+    const pendingConfig = { ...fixture.config, agentJwt: undefined };
+    const pendingDisplay = await runHook(pendingConfig, {
+      hook_event_name: 'MessageDisplay', session_id: 'sess-display-pending', cwd: fixture.root,
+      delta: `Open ${activationUrl} api_key=sk-pending-other-secret-1234567890`,
+    });
+    assert.ok(pendingDisplay.output.hookSpecificOutput.displayContent.includes(activationUrl));
+    assert.doesNotMatch(pendingDisplay.text, /pending-other-secret/);
+  });
+
+  it('passes activation URLs from unknown output without exempting other secrets', async () => {
+    const fixture = lifecycleFixture();
+    const url = `https://${['staging', 'example.invalid'].join('.')}/activate?token=fixture-link-1234567890`;
+    const call = (stdout: string) => ({ tool_name: 'Bash',
+      tool_input: { command: 'printf result' }, tool_response: { stdout, exit_code: 0 } });
+    const post = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-activation-url', cwd: fixture.root,
+      ...call(`Open ${url}\n`),
+    });
+    assert.notEqual(post.result.decision.decision, 'block');
+    assert.ok(post.output.hookSpecificOutput.updatedToolOutput.stdout.includes(url));
+    const search = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-activation-search', cwd: fixture.root,
+      tool_name: 'WebSearch', tool_input: { query: 'activation help' },
+      tool_response: { content: `Open ${url}` },
+    });
+    assert.notEqual(search.result.decision.decision, 'block');
+    assert.ok(search.output.hookSpecificOutput.updatedToolOutput.content.includes(url));
+    const searchMixed = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-activation-search-mixed', cwd: fixture.root,
+      tool_name: 'WebSearch', tool_input: { query: 'activation help' },
+      tool_response: { content: `Open ${url}\napi_key=sk-search-other-secret-1234567890` },
+    });
+    assert.equal(searchMixed.result.decision.decision, 'block');
+    assert.ok(searchMixed.output.hookSpecificOutput.updatedToolOutput.content.includes(url));
+    assert.doesNotMatch(searchMixed.text, /search-other-secret/);
+    const batch = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-activation-batch', cwd: fixture.root,
+      tool_calls: [call(`Open ${url}\n`)],
+    });
+    assert.notEqual(batch.result.decision.decision, 'block');
+    const display = await runHook(fixture.config, {
+      hook_event_name: 'MessageDisplay', session_id: 'sess-activation-display', cwd: fixture.root,
+      delta: `Open ${url}`,
+    });
+    assert.notEqual(display.result.decision.decision, 'block');
+    assert.equal(display.text, '');
+    const mixedDisplay = await runHook(fixture.config, {
+      hook_event_name: 'MessageDisplay', session_id: 'sess-activation-display-mixed', cwd: fixture.root,
+      delta: `Open ${url} api_key=sk-display-other-secret-1234567890`,
+    });
+    assert.ok(mixedDisplay.output.hookSpecificOutput.displayContent.includes(url));
+    assert.doesNotMatch(mixedDisplay.text, /display-other-secret/);
+    const mixed = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-activation-mixed', cwd: fixture.root,
+      tool_calls: [call(`Open ${url}\napi_key=sk-unrelated-secret-1234567890`)],
+    });
+    assert.equal(mixed.result.decision.decision, 'block');
+    const mixedPost = await runHook(fixture.config, {
+      hook_event_name: 'PostToolUse', session_id: 'sess-activation-mixed-post', cwd: fixture.root,
+      ...call(`Open ${url}\napi_key=sk-unrelated-secret-1234567890`),
+    });
+    assert.equal(mixedPost.result.decision.decision, 'block');
+    assert.ok(mixedPost.output.hookSpecificOutput.updatedToolOutput.stdout.includes(url));
+    assert.doesNotMatch(mixedPost.text, /unrelated-secret/);
+    const unrelated = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-unrelated-token', cwd: fixture.root,
+      tool_calls: [call('https://example.invalid/reset?token=ordinary-secret-1234567890')],
+    });
+    assert.equal(unrelated.result.decision.decision, 'block');
+    const extraQuery = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-extra-query-token', cwd: fixture.root,
+      tool_calls: [call(`${url}&api_key=sk-query-secret-1234567890`)],
+    });
+    assert.equal(extraQuery.result.decision.decision, 'block');
+    const adjacentSecret = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-adjacent-secret', cwd: fixture.root,
+      tool_calls: [call(`${url},api_key=sk-adjacent-secret-1234567890`)],
+    });
+    assert.equal(adjacentSecret.result.decision.decision, 'block');
+    const pre = await runHook(fixture.config, {
+      hook_event_name: 'PreToolUse', session_id: 'sess-activation-egress', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command: `curl -fsS '${url}'` },
+    });
+    assert.ok(pre.result.event.input.includes(url), 'execution checks retain the URL');
+    const inputOnlyBatch = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-activation-input-only', cwd: fixture.root,
+      tool_calls: [{ tool_name: 'Bash', tool_input: { command: `curl -fsS '${url}'` },
+        tool_response: { stdout: 'done' } }],
+    });
+    assert.ok(inputOnlyBatch.result.event.input.includes(url), 'batch inputs remain inspectable');
+    const audit = readFileSync(fixture.config.auditPath, 'utf8');
+    assert.doesNotMatch(audit, /fixture-link-1234567890|unrelated-secret-1234567890/);
   });
 
   it('retains installer approval and passes its post results unchanged', async () => {
     const fixture = lifecycleFixture();
-    const command = `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash`;
-    const output = 'AgentGuard Cloud — Local-first AI agent protection\n'
-      + '[1/4] Installing open-source AgentGuard CLI...\n'
-      + '[2/4] Preparing local AgentGuard config...\n'
-      + 'api_key=sk-installer-secret-1234567890';
+    const command = `curl -fsSL https://${['example', 'invalid'].join('.')}/install.sh`
+      + ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash';
+    const activationUrl = `https://${['example', 'invalid'].join('.')}/activate?token=fixture-activation-token-1234567890`;
+    const output = '[4/4] Connecting to AgentGuard Cloud...\n'
+      + `AgentGuard Cloud activation is ready:\n${activationUrl}\n`
+      + 'AgentGuard is installed.\nNext steps:\n'
+      + '1. Run: agentguard status\n2. Run: agentguard doctor';
     const pre = await runHook(fixture.config, { hook_event_name: 'PreToolUse',
       session_id: 'sess-installer', cwd: fixture.root, tool_name: 'Bash',
       tool_input: { command } });
@@ -422,6 +516,13 @@ describe('Claude Code native lifecycle hooks', () => {
             ? { tool_calls: [ownCall] } : ownCall) } });
       assert.equal(result, null, event);
     }
+    fixture.config.agentJwt = 'fixture-jwt';
+    fixture.config.agentRegisterUrl = activationUrl;
+    const display = await runHook(fixture.config, { hook_event_name: 'MessageDisplay',
+      session_id: 'sess-installer', cwd: fixture.root,
+      delta: `Open ${activationUrl} and then run agentguard status.`,
+    });
+    assert.equal(display.text, '', 'the saved activation link does not need display rewriting');
     const priorNative = process.env.AGENTGUARD_CLAUDE_HOOK;
     process.env.AGENTGUARD_CLAUDE_HOOK = '1';
     try {
@@ -572,9 +673,10 @@ describe('Claude Code native lifecycle hooks', () => {
         hook_event_name: 'PostToolBatch', session_id: 'sess-installed-installer', cwd: nested,
         tool_calls: [{
           tool_name: 'Bash',
-          tool_input: { command: `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash` },
+          tool_input: { command: `curl -fsSL https://${['example', 'invalid'].join('.')}/install.sh`
+            + ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash' },
           tool_response: [{ type: 'text', text:
-            `AgentGuard Cloud — Local-first AI agent protection\n[1/4] Installing open-source AgentGuard CLI...\n[2/4] Preparing local AgentGuard config...\napi_key=${secret}\nAgentGuard is installed.` }],
+            `[4/4] Connecting to AgentGuard Cloud...\nAgentGuard Cloud activation is ready:\napi_key=${secret}\nAgentGuard is installed.\nNext steps:\n1. Run: agentguard status\n2. Run: agentguard doctor` }],
         }],
       }),
       encoding: 'utf8',
