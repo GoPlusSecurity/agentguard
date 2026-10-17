@@ -6,11 +6,10 @@ import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
-import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardStatusCommand,
+import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand,
   isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue,
-  redactTextPreservingSavedActivationUrl } from './self-output.js';
+import { redactTextPreservingSavedActivationUrl } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -53,8 +52,6 @@ export interface ProtectResult {
   approvalChannel?: 'agent' | null;
   pendingApproval?: ApprovalRecord;
   policySource: 'cloud' | 'cache' | 'default' | 'cloud-decision';
-  /** Hook-only response, never written to the audit log or Cloud. */
-  selfToolOutput?: { text: string; value: unknown };
   /** Display-only replacement, never written to the audit log or Cloud. */
   displayContent?: string;
 }
@@ -85,7 +82,7 @@ type ClaudeHookEvent =
 
 const CLAUDE_CONFIG_READ_LIMIT = 256 * 1024;
 const CLAUDE_LARGE_CONTEXT_TOKENS = 100_000;
-const AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER = '[AgentGuard status output suppressed after local validation]';
+const AGENTGUARD_OUTPUT_INSPECTION_PLACEHOLDER = '[AgentGuard command output excluded from inspection]';
 
 export async function protectAction(options: ProtectOptions): Promise<ProtectResult | null> {
   const action = buildRuntimeAction(options);
@@ -93,9 +90,10 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   const claudeHookEvent = pickClaudeHookEventFromAction(action);
   const selfApprovalAttempt = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
     && isAgentGuardApprovalCommand(action);
-  const selfOutput = nativeAgentGuardSelfOutput(options, action, codexHookEvent, claudeHookEvent);
+  const selfOutput = nativeAgentGuardSelfOutput(action, codexHookEvent, claudeHookEvent);
   if (selfOutput !== undefined) return selfOutput;
-  const suppressAgentGuardStatusResult = isAgentGuardStatusResult(action);
+  if (claudeHookEvent === 'PostToolBatch'
+      && action.metadata?.claudeBatchOnlyAgentGuardOutput === true) return null;
   if (!action.input) return null;
   if (isAgentGuardRuntimeAction(action) && !selfApprovalAttempt) return null;
   const approvalStorePath = resolveApprovalStorePath(options.config);
@@ -124,8 +122,6 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     policySource = evaluation.policySource;
   }
   decision = enforceNativeHookDecision(action, decision, selfApprovalAttempt);
-  if (suppressAgentGuardStatusResult
-      && decision.decision !== 'block' && decision.decision !== 'require_approval') return null;
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
@@ -209,7 +205,6 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 }
 
 function nativeAgentGuardSelfOutput(
-  options: ProtectOptions,
   action: RuntimeAction,
   codexEvent?: CodexHookEvent,
   claudeEvent?: ClaudeHookEvent,
@@ -220,184 +215,12 @@ function nativeAgentGuardSelfOutput(
       || typeof action.metadata.nativeToolInput !== 'string'
       || !isAgentGuardOwnedOutputCommand(action.metadata.nativeToolInput)) return undefined;
 
-  // buildRuntimeAction already validated native payloads. Inspect the original
-  // result here, not action.input (which can contain an inspection projection).
-  const raw = parseRawInput(options.rawInput, options.stdinText);
-  if (claudeEvent === 'PostToolUseFailure') {
-    const error = firstString(raw?.error, raw?.error_message);
-    return hasUnmaskedSelfCredential(error) || hasEncodedSensitiveSelfText(error, options.config)
-      || redactText(error) !== error
-      ? blockedAgentGuardSelfOutput(action) : null;
-  }
-  const response = raw?.tool_response ?? raw?.toolResponse;
-  if (response === undefined) return null;
-  if (!isSupportedNativeSelfOutput(response, options.config)
-      || hasEncodedSensitiveSelfText(response, options.config)) return blockedAgentGuardSelfOutput(action);
-  let safeValue: unknown;
-  let safeText: string;
-  let originalText: string;
-  try {
-    safeValue = redactAgentGuardSelfToolValue(response, options.config);
-    safeText = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue);
-    originalText = typeof response === 'string' ? response : JSON.stringify(response);
-    if (redactAgentGuardSelfToolOutput(safeValue, options.config) !== safeText
-        || hasUnmaskedSelfCredential(safeValue)) return blockedAgentGuardSelfOutput(action);
-  } catch {
-    return blockedAgentGuardSelfOutput(action);
-  }
-  if (safeText === originalText) return null;
-  const decision: RuntimeDecision = {
-    actionId: 'act_agentguard_self_output', decision: 'allow', riskScore: 0,
-    riskLevel: 'low', reasons: [], policyVersion: 'local-self-output',
-  };
-  // This response is ephemeral: raw output and the preserved activation link
-  // are not persisted in audit metadata or uploaded to Cloud.
-  return {
-    decision,
-    event: { ...action, input: '[AgentGuard CLI output rewritten locally]',
-      actionId: decision.actionId, decision: 'allow', riskScore: 0,
-      riskLevel: 'low', reasons: [], policyVersion: decision.policyVersion },
-    policySource: 'default',
-    selfToolOutput: { text: codexSelfToolFeedback(safeValue, safeText), value: safeValue },
-  };
+  // The host owns the original tool result. Do not inspect or rewrite it.
+  return null;
 }
-
-function blockedAgentGuardSelfOutput(action: RuntimeAction): ProtectResult {
-  const decision: RuntimeDecision = {
-    actionId: 'act_agentguard_self_output_unsafe', decision: 'block', riskScore: 100,
-    riskLevel: 'critical', policyVersion: 'local-self-output',
-    reasons: [{ code: 'SELF_OUTPUT_UNSAFE', severity: 'critical',
-      title: 'AgentGuard output could not be safely rewritten',
-      description: 'The result shape or remaining sensitive content was not safe for model use.' }],
-  };
-  const { claudeUpdatedToolOutput: _unsafeOutput, ...metadata } = action.metadata || {};
-  return {
-    decision,
-    event: { ...action, input: '[AgentGuard CLI output withheld locally]',
-      actionId: decision.actionId, decision: 'block', riskScore: 100,
-      riskLevel: 'critical', reasons: decision.reasons, policyVersion: decision.policyVersion,
-      metadata },
-    policySource: 'default',
-  };
-}
-
-function isSupportedNativeSelfOutput(response: unknown, config: AgentGuardConfig): boolean {
-  if (typeof response === 'string') {
-    const trimmed = response.trim();
-    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return true;
-    try { return isSupportedNativeSelfOutput(JSON.parse(response) as unknown, config); }
-    catch { return false; }
-  }
-  if (!isPlainRecord(response) || Object.keys(response).length === 0) return false;
-  return Object.entries(response).every(([key, value]) => {
-    if (key === 'stdout' || key === 'output' || key === 'stderr' || key === 'content')
-      return typeof value === 'string' && isSupportedNativeSelfOutput(value, config);
-    if (key === 'exit_code' || key === 'exitCode') return Number.isSafeInteger(value);
-    if (key === 'interrupted' || key === 'isImage') return typeof value === 'boolean';
-    return key === 'agentRegisterUrl' && Boolean(config.agentJwt)
-      && value === config.agentRegisterUrl;
-  });
-}
-
-function hasEncodedSensitiveSelfText(value: unknown, config: AgentGuardConfig): boolean {
-  if (typeof value === 'string') {
-    if (!/%[0-9a-f]{2}/i.test(value)) return false;
-    try {
-      let inspected = value;
-      const savedUrl = config.agentJwt && config.agentRegisterUrl;
-      if (savedUrl && savedUrl.length <= 2048) {
-        const url = new URL(savedUrl);
-        if ((url.protocol === 'https:' || url.protocol === 'http:')
-            && !url.username && !url.password) {
-          inspected = inspected.replaceAll(savedUrl, '[validated activation link]');
-        }
-      }
-      const decoded = decodeURIComponent(inspected);
-      return decoded !== inspected && redactText(decoded) !== decoded;
-    } catch {
-      return true;
-    }
-  }
-  if (Array.isArray(value)) return value.some((item) => hasEncodedSensitiveSelfText(item, config));
-  return isPlainRecord(value) && Object.values(value).some((item) => hasEncodedSensitiveSelfText(item, config));
-}
-
-function hasUnmaskedSelfCredential(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return value.split(/\r?\n/).some((line) => {
-      const match = line.match(/^\s*(?:api[_ -]?key|authorization|token|secret|password|passwd|agent[_ -]?jwt)\s*[:=]\s*(.+)$/i);
-      if (!match) return false;
-      const detail = match[1]!.trim();
-      if (/^(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(detail)) return true;
-      const first = detail.split(/\s+/)[0]!.replace(/[.,;!?]+$/, '');
-      return !/^(?:configured|disabled|enabled|inactive|missing|not|none|present|redacted|unset|unavailable)$/i.test(first)
-        && /^[A-Za-z0-9._~+/-]{8,}$/.test(first);
-    });
-  }
-  if (Array.isArray(value)) return value.some(hasUnmaskedSelfCredential);
-  return isPlainRecord(value) && Object.values(value).some(hasUnmaskedSelfCredential);
-}
-
-function codexSelfToolFeedback(value: unknown, fallback: string): string {
-  if (!isPlainRecord(value)) return typeof value === 'string' ? value : fallback;
-  const recognized = new Set(['stdout', 'output', 'stderr', 'exit_code', 'exitCode']);
-  if (Object.keys(value).some((key) => !recognized.has(key))) return fallback;
-  const stdout = firstString(value.stdout, value.output);
-  const stderr = firstString(value.stderr);
-  const display = [stdout, stderr].filter(Boolean).join('\n');
-  const exitCode = value.exit_code ?? value.exitCode;
-  if (!display) return fallback;
-  return typeof exitCode === 'number' && exitCode !== 0
-    ? `Exit code: ${exitCode}\n${display}` : display;
-}
-
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
-}
-
-function isAgentGuardStatusResult(action: RuntimeAction): boolean {
-  const codexEvent = pickCodexHookEventFromAction(action);
-  const claudeEvent = pickClaudeHookEventFromAction(action);
-  const postToolResult = codexEvent === 'PostToolUse'
-    || claudeEvent === 'PostToolUse'
-    || claudeEvent === 'PostToolUseFailure';
-  if (postToolResult) {
-    return action.metadata?.agentGuardStatusOutputSuppressed === true;
-  }
-  return claudeEvent === 'PostToolBatch'
-    && action.metadata?.claudeBatchOnlyAgentGuardStatus === true;
-}
-
-function isSafelyMaskedAgentGuardStatusOutput(
-  output: unknown,
-  config: AgentGuardConfig,
-  originalResponse: unknown = output,
-): boolean {
-  const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-  // The status help intentionally prints this literal placeholder. Normalize only
-  // that documented value so real keys and unrelated sensitive output stay strict.
-  let normalized = serialized.replaceAll('TYPESAFE_API_KEY=<key>', 'TYPESAFE_API_KEY=[REDACTED]');
-  const activationUrl = config.agentJwt && config.agentRegisterUrl;
-  if (activationUrl && activationUrl.length <= 2048 && !/[\x00-\x1f\x7f]/.test(activationUrl)) {
-    try {
-      const url = new URL(activationUrl);
-      if (url.protocol === 'https:' && !url.username && !url.password) {
-        const statusLine = `Agent activation URL: ${activationUrl}`;
-        const stdout = typeof originalResponse === 'string' ? originalResponse
-          : isPlainRecord(originalResponse) ? firstString(originalResponse.stdout, originalResponse.output) : '';
-        // Only the exact link printed by this installation's pending status is
-        // exempt. A forged or additional credential in the tool result is not.
-        if (stdout.split(/\r?\n/).filter((line) => line === statusLine).length === 1) {
-          normalized = normalized.replace(
-            JSON.stringify(statusLine).slice(1, -1),
-            'Agent activation URL: [validated activation link]',
-          );
-        }
-      }
-    } catch { /* Invalid stored URLs do not weaken the content scan. */ }
-  }
-  return redactText(normalized) === normalized;
 }
 
 function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
@@ -450,7 +273,6 @@ function enforceNativeHookDecision(
     && action.metadata.claudeBatchSensitive === false;
   const visibleContentNeedsProtection = action.metadata?.publicSearchSensitive === true
     || action.metadata?.claudeBatchSensitive === true
-    || action.metadata?.claudeBatchUnsafeAgentGuardOutput === true
     || (strictSensitive && !verifiedSearchException && !verifiedBatchException);
   const containsSensitiveContent = (scansVisibleContent || blockingVisibleModelInput)
     && (visibleContentNeedsProtection || action.metadata?.configSensitive === true);
@@ -774,12 +596,6 @@ function formatCodexHookResult(result: ProtectResult): string | null {
   const decision = result.decision.decision;
   const denied = decision === 'block' || decision === 'require_approval';
   const reason = safeCodexReason(result, decision === 'require_approval');
-  if (event === 'PostToolUse' && result.selfToolOutput) {
-    // Codex replaces the original model-visible result with hook feedback in
-    // code mode; this does not reject the completed tool call.
-    return JSON.stringify({ continue: false, stopReason: result.selfToolOutput.text });
-  }
-
   if (event === 'UserPromptSubmit') {
     if (denied) return JSON.stringify({ decision: 'block', reason });
     if (decision === 'warn') return JSON.stringify({ systemMessage: reason });
@@ -826,12 +642,6 @@ function formatClaudeHookResult(result: ProtectResult): string | null {
   const decision = result.decision.decision;
   const denied = decision === 'block' || decision === 'require_approval';
   const reason = safeCodexReason(result, decision === 'require_approval');
-  if (event === 'PostToolUse' && result.selfToolOutput) {
-    return JSON.stringify({ hookSpecificOutput: {
-      hookEventName: 'PostToolUse', updatedToolOutput: result.selfToolOutput.value,
-    } });
-  }
-
   if (event === 'UserPromptSubmit' || event === 'UserPromptExpansion') {
     if (denied) return JSON.stringify({ decision: 'block', reason });
     return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
@@ -975,7 +785,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     : codexLifecycleFields(codexHookEvent);
   const sessionId = options.sessionId || process.env.AGENTGUARD_SESSION_ID || pickSessionId(raw);
   const claudeBatchProjection = claudeHookEvent === 'PostToolBatch'
-    ? projectClaudeBatchForInspection(raw?.tool_calls, options.config)
+    ? projectClaudeBatchForInspection(raw?.tool_calls)
     : undefined;
   const claudeBatch = claudeBatchProjection
     ? claudeBatchFacts(
@@ -985,7 +795,11 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     )
     : undefined;
   const claudeConfig = claudeHookEvent === 'ConfigChange' ? readClaudeConfigChange(raw) : undefined;
-  const verifiedOutput = claudeHookEvent === 'PostToolUse'
+  const ownNativeToolOutput = (codexHookEvent === 'PostToolUse'
+      || claudeHookEvent === 'PostToolUse' || claudeHookEvent === 'PostToolUseFailure')
+    && mapToolToRuntimeAction(toolName, raw) === 'shell'
+    && isAgentGuardOwnedOutputCommand(pickNativeToolAuditInput('shell', toolInput));
+  const verifiedOutput = claudeHookEvent === 'PostToolUse' && !ownNativeToolOutput
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
     : undefined;
   const observedSearchResult = resolveObservedSearchResult(agentHost, toolName, raw, options.phase,
@@ -1044,12 +858,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     toolInput,
     claudeHookEvent,
   );
-  const agentGuardStatusOutputSuppressed = nativePostToolEvent
-    && nativeToolActionType === 'shell'
-    && isAgentGuardStatusCommand(nativeToolInput)
-    && isSafelyMaskedAgentGuardStatusOutput(actionInput, options.config, raw?.tool_response ?? raw?.toolResponse);
-  if (agentGuardStatusOutputSuppressed) actionInput = AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER;
-  const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse'
+  const unknownSensitiveToolOutput = claudeHookEvent === 'PostToolUse' && !ownNativeToolOutput
     && verifiedOutput === undefined && redactText(actionInput) !== actionInput;
 
   return {
@@ -1082,19 +891,15 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
       ...(nativeToolInput ? { nativeToolInput } : {}),
       ...(nativeToolArgumentKeys.length > 0 ? { nativeToolArgumentKeys } : {}),
       ...(nativeFileTargets.length > 0 ? { nativeFileTargets } : {}),
-      ...(agentGuardStatusOutputSuppressed ? { agentGuardStatusOutputSuppressed: true } : {}),
       ...pickNetworkMetadata(raw, toolInput),
       ...pickPostToolOutcomeMetadata(codexHookEvent, claudeHookEvent, raw),
       ...pickFilePathMetadata(raw),
       ...claudeEventMetadata(claudeHookEvent, raw),
       ...(claudeBatch?.metadata || {}),
       ...(claudeBatchProjection && claudeBatchProjection.suppressedCount > 0 ? {
-        claudeBatchAgentGuardStatusOutputsSuppressed: claudeBatchProjection.suppressedCount,
-        claudeBatchOnlyAgentGuardStatus:
+        claudeBatchAgentGuardOutputsSuppressed: claudeBatchProjection.suppressedCount,
+        claudeBatchOnlyAgentGuardOutput:
           claudeBatchProjection.suppressedCount === claudeBatchProjection.originalCalls.length,
-      } : {}),
-      ...(claudeBatchProjection?.unsafeSelfOutputCount ? {
-        claudeBatchUnsafeAgentGuardOutput: true,
       } : {}),
       ...(claudeBatch && process.env.TOOL_INPUT
         ? { claudeBatchSensitive: undefined, claudeBatchVerified: false } : {}),
@@ -1213,7 +1018,9 @@ function validateNativeClaudeHook(raw: Record<string, unknown> | null): void {
   }
   if (event === 'PostToolBatch' && (!Array.isArray(raw.tool_calls)
       || !raw.tool_calls.every((call) => isPlainRecord(call)
-        && Object.prototype.hasOwnProperty.call(call, 'tool_response')))) {
+        && (Object.prototype.hasOwnProperty.call(call, 'tool_response')
+          || (mapToolToRuntimeAction(firstString(call.tool_name, call.toolName), call) === 'shell'
+            && isAgentGuardOwnedOutputCommand(pickNativeToolAuditInput('shell', pickToolInput(call)))))))) {
     throw invalidClaudePayload();
   }
   if (event === 'ConfigChange' && (typeof raw.source !== 'string'
@@ -1500,7 +1307,7 @@ function claudeBatchFacts(
 ): { llm: LlmEgressRequestMetadata; metadata: Record<string, unknown> } {
   const serialized = JSON.stringify(originalResponses);
   const inspectionSerialized = JSON.stringify(inspectionResponses);
-  const filePaths = collectClaudeBatchFilePaths(originalResponses);
+  const filePaths = collectClaudeBatchFilePaths(inspectionResponses);
   const containsSensitiveContent = hasSensitiveClaudeBatchContent(inspectionResponses);
   const verifiedSearchCalls = Array.isArray(inspectionResponses)
     ? inspectionResponses.filter((call): call is Record<string, unknown> =>
@@ -1538,13 +1345,11 @@ function claudeBatchFacts(
 
 function projectClaudeBatchForInspection(
   responses: unknown,
-  config: AgentGuardConfig,
-): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number; unsafeSelfOutputCount: number } {
+): { originalCalls: unknown[]; inspectionCalls: unknown[]; suppressedCount: number } {
   if (!Array.isArray(responses)) return {
-    originalCalls: [], inspectionCalls: [], suppressedCount: 0, unsafeSelfOutputCount: 0,
+    originalCalls: [], inspectionCalls: [], suppressedCount: 0,
   };
   let suppressedCount = 0;
-  let unsafeSelfOutputCount = 0;
   const inspectionCalls = responses.map((call) => {
     if (!isPlainRecord(call)) return call;
     const toolName = firstString(call.tool_name, call.toolName, call.name);
@@ -1552,57 +1357,15 @@ function projectClaudeBatchForInspection(
     const command = pickNativeToolAuditInput('shell', toolInput);
     if (mapToolToRuntimeAction(toolName, call) !== 'shell'
         || !isAgentGuardOwnedOutputCommand(command)) return call;
-    const responseKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
-      ? 'tool_response' : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
-    if (!responseKey) {
-      const error = firstString(call.error, call.error_message);
-      if (redactText(error) !== error || hasUnmaskedSelfCredential(error)
-          || hasEncodedSensitiveSelfText(error, config)) unsafeSelfOutputCount += 1;
-      return call;
-    }
-    const response = call[responseKey];
-    // PostToolBatch carries model-visible content. Suppress only content that
-    // is already safe. Failed or rejected PostToolUse rewrites remain visible
-    // to the batch privacy gate.
-    try {
-      const originalText = typeof response === 'string' ? response : JSON.stringify(response);
-      if (!isSupportedNativeSelfOutput(response, config)
-          && !isSupportedClaudeBatchSelfOutput(response)) {
-        unsafeSelfOutputCount += 1;
-        return call;
-      }
-      if (hasEncodedSensitiveSelfText(response, config)
-          || redactAgentGuardSelfToolOutput(response, config) !== originalText
-          || hasUnmaskedSelfCredential(response)) {
-        unsafeSelfOutputCount += 1;
-        return call;
-      }
-    } catch {
-      unsafeSelfOutputCount += 1;
-      return call;
-    }
-    const projectedResponse = isPlainRecord(response)
-      ? { exit_code: nonNegativeInteger(response.exit_code ?? response.exitCode),
-        output: AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER }
-      : AGENTGUARD_STATUS_OUTPUT_PLACEHOLDER;
-    const projected = { ...call, [responseKey]: projectedResponse };
-    for (const key of ['tool_input', 'toolInput']) {
-      if (Object.prototype.hasOwnProperty.call(projected, key)) {
-        projected[key] = { command: '[AgentGuard CLI invocation suppressed]' };
-      }
-    }
+    // This is only an inspection copy. Exclude the whole own-command call so
+    // future result fields cannot trigger a batch block. The host keeps it.
+    const projected = { tool_name: toolName,
+      tool_input: { command: '[AgentGuard CLI invocation suppressed]' },
+      tool_response: AGENTGUARD_OUTPUT_INSPECTION_PLACEHOLDER };
     suppressedCount += 1;
     return projected;
   });
-  return { originalCalls: responses, inspectionCalls, suppressedCount, unsafeSelfOutputCount };
-}
-
-/** PostToolBatch carries serialized model content, not the structured PostToolUse output. */
-function isSupportedClaudeBatchSelfOutput(response: unknown): boolean {
-  if (typeof response === 'string') return true;
-  return Array.isArray(response) && response.length > 0 && response.every((block) =>
-    isPlainRecord(block) && block.type === 'text' && typeof block.text === 'string'
-      && Object.keys(block).every((key) => key === 'type' || key === 'text'));
+  return { originalCalls: responses, inspectionCalls, suppressedCount };
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {

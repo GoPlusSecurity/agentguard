@@ -31,9 +31,10 @@ export function isStandaloneAgentGuardCliCommand(command: string): boolean {
   return isStandaloneAgentGuardCliCommandInner(command, 0);
 }
 
-/** Recognize the documented installer only for post-tool output sanitization. */
+/** Recognize standalone package commands and the documented installer for output handling. */
 export function isAgentGuardOwnedOutputCommand(command: string): boolean {
-  return isStandaloneAgentGuardCliCommand(command) || isOfficialAgentGuardInstallerCommand(command);
+  return isStandaloneAgentGuardCliCommandInner(command, 0, true)
+    || isOfficialAgentGuardInstallerCommand(command);
 }
 
 export function isOfficialAgentGuardInstallerCommand(command: string): boolean {
@@ -74,7 +75,7 @@ function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
   return wrappedCommand ? isAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
 }
 
-function isStandaloneAgentGuardCliCommandInner(command: string, depth: number): boolean {
+function isStandaloneAgentGuardCliCommandInner(command: string, depth: number, outputOnly = false): boolean {
   if (depth > 2) return false;
   const trimmed = command.trim();
   if (!trimmed || SHELL_CONTROL_RE.test(trimmed)) return false;
@@ -89,21 +90,21 @@ function isStandaloneAgentGuardCliCommandInner(command: string, depth: number): 
   }
   while (['command', 'builtin'].includes(basename(tokens[index] || ''))) index += 1;
   if (isVerifiedAgentGuardExecutable(tokens[index])) return true;
-  if (isVerifiedAgentGuardNpxInvocation(tokens, index)) return true;
+  if (isVerifiedAgentGuardNpxInvocation(tokens, index, outputOnly)) return true;
 
   const wrappedCommand = shellWrapperCommand(tokens, index);
-  return wrappedCommand ? isStandaloneAgentGuardCliCommandInner(wrappedCommand, depth + 1) : false;
+  return wrappedCommand ? isStandaloneAgentGuardCliCommandInner(wrappedCommand, depth + 1, outputOnly) : false;
 }
 
-function isVerifiedAgentGuardNpxInvocation(tokens: string[], start: number): boolean {
+function isVerifiedAgentGuardNpxInvocation(tokens: string[], start: number, outputOnly = false): boolean {
   if (tokens[start] !== 'npx'
       || !tokens.slice(0, start).every((token) => token === 'command' || token === 'builtin')) return false;
   let index = start + 1;
   if (tokens[index] === '-y' || tokens[index] === '--yes') index += 1;
   return /^@goplus\/agentguard(?:@(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|latest|beta))?$/.test(tokens[index] || '')
-    && ['init', 'connect', 'disconnect', 'status', 'policy', 'privacy', 'doctor',
+    && (outputOnly || ['init', 'connect', 'disconnect', 'status', 'policy', 'privacy', 'doctor',
       'scan', 'dsh-scan', 'dsh-scan-batch', 'dsh-compare', 'approvals',
-      'subscribe', 'checkup'].includes(tokens[index + 1] || '');
+      'subscribe', 'checkup'].includes(tokens[index + 1] || ''));
 }
 
 function isVerifiedAgentGuardExecutable(executable: string | undefined): boolean {

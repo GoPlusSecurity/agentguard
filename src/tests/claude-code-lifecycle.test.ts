@@ -175,188 +175,30 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(existsSync(fixture.config.auditPath), false);
   });
 
-  it('allows only the configured activation link in native status and batch results', async () => {
+  it('passes all standalone AgentGuard results unchanged across native post hooks', async () => {
     const fixture = lifecycleFixture();
-    const activationUrl = 'https://agentguard.example/activate?token=pending-claude-link-123456';
-    fixture.config.agentJwt = 'test.jwt.pending';
-    fixture.config.agentRegisterUrl = activationUrl;
-    const statusOutput = `Agent activation URL: ${activationUrl}\nAPI key: not used for this connection`;
-    const statusCall = {
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: statusOutput, exit_code: 0 },
-    };
-    const post = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolUse', session_id: 'sess-pending-status', cwd: fixture.root,
-        ...statusCall,
-      },
-    });
-    assert.equal(post, null);
-    const punctuated = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-punctuated-link', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard connect' },
-      tool_response: { stdout: `Open (${activationUrl}).\napi_key=sk-other-secret-1234567890`, exit_code: 0 },
-    });
-    assert.equal(punctuated.result.decision.decision, 'allow');
-    assert.match(punctuated.output.hookSpecificOutput.updatedToolOutput.stdout, /Open \(https:/);
-    assert.ok(punctuated.output.hookSpecificOutput.updatedToolOutput.stdout.includes(`(${activationUrl}).`));
-    assert.doesNotMatch(punctuated.text, /other-secret/);
-
-    const structuredLink = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-structured-link', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard connect' },
-      tool_response: { agentRegisterUrl: activationUrl, stderr: 'api_key=sk-field-secret-1234567890', exit_code: 0 },
-    });
-    assert.equal(structuredLink.result.decision.decision, 'allow');
-    assert.equal(structuredLink.output.hookSpecificOutput.updatedToolOutput.agentRegisterUrl, activationUrl);
-    assert.doesNotMatch(structuredLink.text, /field-secret/);
-
-    const encodedLink = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-encoded-link', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard connect' },
-      tool_response: { stdout: encodeURIComponent(activationUrl), exit_code: 0 },
-    });
-    assert.equal(encodedLink.result.decision.decision, 'block');
-    assert.equal(encodedLink.output.hookSpecificOutput, undefined);
-    assert.doesNotMatch(encodedLink.text, /pending-claude-link/);
-
-    const batch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-pending-batch', cwd: fixture.root,
-        tool_calls: [statusCall],
-      },
-    });
-    assert.equal(batch, null);
-    assert.equal(existsSync(fixture.config.auditPath), false);
-
-    const forgedBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-forged-batch', cwd: fixture.root,
-        tool_calls: [{ ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 } }],
-      },
-    });
-    assert.equal(forgedBatch?.decision.decision, 'block',
-      'the batch must catch a result that was not rewritten before model use');
-    const unknownBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-unknown-batch', cwd: fixture.root,
-        tool_calls: [{ ...statusCall, tool_response: {
-          stdout: 'healthy', card: 5284917302468138, exit_code: 0,
-        } }],
-      },
-    });
-    assert.equal(unknownBatch?.decision.decision, 'block');
-    const failedBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-failed-batch', cwd: fixture.root,
-        tool_calls: [{ tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-          error: 'api_key=sk-failed-batch-secret-1234567890' }],
-      },
-    });
-    assert.equal(failedBatch?.decision.decision, 'block');
-    const forgedPost = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-forged-post', cwd: fixture.root,
-      ...statusCall, tool_response: { stdout: statusOutput.replace(activationUrl, `${activationUrl}-forged`), exit_code: 0 },
-    });
-    assert.equal(forgedPost.result.decision.decision, 'allow');
-    assert.doesNotMatch(forgedPost.text, /pending-claude-link-123456-forged/);
-
-    const encodedSavedUrl = 'https://agentguard.example/activate?token=saved%2Fsegment-123456';
-    fixture.config.agentRegisterUrl = encodedSavedUrl;
-    const exactEncodedQuery = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-encoded-query', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard connect' },
-      tool_response: { stdout: `Open (${encodedSavedUrl}).\napi_key=sk-encoded-query-secret-1234567890`, exit_code: 0 },
-    });
-    assert.equal(exactEncodedQuery.result.decision.decision, 'allow');
-    assert.ok(exactEncodedQuery.output.hookSpecificOutput.updatedToolOutput.stdout.includes(encodedSavedUrl));
-    assert.doesNotMatch(exactEncodedQuery.text, /encoded-query-secret/);
-  });
-
-  it('rewrites simple wrappers but does not trust unrelated executable paths', async () => {
-    const commands = [
-      '/tmp/agentguard status',
-      'agentguard-mcp status',
-    ];
-    for (const [index, command] of commands.entries()) {
-      const fixture = lifecycleFixture();
-      const result = await protectAction({
-        config: fixture.config,
-        agentHost: 'claude-code',
-        auditSafe: true,
-        rawInput: {
-          hook_event_name: 'PostToolUse',
-          session_id: `sess-status-negative-${index}`,
-          cwd: fixture.root,
-          tool_name: 'Bash',
-          tool_input: { command },
-          tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured', exit_code: 0 },
-        },
-      });
-      assert.ok(result, command);
-      assert.notEqual(result.event.metadata?.agentGuardStatusOutputSuppressed, true, command);
+    for (const command of ['agentguard status', 'agentguard connect', 'agentguard scan ./skill',
+      'npx -y @goplus/agentguard@1.2.4-beta.1 --version', "sh -c 'agentguard status'",
+      'env MODE=test agentguard status']) {
+      for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+        const result = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+          auditSafe: true, rawInput: { hook_event_name: event, session_id: 'sess-own-output',
+            cwd: fixture.root, tool_name: 'Bash', tool_input: { command },
+            tool_response: { stdout: 'api_key=sk-own-secret-1234567890',
+              card: 5284917302468138 }, error: 'api_key=sk-own-failure-1234567890' } });
+        assert.equal(result, null, `${event}: ${command}`);
+      }
+      const batch = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+        auditSafe: true, rawInput: { hook_event_name: 'PostToolBatch', session_id: 'sess-own-batch',
+          cwd: fixture.root, tool_calls: [{ tool_name: 'Bash', tool_input: { command },
+            tool_response: [{ type: 'text', text: 'api_key=sk-own-batch-secret-1234567890' }] }] } });
+      assert.equal(batch, null, `PostToolBatch: ${command}`);
     }
-    for (const command of ["sh -c 'agentguard status'", 'env MODE=test agentguard status',
-      'MODE=test agentguard status', 'command agentguard status']) {
-      const fixture = lifecycleFixture();
-      const rewritten = await runHook(fixture.config, {
-        hook_event_name: 'PostToolUse', session_id: 'sess-wrapped-status', cwd: fixture.root,
-        tool_name: 'Bash', tool_input: { command },
-        tool_response: { stdout: 'api_key=sk-wrapped-secret-1234567890', exit_code: 0 },
-      });
-      assert.equal(rewritten.result.decision.decision, 'allow', command);
-      assert.match(rewritten.text, /updatedToolOutput/, command);
-      assert.doesNotMatch(rewritten.text, /wrapped-secret/, command);
-    }
-  });
-
-  it('rewrites an unexpectedly unmasked secret in agentguard status output', async () => {
-    const fixture = lifecycleFixture();
-    const leaked = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-status-leak', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: 'api_key=sk-status-leak-1234567890', exit_code: 0 },
-    });
-    assert.equal(leaked.result.decision.decision, 'allow');
-    assert.match(leaked.text, /updatedToolOutput/);
-    assert.match(leaked.text, /api_key=\[REDACTED\]/);
-    assert.doesNotMatch(leaked.text, /status-leak/);
-
-    const structured = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-status-structured', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: 'healthy', token: 'sk-structured-secret-1234567890', count: 4 },
-    });
-    assert.equal(structured.result.decision.decision, 'block');
-    assert.equal(structured.output.decision, 'block');
-    assert.equal(structured.output.hookSpecificOutput, undefined);
-    assert.doesNotMatch(structured.text, /structured-secret/);
-
-    const numeric = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-status-numeric', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: 'api_key=sk-numeric-secret-1234567890', card: 5284917302468138, exit_code: 0 },
-    });
-    assert.equal(numeric.result.decision.decision, 'block');
-    assert.equal(numeric.output.decision, 'block');
-    assert.doesNotMatch(numeric.text, /numeric-secret|5284917302468138/);
-
-    const malformed = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-status-malformed', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: '{"token":"sk-malformed-secret-1234567890"',
-    });
-    assert.equal(malformed.result.decision.decision, 'block');
-    assert.equal(malformed.output.decision, 'block');
-    assert.doesNotMatch(malformed.text, /malformed-secret/);
-
-    const nestedUnknown = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-status-nested', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: '{"futureField":"sk-nested-secret-1234567890"}', exit_code: 0 },
-    });
-    assert.equal(nestedUnknown.result.decision.decision, 'block');
-    assert.doesNotMatch(nestedUnknown.text, /nested-secret/);
+    const unrelated = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      auditSafe: true, rawInput: { hook_event_name: 'PostToolUse', session_id: 'sess-unrelated',
+        cwd: fixture.root, tool_name: 'Bash', tool_input: { command: '/tmp/agentguard status' },
+        tool_response: { stdout: 'api_key=sk-other-secret-1234567890' } } });
+    assert.equal(unrelated?.decision.decision, 'block');
   });
 
   it('suppresses only agentguard status output while preserving PostToolBatch protection', async () => {
@@ -364,7 +206,7 @@ describe('Claude Code native lifecycle hooks', () => {
     const statusCall = {
       tool_name: 'Bash',
       tool_input: { command: 'agentguard status' },
-      tool_response: { stdout: 'API key: ag_live_st…3456\nAgent JWT: configured', exit_code: 0 },
+      tool_response: { stdout: 'api_key=sk-batch-own-secret-1234567890', exit_code: 0 },
     };
 
     const statusOnly = await protectAction({
@@ -393,7 +235,7 @@ describe('Claude Code native lifecycle hooks', () => {
     });
     assert.ok(mixedPublic);
     assert.notEqual(mixedPublic.decision.decision, 'block');
-    assert.equal(mixedPublic.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, 1);
+    assert.equal(mixedPublic.event.metadata?.claudeBatchAgentGuardOutputsSuppressed, 1);
     assert.equal(
       mixedPublic.event.llm?.payloadBytes,
       Buffer.byteLength(JSON.stringify([
@@ -405,10 +247,10 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(inspectedCalls.length, 2);
     assert.equal(inspectedCalls[0]?.tool_name, 'Bash');
     assert.equal(inspectedCalls[1]?.tool_name, 'Read');
-    assert.equal((inspectedCalls[0]?.tool_response as Record<string, unknown>)?.exit_code, 0);
-    assert.doesNotMatch(JSON.stringify(inspectedCalls[0]), /ag_live_st/);
-    assert.match(JSON.stringify(inspectedCalls[0]), /status output suppressed/i);
-    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /ag_live_st/);
+    assert.equal(inspectedCalls[0]?.tool_response, '[AgentGuard command output excluded from inspection]');
+    assert.doesNotMatch(JSON.stringify(inspectedCalls[0]), /batch-own-secret/);
+    assert.match(JSON.stringify(inspectedCalls[0]), /output excluded from inspection/i);
+    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /batch-own-secret/);
 
     const mixedSensitive = await protectAction({
       config: fixture.config,
@@ -441,9 +283,7 @@ describe('Claude Code native lifecycle hooks', () => {
         }],
       },
     });
-    assert.ok(statusWithSensitiveMetadata);
-    assert.equal(statusWithSensitiveMetadata.decision.decision, 'block');
-    assert.equal(statusWithSensitiveMetadata.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, 1);
+    assert.equal(statusWithSensitiveMetadata, null);
 
     const unsafeStatus = await protectAction({
       config: fixture.config,
@@ -457,8 +297,7 @@ describe('Claude Code native lifecycle hooks', () => {
         }],
       },
     });
-    assert.equal(unsafeStatus?.decision.decision, 'block',
-      'an unsafe model-visible result cannot be hidden from the batch gate');
+    assert.equal(unsafeStatus, null, 'own-command output is outside the batch privacy gate');
 
     for (const [index, command] of [
       '/tmp/agentguard status',
@@ -476,7 +315,7 @@ describe('Claude Code native lifecycle hooks', () => {
         },
       });
       assert.ok(nonExempt, command);
-      assert.equal(nonExempt.event.metadata?.claudeBatchAgentGuardStatusOutputsSuppressed, undefined, command);
+      assert.equal(nonExempt.event.metadata?.claudeBatchAgentGuardOutputsSuppressed, undefined, command);
     }
 
     const failedOwnCall = await protectAction({
@@ -487,7 +326,7 @@ describe('Claude Code native lifecycle hooks', () => {
           tool_response: 'Exit code 1\napi_key=sk-failed-own-secret-1234567890' }],
       },
     });
-    assert.equal(failedOwnCall?.decision.decision, 'block');
+    assert.equal(failedOwnCall, null);
   });
 
   it('blocks a sensitive PostToolBatch before the next model call with bounded counts', async () => {
@@ -544,209 +383,59 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), new RegExp(secret.replace('.', '\\.')));
   });
 
-  it('shows the saved activation link in Claude display while masking other credentials', async () => {
+  it('keeps display redaction separate from command results', async () => {
     const fixture = lifecycleFixture();
     const activationUrl = 'https://agentguard.example/activate?token=pending-display-link-123456';
     fixture.config.agentJwt = 'test.jwt.pending';
     fixture.config.agentRegisterUrl = activationUrl;
-    const otherUrl = 'https://agentguard.example/activate?token=unrelated-display-link-123456';
-    const otherSecret = 'sk-display-secret-1234567890';
-    for (const command of ['agentguard connect', 'npx -y @goplus/agentguard@1.2.4-beta.1 connect']) {
-      const connectCall = {
-        tool_name: 'Bash', tool_input: { command },
-        tool_response: { stdout: `Registered local AgentGuard agent.\nOpen this link to bind this agent to your account:\n${activationUrl}\n`, exit_code: 0 },
-      };
-      const connectResult = await protectAction({
-        config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-          hook_event_name: 'PostToolUse', session_id: 'sess-connect-link', cwd: fixture.root,
-          ...connectCall,
-        },
-      });
-      assert.notEqual(connectResult?.decision.decision, 'block', command);
-      const connectBatch = await protectAction({
-        config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-          hook_event_name: 'PostToolBatch', session_id: 'sess-connect-link', cwd: fixture.root,
-          tool_calls: [connectCall],
-        },
-      });
-      assert.notEqual(connectBatch?.decision.decision, 'block', command);
-    }
-
-    const npxWithOtherSecret = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-npx-secret', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: { command: 'npx -y @goplus/agentguard@1.2.4-beta.1 connect' },
-      tool_response: { stdout: `Open ${activationUrl}\napi_key=${otherSecret}`, exit_code: 0 },
-    });
-    assert.equal(npxWithOtherSecret.result.decision.decision, 'allow');
-    assert.ok(npxWithOtherSecret.output.hookSpecificOutput.updatedToolOutput.stdout.includes(activationUrl));
-    assert.doesNotMatch(npxWithOtherSecret.text, /display-secret/);
-
+    const own = await protectAction({ config: fixture.config, agentHost: 'claude-code', rawInput: {
+      hook_event_name: 'PostToolUse', session_id: 'sess-own', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command: 'agentguard connect' },
+      tool_response: { stdout: `Open ${activationUrl}\napi_key=sk-own-secret-1234567890` },
+    } });
+    assert.equal(own, null);
     const display = await runHook(fixture.config, {
-      hook_event_name: 'MessageDisplay', session_id: 'sess-display-link', cwd: fixture.root,
-      delta: `Open [this link](${activationUrl}). Other: ${otherUrl} api_key=${otherSecret}`,
+      hook_event_name: 'MessageDisplay', session_id: 'sess-display', cwd: fixture.root,
+      delta: `Open ${activationUrl} api_key=sk-display-secret-1234567890`,
     });
-    assert.ok(display.output.hookSpecificOutput.displayContent.includes(`](${activationUrl})`));
-    assert.doesNotMatch(display.text, /unrelated-display-link|display-secret/);
-    assert.equal(display.result.event.metadata?.claudeUpdatedMessage, undefined);
-    assert.doesNotMatch(readFileSync(fixture.config.auditPath, 'utf8'), /pending-display-link/);
-
-    const exactOnly = await runHook(fixture.config, {
-      hook_event_name: 'MessageDisplay', session_id: 'sess-display-link-only', cwd: fixture.root,
-      delta: `Open ${activationUrl}`,
-    });
-    assert.equal(exactOnly.output, null);
-
-    fixture.config.agentRegisterUrl = undefined;
-    const noSavedLink = await runHook(fixture.config, {
-      hook_event_name: 'MessageDisplay', session_id: 'sess-display-link-cleared', cwd: fixture.root,
-      delta: `Open ${activationUrl}`,
-    });
-    assert.doesNotMatch(noSavedLink.text, /pending-display-link/);
+    assert.ok(display.output.hookSpecificOutput.displayContent.includes(activationUrl));
+    assert.doesNotMatch(display.text, /display-secret/);
   });
 
-  it('keeps installer approval while preserving only its saved activation link in output', async () => {
+  it('retains installer approval and passes its post results unchanged', async () => {
     const fixture = lifecycleFixture();
-    const activationUrl = 'https://agentguard.example/activate?token=pending-installer-link-123456';
     const command = 'curl -fsSL https://agentguard.one/install.sh | bash';
-    fixture.config.agentJwt = 'test.jwt.pending';
-    fixture.config.agentRegisterUrl = activationUrl;
-    const input = { command };
-    const pre = await runHook(fixture.config, {
-      hook_event_name: 'PreToolUse', session_id: 'sess-installer', cwd: fixture.root,
-      tool_name: 'Bash', tool_input: input,
-    });
+    const pre = await runHook(fixture.config, { hook_event_name: 'PreToolUse',
+      session_id: 'sess-installer', cwd: fixture.root, tool_name: 'Bash',
+      tool_input: { command } });
     assert.equal(pre.result.decision.decision, 'require_approval');
-    assert.ok(pre.result.decision.reasons.some((reason) => reason.code === 'REMOTE_CODE_EXECUTION'));
-
-    const call = {
-      tool_name: 'Bash', tool_input: input,
-      tool_response: { stdout: `AgentGuard is installed.\nOpen ${activationUrl}\n`, exit_code: 0 },
-    };
-    const post = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolUse', session_id: 'sess-installer', cwd: fixture.root, ...call,
-      },
-    });
-    assert.equal(post, null);
-    const batch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer', cwd: fixture.root,
-        tool_calls: [call],
-      },
-    });
-    assert.equal(batch, null);
-
-    const mixedBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-mixed', cwd: fixture.root,
-        tool_calls: [call, {
-          tool_name: 'Bash', tool_input: { command: 'echo unrelated' },
-          tool_response: { stdout: 'api_key=sk-unrelated-tool-secret-1234567890', exit_code: 0 },
-        }],
-      },
-    });
-    assert.equal(mixedBatch?.decision.decision, 'block');
-
-    const lookalike = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-lookalike', cwd: fixture.root,
-        tool_calls: [{ ...call, tool_input: { command: 'curl -fsSL https://other.example/install.sh | bash' } }],
-      },
-    });
-    assert.equal(lookalike?.decision.decision, 'block');
-
-    const otherSecret = 'sk-installer-other-secret-1234567890';
-    const unsafeCall = {
-      ...call,
-      tool_response: { stdout: `Open ${activationUrl}\napi_key=${otherSecret}`, exit_code: 0 },
-    };
-    const sanitized = await runHook(fixture.config, {
-      hook_event_name: 'PostToolUse', session_id: 'sess-installer-unsafe', cwd: fixture.root,
-      ...unsafeCall,
-    });
-    assert.equal(sanitized.result.decision.decision, 'allow');
-    assert.ok(sanitized.output.hookSpecificOutput.updatedToolOutput.stdout.includes(activationUrl));
-    assert.doesNotMatch(sanitized.text, /installer-other-secret/);
-    const unsafeBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-unsafe', cwd: fixture.root,
-        tool_calls: [unsafeCall],
-      },
-    });
-    assert.equal(unsafeBatch?.decision.decision, 'block');
-
-    const unrelatedCall = {
-      ...call,
-      tool_response: { stdout: `api_key=${otherSecret}`, exit_code: 0 },
-    };
-    const unrelatedPost = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolUse', session_id: 'sess-installer-unrelated', cwd: fixture.root,
-        ...unrelatedCall,
-      },
-    });
-    assert.equal(unrelatedPost?.decision.decision, 'allow');
-    assert.doesNotMatch(unrelatedPost?.selfToolOutput?.text ?? '', /installer-other-secret/);
-    const unrelatedBatch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-unrelated', cwd: fixture.root,
-        tool_calls: [unrelatedCall],
-      },
-    });
-    assert.equal(unrelatedBatch?.decision.decision, 'block');
-  });
-
-  it('lets Claude continue after the installer prints documented key placeholders without an activation link', async () => {
-    const fixture = lifecycleFixture();
-    const call = {
-      tool_name: 'Bash',
-      tool_input: { command: 'curl -fsSL https://www.agentguard.one/install.sh | bash' },
-      tool_response: {
-        stdout: [
-          'AgentGuard initialized at /home/user/.agentguard',
-          'Optional: enhanced privacy detection is available but off.',
-          '  export TYPESAFE_API_KEY=<key>        supply the key without writing it to disk',
-          '  Export AGENTGUARD_API_KEY and rerun: agentguard connect --api-key <your-key>',
-          '  Upgrade and run: AGENTGUARD_API_KEY=<your-key> agentguard connect --api-key <your-key>',
-          '  AgentGuard is installed.',
-        ].join('\n'),
-        exit_code: 0,
-      },
-    };
-    const post = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolUse', session_id: 'sess-installer-no-link', cwd: fixture.root, ...call,
-      },
-    });
-    assert.equal(post, null);
-    const batch = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-no-link', cwd: fixture.root,
-        tool_calls: [{ ...call, tool_response: `[1/4] Installing open-source AgentGuard CLI...\n${call.tool_response.stdout}` }],
-      },
-    });
-    assert.equal(batch, null);
-
-    const contentBlocks = await protectAction({
-      config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-        hook_event_name: 'PostToolBatch', session_id: 'sess-installer-no-link-blocks', cwd: fixture.root,
-        tool_calls: [{ ...call, tool_response: [{ type: 'text', text: call.tool_response.stdout }] }],
-      },
-    });
-    assert.equal(contentBlocks, null);
-
-    for (const [index, response] of [
-      `${call.tool_response.stdout}\napi_key=sk-installer-leak-1234567890`,
-      [{ type: 'text', text: `${call.tool_response.stdout}\napi_key=sk-installer-leak-1234567890` }],
-    ].entries()) {
-      const unsafeBatch = await protectAction({
-        config: fixture.config, agentHost: 'claude-code', auditSafe: true, rawInput: {
-          hook_event_name: 'PostToolBatch', session_id: `sess-installer-real-secret-${index}`,
-          cwd: fixture.root, tool_calls: [{ ...call, tool_response: response }],
-        },
-      });
-      assert.equal(unsafeBatch?.decision.decision, 'block');
+    const ownCall = { tool_name: 'Bash', tool_input: { command },
+      tool_response: { stdout: 'api_key=sk-installer-secret-1234567890', exit_code: 0 } };
+    for (const event of ['PostToolUse', 'PostToolBatch']) {
+      const result = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+        auditSafe: true, rawInput: { hook_event_name: event, session_id: 'sess-installer',
+          cwd: fixture.root, ...(event === 'PostToolBatch'
+            ? { tool_calls: [ownCall] } : ownCall) } });
+      assert.equal(result, null, event);
     }
+    const priorNative = process.env.AGENTGUARD_CLAUDE_HOOK;
+    process.env.AGENTGUARD_CLAUDE_HOOK = '1';
+    try {
+      const failedBatch = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+        rawInput: { hook_event_name: 'PostToolBatch', session_id: 'sess-installer-failed',
+          cwd: fixture.root, tool_calls: [{ tool_name: 'Bash', tool_input: { command },
+            error: 'api_key=sk-installer-error-1234567890' }] } });
+      assert.equal(failedBatch, null);
+    } finally {
+      if (priorNative === undefined) delete process.env.AGENTGUARD_CLAUDE_HOOK;
+      else process.env.AGENTGUARD_CLAUDE_HOOK = priorNative;
+    }
+    const mixed = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      auditSafe: true, rawInput: { hook_event_name: 'PostToolBatch', session_id: 'sess-mixed',
+        cwd: fixture.root, tool_calls: [ownCall, { tool_name: 'Read',
+          tool_input: { file_path: '/workspace/private.txt' },
+          tool_response: { content: 'api_key=sk-other-secret-1234567890' } }] } });
+    assert.equal(mixed?.decision.decision, 'block');
   });
 
   it('blocks dangerous ConfigChange content without rolling the file back', async () => {
@@ -880,7 +569,8 @@ describe('Claude Code native lifecycle hooks', () => {
         tool_calls: [{
           tool_name: 'Bash',
           tool_input: { command: 'curl -fsSL https://www.agentguard.one/install.sh | bash' },
-          tool_response: '[1/4] Installing open-source AgentGuard CLI...\n  export TYPESAFE_API_KEY=<key>\n  AgentGuard is installed.',
+          tool_response: [{ type: 'text', text:
+            `[1/4] Installing open-source AgentGuard CLI...\napi_key=${secret}\nAgentGuard is installed.` }],
         }],
       }),
       encoding: 'utf8',

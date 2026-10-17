@@ -2,17 +2,15 @@
 
 ## Unreleased
 
+- AgentGuard command and documented installer results now pass through without post-tool blocking or redaction in Codex, Claude Code, OpenClaw, QClaw, Hermes, and DSH. Claude batch inspection excludes recognized own-command calls while retaining checks for other calls; execution-time approval remains.
+
 ### Changed
 - Clean runtime events stay local across DSH, Codex, and Claude Code.
 - Reportable DSH and native-hook events now send bounded, redacted Cloud summaries with useful command previews, action details, web destinations, or file/configuration/model/policy context. Raw responses, output, credentials, and other sensitive details stay local.
 - Native `PreToolUse` actions remain the primary Cloud records. Routine successful `PostToolUse` observations stay local; failures, elevated risks, anomalous results, and material new findings are uploaded as redacted events.
 
 ### Fixed
-- Claude Code no longer stops after the official AgentGuard installer prints documented key placeholders without an activation link; serialized and text-block batch results remain subject to checks for real secrets.
 - Blocked Claude Code `PostToolBatch` findings now reach Cloud with a redacted summary and batch counts.
-- Codex and Claude Code hooks no longer flag masked output from the exact standalone `agentguard status` command as PII or bulk egress; modified commands and unmasked secrets remain inspected.
-- Native Codex and Claude Code hooks no longer block standalone `agentguard` CLI results when output contains sensitive data. Codex replaces model-visible tool results with locally redacted feedback, Claude Code rewrites supported post-tool results, and the exact pending Agent JWT activation URL remains clickable. Compound commands and other tools remain protected.
-- OpenClaw and QClaw integrations now rewrite correlated AgentGuard CLI text in supported OpenClaw-owned `tool_result_persist` transcripts; the native Hermes `transform_tool_result` hook and DSH `tools/post-execute` accept path provide equivalent non-blocking redaction where supported. An exact saved activation link stays clickable; other hooks and downstream policy decisions retain their existing boundaries.
 
 ## [1.2.1] - 2026-09-29
 

@@ -18,35 +18,23 @@ uploaded to Cloud.
 
 ## AgentGuard-owned CLI results
 
-A single `agentguard` shell invocation with a supported result shape is locally
-redacted when its result contains recognized sensitive text. Unknown or malformed
-result shapes are blocked. Simple `command`, `env`, and
-shell wrappers are recognized; an explicit executable path must resolve to this
-package's CLI. Supported native result hooks redact recognized secrets in
-host-specific result or persistence surfaces. The documented
-`TYPESAFE_API_KEY=<key>` example remains unchanged. The **exact**
-pending Agent JWT activation URL saved in the local AgentGuard configuration
-remains unchanged when it appears as an exact value, including a structured
-`agentRegisterUrl` field or a link followed by sentence punctuation. Encoded
-links and other tokenized URLs are not exempt. Compound commands, unverified
-executable paths, and unrelated tools retain their ordinary protection;
-`agentguard approve` is not exempt from agent-self-approval checks.
-Direct `npx @goplus/agentguard` calls with supported public subcommands receive
-the same native output treatment. The exact documented
-`curl -fsSL https://agentguard.one/install.sh | bash` command receives it for
-supported result shapes even when no activation link was created. Only the
-exact saved link and documented public key placeholders remain visible; other
-recognized credentials are redacted. Unsupported or unsafe installer results
-remain on the batch privacy gate. Running the remote installer still requires
-approval before execution.
+Standalone `agentguard` commands and direct `npx @goplus/agentguard` commands
+pass through post-tool hooks without blocking or redaction, regardless of their
+output content or result shape. Simple `command`, `env`, and shell wrappers are
+recognized; an explicit executable path must resolve to this package's CLI.
+The exact documented `curl -fsSL https://agentguard.one/install.sh | bash`
+installer also receives this output exemption. In Claude Code,
+`PostToolBatch` excludes the whole recognized call from its inspection copy,
+while retaining the host's original result. Other calls in a mixed batch remain
+subject to the normal privacy gate. Compound commands, unverified paths, and
+unrelated tools retain ordinary protection. The installer and `agentguard
+approve` still receive their normal checks before execution.
 
-| Host | Own-command result handling | Limit |
-|---|---|---|
-| Codex | `PostToolUse` replaces sensitive results with redacted feedback. | Requires the native hook; no raw output replacement for unsupported lifecycle events. |
-| Claude Code | `PostToolUse` rewrites supported result shapes; `PostToolBatch` excludes an own-command result only after confirming that its model-visible content is already safe. | `PostToolUseFailure` has no output rewrite channel; a sensitive failure result in the batch stops continuation. |
-| OpenClaw / QClaw | `tool_result_persist` synchronously rewrites matched text in OpenClaw-owned session transcripts. | Requires host support and a matching `toolCallId`; cannot change results already displayed or Codex-native records. |
-| Hermes | Native `transform_tool_result` rewrites results before model context; `/agentguard` uses the same redactor. | Legacy shell hooks expose only an audit-only post event and cannot rewrite tool output. |
-| DSH | `tools/post-execute` can return redacted text or structured values with `kind: accept`. | Results blocked by another policy are not rewritten by this hook. |
+This intentionally means credentials or personal data printed by AgentGuard
+commands can reach the agent unchanged. AgentGuard also does not rewrite those
+results in OpenClaw, QClaw, Hermes, or DSH. Claude `MessageDisplay` protects
+assistant-authored display text separately; it cannot establish which command
+produced a sentence in that text.
 
 ## Public web-search results
 

@@ -13,7 +13,6 @@ import {
 } from '../runtime/public-search.js';
 import { redactText } from '../runtime/redaction.js';
 import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
-import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue } from '../runtime/self-output.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
   mergeDshPostDecisions,
@@ -239,41 +238,6 @@ export function buildDshRuntimeAction(
 
 function isDshAgentGuardCliAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isStandaloneAgentGuardCliCommand(action.input);
-}
-
-function rewriteDshAgentGuardResult(
-  exec: DshToolExecution,
-  result: DshToolExecutionResult,
-  downstream: DshPostToolDecision,
-  dependencies: DshRuntimeDependencies,
-): DshPostToolDecision {
-  if (downstream.kind === 'block' || isAgentGuardDshTool(exec.name)) return downstream;
-  const action = buildDshRuntimeAction(exec, dependencies.attribution);
-  if (!isDshAgentGuardCliAction(action)) return downstream;
-  const content = downstream.content ?? result.content;
-  if (!content && downstream.value === undefined) return downstream;
-  try {
-    const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
-    if (downstream.value !== undefined) {
-      // DSH forbids replacing value and content in the same accept decision.
-      const safe = redactAgentGuardSelfToolValue(downstream.value, config);
-      return JSON.stringify(safe) === JSON.stringify(downstream.value)
-        ? downstream : { ...downstream, value: safe };
-    }
-    if (!content) return downstream;
-    let changed = false;
-    const rewritten = content.map((block) => {
-      if (block.type !== 'text' || typeof block.text !== 'string') return block as DshContentBlock;
-      const safe = redactAgentGuardSelfToolOutput(block.text, config);
-      if (safe === block.text) return block as DshContentBlock;
-      changed = true;
-      return { ...block, text: safe } as DshContentBlock;
-    });
-    return changed ? { ...downstream, content: rewritten } : downstream;
-  } catch {
-    return { kind: 'accept', content: [{ type: 'text',
-      text: 'AgentGuard output could not be safely redacted; run the command in your terminal.' }] };
-  }
 }
 
 export async function observeDshToolCall(
@@ -577,10 +541,7 @@ export function createDshPostExecuteObserver(
     } catch (error) {
       dependencies.onError?.(error, exec);
     }
-    // Only AgentGuard's own shell output can be locally rewritten; other
-    // observations remain audit-only and downstream blocks are never relaxed.
-    const downstream = await next();
-    return rewriteDshAgentGuardResult(exec, result, downstream, dependencies);
+    return next();
   };
 }
 
@@ -602,7 +563,7 @@ export function createDshPostExecuteProtector(
     }
     const downstream = await next();
     if (!observed || observed.evaluation.decision.decision !== 'block') {
-      return rewriteDshAgentGuardResult(exec, result, downstream, dependencies);
+      return downstream;
     }
     return mergeDshPostDecisions(
       translateDshPostDecision(observed.evaluation.decision),
