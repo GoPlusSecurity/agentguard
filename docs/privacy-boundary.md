@@ -31,6 +31,12 @@ remains unchanged when it appears as an exact value, including a structured
 links and other tokenized URLs are not exempt. Compound commands, unverified
 executable paths, and unrelated tools retain their ordinary protection;
 `agentguard approve` is not exempt from agent-self-approval checks.
+Direct `npx @goplus/agentguard` calls with supported public subcommands receive
+the same native output treatment. The exact documented
+`curl -fsSL https://agentguard.one/install.sh | bash` command receives it only
+when the result contains the complete saved activation link. Other installer
+results follow ordinary privacy checks. Running the remote installer still
+requires approval before execution.
 
 | Host | Own-command result handling | Limit |
 |---|---|---|

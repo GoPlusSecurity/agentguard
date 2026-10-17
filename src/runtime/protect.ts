@@ -6,9 +6,11 @@ import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
-import { isAgentGuardCliCommand, isAgentGuardStatusCommand, isStandaloneAgentGuardCliCommand } from './self-command.js';
+import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardStatusCommand,
+  isOfficialAgentGuardInstallerCommand, isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue } from './self-output.js';
+import { hasExactSavedActivationUrl, redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue,
+  redactTextPreservingSavedActivationUrl } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -53,6 +55,8 @@ export interface ProtectResult {
   policySource: 'cloud' | 'cache' | 'default' | 'cloud-decision';
   /** Hook-only response, never written to the audit log or Cloud. */
   selfToolOutput?: { text: string; value: unknown };
+  /** Display-only replacement, never written to the audit log or Cloud. */
+  displayContent?: string;
 }
 
 type CodexHookEvent =
@@ -195,7 +199,13 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     ? writePendingApproval(approvalStorePath, action, decision)
     : undefined;
 
-  return { decision, event, approvalChannel, pendingApproval, policySource };
+  let displayContent: string | undefined;
+  if (claudeHookEvent === 'MessageDisplay') {
+    const delta = firstString(parseRawInput(options.rawInput, options.stdinText)?.delta);
+    const safeDelta = redactTextPreservingSavedActivationUrl(delta, options.config);
+    if (safeDelta !== delta) displayContent = safeDelta;
+  }
+  return { decision, event, approvalChannel, pendingApproval, policySource, displayContent };
 }
 
 function nativeAgentGuardSelfOutput(
@@ -208,11 +218,15 @@ function nativeAgentGuardSelfOutput(
       && claudeEvent !== 'PostToolUseFailure') return undefined;
   if (action.metadata?.nativeToolActionType !== 'shell'
       || typeof action.metadata.nativeToolInput !== 'string'
-      || !isStandaloneAgentGuardCliCommand(action.metadata.nativeToolInput)) return undefined;
+      || !isAgentGuardOwnedOutputCommand(action.metadata.nativeToolInput)) return undefined;
 
   // buildRuntimeAction already validated native payloads. Inspect the original
   // result here, not action.input (which can contain an inspection projection).
   const raw = parseRawInput(options.rawInput, options.stdinText);
+  if (isOfficialAgentGuardInstallerCommand(action.metadata.nativeToolInput)) {
+    const output = raw?.tool_response ?? raw?.toolResponse ?? raw?.error ?? raw?.error_message;
+    if (!hasExactSavedActivationUrl(output, options.config)) return undefined;
+  }
   if (claudeEvent === 'PostToolUseFailure') {
     const error = firstString(raw?.error, raw?.error_message);
     return hasUnmaskedSelfCredential(error) || hasEncodedSensitiveSelfText(error, options.config)
@@ -886,9 +900,10 @@ function formatClaudeHookResult(result: ProtectResult): string | null {
     return decision === 'warn' ? JSON.stringify({ systemMessage: reason }) : '';
   }
   if (event === 'MessageDisplay') {
-    const updatedMessage = result.event.metadata?.claudeUpdatedMessage;
-    if (typeof updatedMessage === 'string') {
-      return JSON.stringify({ displayContent: updatedMessage });
+    if (result.displayContent !== undefined) {
+      return JSON.stringify({ hookSpecificOutput: {
+        hookEventName: 'MessageDisplay', displayContent: result.displayContent,
+      } });
     }
     return '';
   }
@@ -987,9 +1002,6 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
     ? hasSensitivePublicSearchResult(publicSearchResult)
       || (toolInput !== undefined && redactText(JSON.stringify(toolInput)) !== JSON.stringify(toolInput))
     : undefined;
-  const displayMessage = claudeHookEvent === 'MessageDisplay'
-    ? firstString(raw?.delta)
-    : '';
   let actionInput = process.env.TOOL_INPUT
     || (observedSearchResult !== undefined
       ? typeof observedSearchResult === 'string' ? observedSearchResult : JSON.stringify(observedSearchResult)
@@ -1101,9 +1113,6 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
         : {}),
       ...(observedSearchResult !== undefined && !process.env.TOOL_INPUT ? { observedSearchResult: true } : {}),
       ...(suppressedPublicSearchValues > 0 ? { suppressedPublicSearchValues } : {}),
-      ...(displayMessage && redactText(displayMessage) !== displayMessage
-        ? { claudeUpdatedMessage: redactText(displayMessage) }
-        : {}),
     },
   };
 }
@@ -1544,10 +1553,15 @@ function projectClaudeBatchForInspection(
     if (!isPlainRecord(call)) return call;
     const toolName = firstString(call.tool_name, call.toolName, call.name);
     const toolInput = pickToolInput(call);
+    const command = pickNativeToolAuditInput('shell', toolInput);
     if (mapToolToRuntimeAction(toolName, call) !== 'shell'
-        || !isStandaloneAgentGuardCliCommand(pickNativeToolAuditInput('shell', toolInput))) return call;
+        || !isAgentGuardOwnedOutputCommand(command)) return call;
     const responseKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
       ? 'tool_response' : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
+    if (isOfficialAgentGuardInstallerCommand(command)) {
+      const output = responseKey ? call[responseKey] : call.error ?? call.error_message;
+      if (!hasExactSavedActivationUrl(output, config)) return call;
+    }
     if (!responseKey) {
       const error = firstString(call.error, call.error_message);
       if (redactText(error) !== error || hasUnmaskedSelfCredential(error)
