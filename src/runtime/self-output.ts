@@ -5,7 +5,7 @@ import { redactText } from './redaction.js';
 const PUBLIC_KEY_EXAMPLES = ['TYPESAFE_API_KEY=<key>', 'AGENTGUARD_API_KEY=<your-key>'];
 /** Mask assistant display text while keeping the saved activation link visible. */
 export function redactTextPreservingSavedActivationUrl(text: string, config: AgentGuardConfig): string {
-  const activationUrl = config.agentJwt && config.agentRegisterUrl;
+  const activationUrl = config.agentRegisterUrl;
   const marker = randomMarker('AGENTGUARDLINK');
   const examples = PUBLIC_KEY_EXAMPLES.map((example) => ({ example, marker: randomMarker('AGENTGUARDEXAMPLE') }));
   const withExamples = examples.reduce((value, { example, marker: replacement }) =>

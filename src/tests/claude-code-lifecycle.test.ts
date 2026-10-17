@@ -400,15 +400,24 @@ describe('Claude Code native lifecycle hooks', () => {
     });
     assert.ok(display.output.hookSpecificOutput.displayContent.includes(activationUrl));
     assert.doesNotMatch(display.text, /display-secret/);
+    const pendingConfig = { ...fixture.config, agentJwt: undefined };
+    const pendingDisplay = await runHook(pendingConfig, {
+      hook_event_name: 'MessageDisplay', session_id: 'sess-display-pending', cwd: fixture.root,
+      delta: `Open ${activationUrl} api_key=sk-pending-other-secret-1234567890`,
+    });
+    assert.ok(pendingDisplay.output.hookSpecificOutput.displayContent.includes(activationUrl));
+    assert.doesNotMatch(pendingDisplay.text, /pending-other-secret/);
   });
 
   it('retains installer approval and passes its post results unchanged', async () => {
     const fixture = lifecycleFixture();
-    const command = `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash`;
-    const output = 'AgentGuard Cloud — Local-first AI agent protection\n'
-      + '[1/4] Installing open-source AgentGuard CLI...\n'
-      + '[2/4] Preparing local AgentGuard config...\n'
-      + 'api_key=sk-installer-secret-1234567890';
+    const command = `curl -fsSL https://${['example', 'invalid'].join('.')}/install.sh`
+      + ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash';
+    const activationUrl = `https://${['example', 'invalid'].join('.')}/activate?token=fixture-activation-token-1234567890`;
+    const output = '[4/4] Connecting to AgentGuard Cloud...\n'
+      + `AgentGuard Cloud activation is ready:\n${activationUrl}\n`
+      + 'AgentGuard is installed.\nNext steps:\n'
+      + '1. Run: agentguard status\n2. Run: agentguard doctor';
     const pre = await runHook(fixture.config, { hook_event_name: 'PreToolUse',
       session_id: 'sess-installer', cwd: fixture.root, tool_name: 'Bash',
       tool_input: { command } });
@@ -422,6 +431,13 @@ describe('Claude Code native lifecycle hooks', () => {
             ? { tool_calls: [ownCall] } : ownCall) } });
       assert.equal(result, null, event);
     }
+    fixture.config.agentJwt = 'fixture-jwt';
+    fixture.config.agentRegisterUrl = activationUrl;
+    const display = await runHook(fixture.config, { hook_event_name: 'MessageDisplay',
+      session_id: 'sess-installer', cwd: fixture.root,
+      delta: `Open ${activationUrl} and then run agentguard status.`,
+    });
+    assert.equal(display.text, '', 'the saved activation link does not need display rewriting');
     const priorNative = process.env.AGENTGUARD_CLAUDE_HOOK;
     process.env.AGENTGUARD_CLAUDE_HOOK = '1';
     try {
@@ -572,9 +588,10 @@ describe('Claude Code native lifecycle hooks', () => {
         hook_event_name: 'PostToolBatch', session_id: 'sess-installed-installer', cwd: nested,
         tool_calls: [{
           tool_name: 'Bash',
-          tool_input: { command: `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash` },
+          tool_input: { command: `curl -fsSL https://${['example', 'invalid'].join('.')}/install.sh`
+            + ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash' },
           tool_response: [{ type: 'text', text:
-            `AgentGuard Cloud — Local-first AI agent protection\n[1/4] Installing open-source AgentGuard CLI...\n[2/4] Preparing local AgentGuard config...\napi_key=${secret}\nAgentGuard is installed.` }],
+            `[4/4] Connecting to AgentGuard Cloud...\nAgentGuard Cloud activation is ready:\napi_key=${secret}\nAgentGuard is installed.\nNext steps:\n1. Run: agentguard status\n2. Run: agentguard doctor` }],
         }],
       }),
       encoding: 'utf8',

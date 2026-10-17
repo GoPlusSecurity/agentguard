@@ -12,6 +12,11 @@ const installerOutput = 'AgentGuard Cloud — Local-first AI agent protection\n'
   + '[1/4] Installing open-source AgentGuard CLI...\n'
   + '[2/4] Preparing local AgentGuard config...\n'
   + 'api_key=sk-installer-secret-1234567890';
+const installerTail = '[4/4] Connecting to AgentGuard Cloud...\n'
+  + 'AgentGuard Cloud activation is ready:\n'
+  + 'AgentGuard is installed.\nNext steps:\n'
+  + '1. Run: agentguard status\n2. Run: agentguard doctor\n'
+  + 'api_key=sk-installer-secret-1234567890';
 
 interface HookRun {
   status: number | null;
@@ -51,8 +56,20 @@ describe('installed Codex native hooks', () => {
 
   it('attributes installer results by output signature without trusting a URL', () => {
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: installerOutput }), true);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: `${'package log\n'.repeat(18000)}${installerTail}` }), true);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand, {
+      stdout: installerTail, stderr: 'package warning\n'.repeat(10000),
+    }), true);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace(' | bash',
+      ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash'), { output: installerTail }), true);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace(' | bash',
+      ' | env AGENTGUARD_AGENT=claude-code AGENTGUARD_CLOUD_URL=https://example.invalid bash'),
+    { output: installerTail }), true);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: `${'other output '.repeat(200)}${installerOutput}` }), false);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: 'AgentGuard is installed.\napi_key=sk-unrelated-1234567890' }), false);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: 'api_key=sk-unrelated-1234567890' }), false);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace(' | bash',
+      ' | AGENTGUARD_API_KEY=sk-unrelated-1234567890 bash'), { output: installerTail }), false);
     assert.equal(isAgentGuardOwnedOutputResult(`${installerCommand}; echo extra`, { output: installerOutput }), false);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace('https:', 'http:'), { output: installerOutput }), false);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace('/install.sh', '/other.sh'), { output: installerOutput }), false);
@@ -61,7 +78,8 @@ describe('installed Codex native hooks', () => {
 
   it('keeps installer approval and passes attributed output through', () => {
     const fixture = installFixture();
-    const command = installerCommand;
+    const command = installerCommand.replace(' | bash',
+      ' | AGENTGUARD_PACKAGE=@goplus/agentguard@1.2.4-beta.2 bash');
     const base = { session_id: 'sess-site-install', turn_id: 'turn-site-install',
       cwd: fixture.project, tool_name: 'Bash', tool_use_id: 'tool-site-install',
       tool_input: { command } };
@@ -69,7 +87,7 @@ describe('installed Codex native hooks', () => {
     assert.equal(pre.status, 0);
     assert.equal(JSON.parse(pre.stdout).hookSpecificOutput.permissionDecision, 'deny');
     const post = fixture.run('agentguard-post-tool.sh', { ...base, hook_event_name: 'PostToolUse',
-      tool_response: { output: installerOutput, exit_code: 0 } });
+      tool_response: { output: installerTail, exit_code: 0 } });
     assert.equal(post.status, 0);
     assert.equal(post.stdout.trim(), '');
     const unrelated = fixture.run('agentguard-post-tool.sh', { ...base, hook_event_name: 'PostToolUse',

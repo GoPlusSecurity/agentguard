@@ -25,8 +25,10 @@ recognized; an explicit executable path must resolve to this package's CLI.
 Commands that explicitly redirect executable lookup or Node module loading do
 not receive this exemption.
 An HTTPS `curl -fsSL …/install.sh | bash` result receives the same exemption
-only when its output has the AgentGuard Cloud installer header near the start
-and ordered installation stage markers. The URL host is not used as an allowlist. These
+when its output has the AgentGuard Cloud installer header and ordered early
+stages, or the ordered final stage and next-step lines if the host retained
+only the output tail. Supported installer settings may be assigned to `bash`
+in the pipeline. The URL host is not used as an allowlist. These
 markers can be imitated by another script; this is the accepted limit of
 attributing a merged shell result without a trusted process identity. In Claude Code,
 `PostToolBatch` excludes the whole recognized call from its inspection copy,

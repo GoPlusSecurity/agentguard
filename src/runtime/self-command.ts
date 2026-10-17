@@ -47,26 +47,35 @@ export function isAgentGuardOwnedOutputResult(command: string, result: unknown):
 }
 
 function isInstallerPipeline(command: string): boolean {
-  const match = /^curl -fsSL (https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?\/install\.sh) \| bash$/.exec(command.trim());
+  const match = /^curl[ \t]+-fsSL[ \t]+(?:"([^"]+)"|'([^']+)'|([^ \t]+))[ \t]*\|[ \t]*(.+)$/.exec(command.trim());
   if (!match) return false;
   try {
-    const url = new URL(match[1]);
-    return url.protocol === 'https:' && !url.username && !url.password
-      && !url.search && !url.hash && url.pathname === '/install.sh';
+    const rawUrl = match[1] || match[2] || match[3];
+    if (!/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?\/install\.sh$/.test(rawUrl)) return false;
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'https:' || url.username || url.password
+        || url.search || url.hash || url.pathname !== '/install.sh') return false;
+    let executor = match[4].trim();
+    if (executor.startsWith('env ')) executor = executor.slice(4);
+    const assignment = /^AGENTGUARD_(?:PACKAGE|AGENT|CLOUD_URL|MODE|DSH_PROFILE|RUNTIME_TELEMETRY)=(?:[A-Za-z0-9_./:@+-]+|"[A-Za-z0-9_./:@+-]+"|'[A-Za-z0-9_./:@+-]+')[ \t]+/;
+    while (assignment.test(executor)) executor = executor.replace(assignment, '');
+    return executor === 'bash';
   } catch {
     return false;
   }
 }
 
 function hasInstallerOutputSignature(result: unknown): boolean {
-  const chunks: string[] = [];
-  let totalLength = 0;
+  let head = '';
+  let tail = '';
+  let visited = 0;
+  const streams: string[] = [];
   const visit = (value: unknown, depth: number): void => {
-    if (depth > 4 || totalLength >= 128 * 1024) return;
+    if (depth > 4 || visited++ > 256) return;
     if (typeof value === 'string') {
-      const chunk = value.slice(0, 128 * 1024 - totalLength);
-      chunks.push(chunk);
-      totalLength += chunk.length;
+      if (streams.length < 32) streams.push(value);
+      if (head.length < 64 * 1024) head += value.slice(0, 64 * 1024 - head.length);
+      tail = (tail + value.slice(-64 * 1024)).slice(-64 * 1024);
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item, depth + 1);
     } else if (value && typeof value === 'object') {
@@ -77,13 +86,30 @@ function hasInstallerOutputSignature(result: unknown): boolean {
     }
   };
   visit(result, 0);
-  const output = chunks.join('\n');
+  return hasInstallerHeadSignature(head) || hasInstallerTailSignature(tail)
+    || streams.some((stream) => hasInstallerHeadSignature(stream.slice(0, 64 * 1024))
+      || hasInstallerTailSignature(stream.slice(-64 * 1024)));
+}
+
+function hasInstallerHeadSignature(output: string): boolean {
   const header = output.indexOf('AgentGuard Cloud — Local-first AI agent protection');
   const install = output.indexOf('[1/4] Installing open-source AgentGuard CLI...', header + 1);
   const config = output.indexOf('[2/4] Preparing local AgentGuard config...', install + 1);
   // The website prints the header before package installation; wrappers may
   // prepend a small amount of host text, but unrelated long output is not own.
   return header >= 0 && header <= 2048 && install > header && config > install;
+}
+
+function hasInstallerTailSignature(output: string): boolean {
+  // Hosts can retain only the tail of a long package-install result. Require
+  // the final stage and the installer's ordered next-step lines in that case.
+  const connect = output.indexOf('[4/4] Connecting to AgentGuard Cloud...');
+  const installed = output.indexOf('AgentGuard is installed.', connect + 1);
+  const steps = output.indexOf('Next steps:', installed + 1);
+  const status = output.indexOf('Run: agentguard status', steps + 1);
+  const doctor = output.indexOf('Run: agentguard doctor', status + 1);
+  return connect >= 0 && installed > connect && steps > installed
+    && status > steps && doctor > status;
 }
 
 export function isAgentGuardStatusCommand(command: string): boolean {
