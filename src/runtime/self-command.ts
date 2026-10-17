@@ -18,6 +18,10 @@ const SUPPORTED_AGENT_COMMANDS = [
 ];
 const SHELL_CONTROL_RE = /[;&|<>`\n\r\t]|\$\(/;
 const SHELL_EXECUTABLES = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
+const EXECUTION_REDIRECTING_ENV = new Set([
+  'PATH', 'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'ZDOTDIR',
+  'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
+]);
 
 export function isAgentGuardCliCommand(command: string): boolean {
   return isAgentGuardCliCommandInner(command, 0);
@@ -77,7 +81,9 @@ function hasInstallerOutputSignature(result: unknown): boolean {
   const header = output.indexOf('AgentGuard Cloud — Local-first AI agent protection');
   const install = output.indexOf('[1/4] Installing open-source AgentGuard CLI...', header + 1);
   const config = output.indexOf('[2/4] Preparing local AgentGuard config...', install + 1);
-  return header >= 0 && install > header && config > install;
+  // The website prints the header before package installation; wrappers may
+  // prepend a small amount of host text, but unrelated long output is not own.
+  return header >= 0 && header <= 2048 && install > header && config > install;
 }
 
 export function isAgentGuardStatusCommand(command: string): boolean {
@@ -94,11 +100,13 @@ function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
   const tokens = shellTokens(trimmed);
   if (!tokens.length) return false;
 
-  let index = skipAssignments(tokens, 0);
+  let index = skipSafeAssignments(tokens, 0);
+  if (index === null) return false;
   if (basename(tokens[index]) === 'env') {
     index += 1;
     while (tokens[index]?.startsWith('-')) index += 1;
-    index = skipAssignments(tokens, index);
+    index = skipSafeAssignments(tokens, index);
+    if (index === null) return false;
   }
 
   while (['command', 'builtin'].includes(basename(tokens[index] || ''))) {
@@ -121,11 +129,13 @@ function isStandaloneAgentGuardCliCommandInner(command: string, depth: number, o
   const tokens = shellTokens(trimmed);
   if (!tokens.length) return false;
 
-  let index = skipAssignments(tokens, 0);
+  let index = skipSafeAssignments(tokens, 0);
+  if (index === null) return false;
   if (basename(tokens[index]) === 'env') {
     index += 1;
     while (tokens[index]?.startsWith('-')) index += 1;
-    index = skipAssignments(tokens, index);
+    index = skipSafeAssignments(tokens, index);
+    if (index === null) return false;
   }
   while (['command', 'builtin'].includes(basename(tokens[index] || ''))) index += 1;
   if (isVerifiedAgentGuardExecutable(tokens[index])) return true;
@@ -162,9 +172,11 @@ function matchesCommand(tokens: string[], start: number, command: string): boole
   return expected.every((part, offset) => basename(tokens[start + offset] || '') === part);
 }
 
-function skipAssignments(tokens: string[], start: number): number {
+function skipSafeAssignments(tokens: string[], start: number): number | null {
   let index = start;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index] || '')) {
+    const name = tokens[index]!.slice(0, tokens[index]!.indexOf('='));
+    if (EXECUTION_REDIRECTING_ENV.has(name)) return null;
     index += 1;
   }
   return index;

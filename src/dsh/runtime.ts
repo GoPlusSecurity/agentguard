@@ -12,6 +12,7 @@ import {
   rememberPublicSearchResult,
 } from '../runtime/public-search.js';
 import { redactText } from '../runtime/redaction.js';
+import { isAgentGuardApprovalCommand } from '../runtime/protect.js';
 import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
@@ -247,7 +248,7 @@ export async function observeDshToolCall(
   if (isAgentGuardDshTool(exec.name)) return null;
 
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
-  if (isDshAgentGuardCliAction(action) && !/^agentguard[ \t]+approve(?:[ \t]|$)/.test(action.input)) return null;
+  if (isDshAgentGuardCliAction(action) && !isAgentGuardApprovalCommand(action)) return null;
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(
@@ -266,7 +267,7 @@ export async function protectDshToolCall(
   if (isAgentGuardDshTool(exec.name)) return null;
 
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
-  if (isDshAgentGuardCliAction(action) && !/^agentguard[ \t]+approve(?:[ \t]|$)/.test(action.input)) return null;
+  if (isDshAgentGuardCliAction(action) && !isAgentGuardApprovalCommand(action)) return null;
   const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, true);

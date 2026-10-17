@@ -225,7 +225,7 @@ function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
   return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
 }
 
-function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
+export function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
   if (action.actionType !== 'shell') return false;
   const normalized = action.input.replace(/\\(.)/gs, '$1').replace(/["']/g, ' ');
   // Approval is the immediate subcommand. A scan path named "approve" is not

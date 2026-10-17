@@ -152,6 +152,24 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(after, null);
   });
 
+  it('keeps wrapped self-approval commands in the DSH pre-execute policy path', async () => {
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' as const }),
+      writeAudit() {},
+    };
+    for (const command of ['agentguard approve --action-id act_test',
+      'command agentguard approve --action-id act_test',
+      "sh -c 'agentguard approve --action-id act_test'"]) {
+      const exec = execution({ arguments: { command } });
+      assert.equal((await observeDshToolCall(exec, dependencies))?.evaluation.decision.decision, 'block');
+      assert.equal((await protectDshToolCall(exec, dependencies))?.evaluation.decision.decision, 'block');
+    }
+    assert.equal(await protectDshToolCall(execution({
+      arguments: { command: 'agentguard scan ./approve' },
+    }), dependencies), null);
+  });
+
   it('preserves AgentGuard CLI results and downstream decisions', async () => {
     let evaluations = 0;
     const dependencies = {
