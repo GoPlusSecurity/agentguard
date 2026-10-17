@@ -22,8 +22,11 @@ Standalone `agentguard` commands and direct `npx @goplus/agentguard` commands
 pass through post-tool hooks without blocking or redaction, regardless of their
 output content or result shape. Simple `command`, `env`, and shell wrappers are
 recognized; an explicit executable path must resolve to this package's CLI.
-The exact documented `curl -fsSL https://agentguard.one/install.sh | bash`
-installer also receives this output exemption. In Claude Code,
+An HTTPS `curl -fsSL …/install.sh | bash` result receives the same exemption
+only when its output contains the AgentGuard Cloud installer header and ordered
+installation stage markers. The URL host is not used as an allowlist. These
+markers can be imitated by another script; this is the accepted limit of
+attributing a merged shell result without a trusted process identity. In Claude Code,
 `PostToolBatch` excludes the whole recognized call from its inspection copy,
 while retaining the host's original result. Other calls in a mixed batch remain
 subject to the normal privacy gate. Compound commands, unverified paths, and

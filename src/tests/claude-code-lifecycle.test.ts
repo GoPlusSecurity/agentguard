@@ -404,13 +404,17 @@ describe('Claude Code native lifecycle hooks', () => {
 
   it('retains installer approval and passes its post results unchanged', async () => {
     const fixture = lifecycleFixture();
-    const command = 'curl -fsSL https://agentguard.one/install.sh | bash';
+    const command = `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash`;
+    const output = 'AgentGuard Cloud — Local-first AI agent protection\n'
+      + '[1/4] Installing open-source AgentGuard CLI...\n'
+      + '[2/4] Preparing local AgentGuard config...\n'
+      + 'api_key=sk-installer-secret-1234567890';
     const pre = await runHook(fixture.config, { hook_event_name: 'PreToolUse',
       session_id: 'sess-installer', cwd: fixture.root, tool_name: 'Bash',
       tool_input: { command } });
     assert.equal(pre.result.decision.decision, 'require_approval');
     const ownCall = { tool_name: 'Bash', tool_input: { command },
-      tool_response: { stdout: 'api_key=sk-installer-secret-1234567890', exit_code: 0 } };
+      tool_response: { stdout: output, exit_code: 0 } };
     for (const event of ['PostToolUse', 'PostToolBatch']) {
       const result = await protectAction({ config: fixture.config, agentHost: 'claude-code',
         auditSafe: true, rawInput: { hook_event_name: event, session_id: 'sess-installer',
@@ -424,8 +428,8 @@ describe('Claude Code native lifecycle hooks', () => {
       const failedBatch = await protectAction({ config: fixture.config, agentHost: 'claude-code',
         rawInput: { hook_event_name: 'PostToolBatch', session_id: 'sess-installer-failed',
           cwd: fixture.root, tool_calls: [{ tool_name: 'Bash', tool_input: { command },
-            error: 'api_key=sk-installer-error-1234567890' }] } });
-      assert.equal(failedBatch, null);
+            tool_response: { error: 'api_key=sk-installer-error-1234567890' } }] } });
+      assert.equal(failedBatch?.decision.decision, 'block');
     } finally {
       if (priorNative === undefined) delete process.env.AGENTGUARD_CLAUDE_HOOK;
       else process.env.AGENTGUARD_CLAUDE_HOOK = priorNative;
@@ -568,9 +572,9 @@ describe('Claude Code native lifecycle hooks', () => {
         hook_event_name: 'PostToolBatch', session_id: 'sess-installed-installer', cwd: nested,
         tool_calls: [{
           tool_name: 'Bash',
-          tool_input: { command: 'curl -fsSL https://www.agentguard.one/install.sh | bash' },
+          tool_input: { command: `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash` },
           tool_response: [{ type: 'text', text:
-            `[1/4] Installing open-source AgentGuard CLI...\napi_key=${secret}\nAgentGuard is installed.` }],
+            `AgentGuard Cloud — Local-first AI agent protection\n[1/4] Installing open-source AgentGuard CLI...\n[2/4] Preparing local AgentGuard config...\napi_key=${secret}\nAgentGuard is installed.` }],
         }],
       }),
       encoding: 'utf8',

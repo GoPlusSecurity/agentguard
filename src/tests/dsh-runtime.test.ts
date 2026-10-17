@@ -141,6 +141,9 @@ describe('DSH runtime Phase 2A observer', () => {
 
     const before = await protectDshToolCall(statusExec, dependencies);
     assert.equal(before, null, 'self commands bypass the DSH policy evaluator');
+    const unavailableConfig = { loadAgentGuardConfig: () => { throw new Error('config unavailable'); } };
+    assert.equal(await observeDshToolCall(statusExec, unavailableConfig), null);
+    assert.equal(await protectDshToolCall(statusExec, unavailableConfig), null);
 
     const after = await protectDshToolResult(statusExec, {
       isError: false,

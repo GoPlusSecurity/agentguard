@@ -6,7 +6,7 @@ import type { AgentGuardConfig } from '../config.js';
 import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } from './approvals.js';
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
-import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand,
+import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardOwnedOutputResult,
   isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
 import { redactTextPreservingSavedActivationUrl } from './self-output.js';
@@ -90,7 +90,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   const claudeHookEvent = pickClaudeHookEventFromAction(action);
   const selfApprovalAttempt = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
     && isAgentGuardApprovalCommand(action);
-  const selfOutput = nativeAgentGuardSelfOutput(action, codexHookEvent, claudeHookEvent);
+  const selfOutput = nativeAgentGuardSelfOutput(action, options, codexHookEvent, claudeHookEvent);
   if (selfOutput !== undefined) return selfOutput;
   if (claudeHookEvent === 'PostToolBatch'
       && action.metadata?.claudeBatchOnlyAgentGuardOutput === true) return null;
@@ -206,6 +206,7 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
 
 function nativeAgentGuardSelfOutput(
   action: RuntimeAction,
+  options: ProtectOptions,
   codexEvent?: CodexHookEvent,
   claudeEvent?: ClaudeHookEvent,
 ): ProtectResult | null | undefined {
@@ -213,7 +214,8 @@ function nativeAgentGuardSelfOutput(
       && claudeEvent !== 'PostToolUseFailure') return undefined;
   if (action.metadata?.nativeToolActionType !== 'shell'
       || typeof action.metadata.nativeToolInput !== 'string'
-      || !isAgentGuardOwnedOutputCommand(action.metadata.nativeToolInput)) return undefined;
+      || !isAgentGuardOwnedOutputResult(action.metadata.nativeToolInput,
+        nativeToolResult(parseRawInput(options.rawInput, options.stdinText)))) return undefined;
 
   // The host owns the original tool result. Do not inspect or rewrite it.
   return null;
@@ -798,7 +800,7 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const ownNativeToolOutput = (codexHookEvent === 'PostToolUse'
       || claudeHookEvent === 'PostToolUse' || claudeHookEvent === 'PostToolUseFailure')
     && mapToolToRuntimeAction(toolName, raw) === 'shell'
-    && isAgentGuardOwnedOutputCommand(pickNativeToolAuditInput('shell', toolInput));
+    && isAgentGuardOwnedOutputResult(pickNativeToolAuditInput('shell', toolInput), nativeToolResult(raw));
   const verifiedOutput = claudeHookEvent === 'PostToolUse' && !ownNativeToolOutput
     ? redactVerifiedClaudeToolOutput(toolName, raw?.tool_response ?? raw?.toolResponse)
     : undefined;
@@ -1020,7 +1022,8 @@ function validateNativeClaudeHook(raw: Record<string, unknown> | null): void {
       || !raw.tool_calls.every((call) => isPlainRecord(call)
         && (Object.prototype.hasOwnProperty.call(call, 'tool_response')
           || (mapToolToRuntimeAction(firstString(call.tool_name, call.toolName), call) === 'shell'
-            && isAgentGuardOwnedOutputCommand(pickNativeToolAuditInput('shell', pickToolInput(call)))))))) {
+            && isAgentGuardOwnedOutputResult(pickNativeToolAuditInput('shell', pickToolInput(call)),
+              nativeToolResult(call))))))) {
     throw invalidClaudePayload();
   }
   if (event === 'ConfigChange' && (typeof raw.source !== 'string'
@@ -1356,7 +1359,7 @@ function projectClaudeBatchForInspection(
     const toolInput = pickToolInput(call);
     const command = pickNativeToolAuditInput('shell', toolInput);
     if (mapToolToRuntimeAction(toolName, call) !== 'shell'
-        || !isAgentGuardOwnedOutputCommand(command)) return call;
+        || !isAgentGuardOwnedOutputResult(command, nativeToolResult(call))) return call;
     // This is only an inspection copy. Exclude the whole own-command call so
     // future result fields cannot trigger a batch block. The host keeps it.
     const projected = { tool_name: toolName,
@@ -1471,6 +1474,11 @@ function parseRawInput(rawInput: unknown, stdinText?: string, strictJson = false
     if (strictJson) throw new Error('Codex hook input must be a JSON object.');
     return { content: text };
   }
+}
+
+function nativeToolResult(raw: Record<string, unknown> | null): unknown {
+  return raw?.tool_response ?? raw?.toolResponse ?? raw?.tool_output ?? raw?.toolOutput
+    ?? raw?.error ?? raw?.error_message ?? raw?.stderr;
 }
 
 function pickToolName(raw: Record<string, unknown> | null): string {

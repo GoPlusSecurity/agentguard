@@ -246,9 +246,9 @@ export async function observeDshToolCall(
 ): Promise<DshRuntimeObservation | null> {
   if (isAgentGuardDshTool(exec.name)) return null;
 
-  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
   if (isDshAgentGuardCliAction(action) && !/^agentguard[ \t]+approve(?:[ \t]|$)/.test(action.input)) return null;
+  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(
     action,
@@ -265,9 +265,9 @@ export async function protectDshToolCall(
 ): Promise<DshRuntimeObservation | null> {
   if (isAgentGuardDshTool(exec.name)) return null;
 
-  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   const action = buildDshRuntimeAction(exec, dependencies.attribution);
   if (isDshAgentGuardCliAction(action) && !/^agentguard[ \t]+approve(?:[ \t]|$)/.test(action.input)) return null;
+  const config = (dependencies.loadAgentGuardConfig ?? loadConfig)();
   action.metadata = { ...action.metadata, runtimePhase: 'pre' };
   return evaluateAndAuditDshAction(action, config, dependencies, DSH_PROTECT_MODE, true);
 }

@@ -31,14 +31,53 @@ export function isStandaloneAgentGuardCliCommand(command: string): boolean {
   return isStandaloneAgentGuardCliCommandInner(command, 0);
 }
 
-/** Recognize standalone package commands and the documented installer for output handling. */
+/** Recognize only a standalone invocation of this package. */
 export function isAgentGuardOwnedOutputCommand(command: string): boolean {
-  return isStandaloneAgentGuardCliCommandInner(command, 0, true)
-    || isOfficialAgentGuardInstallerCommand(command);
+  return isStandaloneAgentGuardCliCommandInner(command, 0, true);
 }
 
-export function isOfficialAgentGuardInstallerCommand(command: string): boolean {
-  return /^curl[ \t]+-fsSL[ \t]+https:\/\/(?:www\.)?agentguard\.one\/install\.sh[ \t]*\|[ \t]*bash$/.test(command.trim());
+/** The installer is attributed from its finished result, never from its URL alone. */
+export function isAgentGuardOwnedOutputResult(command: string, result: unknown): boolean {
+  return isAgentGuardOwnedOutputCommand(command)
+    || (isInstallerPipeline(command) && hasInstallerOutputSignature(result));
+}
+
+function isInstallerPipeline(command: string): boolean {
+  const match = /^curl -fsSL (https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?\/install\.sh) \| bash$/.exec(command.trim());
+  if (!match) return false;
+  try {
+    const url = new URL(match[1]);
+    return url.protocol === 'https:' && !url.username && !url.password
+      && !url.search && !url.hash && url.pathname === '/install.sh';
+  } catch {
+    return false;
+  }
+}
+
+function hasInstallerOutputSignature(result: unknown): boolean {
+  const chunks: string[] = [];
+  let totalLength = 0;
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || totalLength >= 128 * 1024) return;
+    if (typeof value === 'string') {
+      const chunk = value.slice(0, 128 * 1024 - totalLength);
+      chunks.push(chunk);
+      totalLength += chunk.length;
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+    } else if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      for (const key of ['stdout', 'output', 'stderr', 'content', 'text', 'error', 'error_message']) {
+        if (key in record) visit(record[key], depth + 1);
+      }
+    }
+  };
+  visit(result, 0);
+  const output = chunks.join('\n');
+  const header = output.indexOf('AgentGuard Cloud — Local-first AI agent protection');
+  const install = output.indexOf('[1/4] Installing open-source AgentGuard CLI...', header + 1);
+  const config = output.indexOf('[2/4] Preparing local AgentGuard config...', install + 1);
+  return header >= 0 && install > header && config > install;
 }
 
 export function isAgentGuardStatusCommand(command: string): boolean {
