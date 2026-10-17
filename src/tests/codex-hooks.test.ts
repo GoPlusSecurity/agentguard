@@ -409,6 +409,26 @@ describe('installed Codex native hooks', () => {
     }
   });
 
+  it('allows an activation URL from an unrelated command while keeping other output protected', () => {
+    const fixture = installFixture();
+    const url = `https://${['staging', 'example.invalid'].join('.')}/activate?token=codex-link-1234567890`;
+    const runPost = (output: string) => fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse', session_id: 'sess-activation', turn_id: 'turn-activation',
+      cwd: fixture.project, tool_name: 'functions.exec_command', tool_use_id: 'tool-activation',
+      tool_input: { cmd: 'printf result' }, tool_response: { output, exit_code: 0 },
+    });
+    const allowed = runPost(`Open ${url}\n`);
+    assert.equal(allowed.status, 0);
+    assert.equal(allowed.stdout.trim(), '');
+    const mixed = runPost(`Open ${url}\napi_key=sk-codex-other-secret-1234567890`);
+    assert.equal(mixed.status, 0);
+    assert.doesNotMatch(mixed.stdout + mixed.stderr, /codex-other-secret/);
+    const audit = readFileSync(join(fixture.home, 'audit.jsonl'), 'utf8');
+    assert.doesNotMatch(audit, /codex-link-1234567890|codex-other-secret-1234567890/);
+    assert.ok(audit.split('\n').filter(Boolean)
+      .some((line) => (JSON.parse(line) as { decision: string }).decision === 'block'));
+  });
+
   it('keeps real init and privacy status working with the public key example', () => {
     const fixture = installFixture();
     const post = (cmd: string, output: string) => fixture.run('agentguard-post-tool.sh', {

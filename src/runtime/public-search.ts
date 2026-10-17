@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { RuntimeAgentHost } from './types.js';
 import { redactText } from './redaction.js';
+import { redactTextPreservingActivationUrls } from './self-output.js';
 
 /** Exact, host-owned search tools only. A name containing "search" is not provenance. */
 export function isNativePublicSearchTool(host: RuntimeAgentHost, toolName: string): boolean {
@@ -135,11 +136,12 @@ function redactSearchText(text: string): string {
       return JSON.stringify(parsed) === JSON.stringify(redacted) ? text : JSON.stringify(redacted);
     }
   } catch { /* Plain search text retains narrow local redaction. */ }
-  return redactText(text, { skipBareNumericIdentifiers: true });
+  return redactTextPreservingActivationUrls(text, { skipBareNumericIdentifiers: true });
 }
 
 function redactSearchValue(value: unknown, searchResult: boolean, searchText = false): unknown {
-  if (typeof value === 'string') return searchText ? redactSearchText(value) : redactText(value);
+  if (typeof value === 'string') return searchText ? redactSearchText(value)
+    : redactTextPreservingActivationUrls(value);
   if (Array.isArray(value)) return value.map((item) => redactSearchValue(item, searchResult, searchText));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)

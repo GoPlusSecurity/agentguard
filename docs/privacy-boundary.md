@@ -43,6 +43,17 @@ results in OpenClaw, QClaw, Hermes, or DSH. Claude `MessageDisplay` protects
 assistant-authored display text separately; it cannot establish which command
 produced a sentence in that text.
 
+An HTTP(S) URL span ending in `/activate?token=<value>` is exempt in tool
+results and assistant display text, regardless of domain. The token value must
+be nonempty and use ordinary URL token characters. This lets an activation
+link survive a Bash result even when the installer output is incomplete. Only
+that URL span is exempt: extra query parameters and other credentials in the
+same result still trigger normal protection.
+Pre-tool commands and model requests retain their normal egress checks.
+Local audit and Cloud previews keep the activation token masked or omit the
+link. A different site can imitate this URL shape, so the exception should
+not be treated as proof that the link came from AgentGuard.
+
 ## Public web-search results
 
 Bare card- or national-ID-shaped digits in a **verified, host-owned web-search
