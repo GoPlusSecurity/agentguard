@@ -7,9 +7,9 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardStatusCommand,
-  isOfficialAgentGuardInstallerCommand, isStandaloneAgentGuardCliCommand } from './self-command.js';
+  isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { hasExactSavedActivationUrl, redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue,
+import { redactAgentGuardSelfToolOutput, redactAgentGuardSelfToolValue,
   redactTextPreservingSavedActivationUrl } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
@@ -223,10 +223,6 @@ function nativeAgentGuardSelfOutput(
   // buildRuntimeAction already validated native payloads. Inspect the original
   // result here, not action.input (which can contain an inspection projection).
   const raw = parseRawInput(options.rawInput, options.stdinText);
-  if (isOfficialAgentGuardInstallerCommand(action.metadata.nativeToolInput)) {
-    const output = raw?.tool_response ?? raw?.toolResponse ?? raw?.error ?? raw?.error_message;
-    if (!hasExactSavedActivationUrl(output, options.config)) return undefined;
-  }
   if (claudeEvent === 'PostToolUseFailure') {
     const error = firstString(raw?.error, raw?.error_message);
     return hasUnmaskedSelfCredential(error) || hasEncodedSensitiveSelfText(error, options.config)
@@ -1558,10 +1554,6 @@ function projectClaudeBatchForInspection(
         || !isAgentGuardOwnedOutputCommand(command)) return call;
     const responseKey = Object.prototype.hasOwnProperty.call(call, 'tool_response')
       ? 'tool_response' : Object.prototype.hasOwnProperty.call(call, 'toolResponse') ? 'toolResponse' : null;
-    if (isOfficialAgentGuardInstallerCommand(command)) {
-      const output = responseKey ? call[responseKey] : call.error ?? call.error_message;
-      if (!hasExactSavedActivationUrl(output, config)) return call;
-    }
     if (!responseKey) {
       const error = firstString(call.error, call.error_message);
       if (redactText(error) !== error || hasUnmaskedSelfCredential(error)
@@ -1575,7 +1567,11 @@ function projectClaudeBatchForInspection(
     try {
       const originalText = typeof response === 'string' ? response : JSON.stringify(response);
       if (!isSupportedNativeSelfOutput(response, config)
-          || hasEncodedSensitiveSelfText(response, config)
+          && !isSupportedClaudeBatchSelfOutput(response)) {
+        unsafeSelfOutputCount += 1;
+        return call;
+      }
+      if (hasEncodedSensitiveSelfText(response, config)
           || redactAgentGuardSelfToolOutput(response, config) !== originalText
           || hasUnmaskedSelfCredential(response)) {
         unsafeSelfOutputCount += 1;
@@ -1599,6 +1595,14 @@ function projectClaudeBatchForInspection(
     return projected;
   });
   return { originalCalls: responses, inspectionCalls, suppressedCount, unsafeSelfOutputCount };
+}
+
+/** PostToolBatch carries serialized model content, not the structured PostToolUse output. */
+function isSupportedClaudeBatchSelfOutput(response: unknown): boolean {
+  if (typeof response === 'string') return true;
+  return Array.isArray(response) && response.length > 0 && response.every((block) =>
+    isPlainRecord(block) && block.type === 'text' && typeof block.text === 'string'
+      && Object.keys(block).every((key) => key === 'type' || key === 'text'));
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {

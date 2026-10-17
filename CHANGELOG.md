@@ -8,6 +8,7 @@
 - Native `PreToolUse` actions remain the primary Cloud records. Routine successful `PostToolUse` observations stay local; failures, elevated risks, anomalous results, and material new findings are uploaded as redacted events.
 
 ### Fixed
+- Claude Code no longer stops after the official AgentGuard installer prints documented key placeholders without an activation link; serialized and text-block batch results remain subject to checks for real secrets.
 - Blocked Claude Code `PostToolBatch` findings now reach Cloud with a redacted summary and batch counts.
 - Codex and Claude Code hooks no longer flag masked output from the exact standalone `agentguard status` command as PII or bulk egress; modified commands and unmasked secrets remain inspected.
 - Native Codex and Claude Code hooks no longer block standalone `agentguard` CLI results when output contains sensitive data. Codex replaces model-visible tool results with locally redacted feedback, Claude Code rewrites supported post-tool results, and the exact pending Agent JWT activation URL remains clickable. Compound commands and other tools remain protected.

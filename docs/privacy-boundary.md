@@ -33,10 +33,12 @@ executable paths, and unrelated tools retain their ordinary protection;
 `agentguard approve` is not exempt from agent-self-approval checks.
 Direct `npx @goplus/agentguard` calls with supported public subcommands receive
 the same native output treatment. The exact documented
-`curl -fsSL https://agentguard.one/install.sh | bash` command receives it only
-when the result contains the complete saved activation link. Other installer
-results follow ordinary privacy checks. Running the remote installer still
-requires approval before execution.
+`curl -fsSL https://agentguard.one/install.sh | bash` command receives it for
+supported result shapes even when no activation link was created. Only the
+exact saved link and documented public key placeholders remain visible; other
+recognized credentials are redacted. Unsupported or unsafe installer results
+remain on the batch privacy gate. Running the remote installer still requires
+approval before execution.
 
 | Host | Own-command result handling | Limit |
 |---|---|---|
