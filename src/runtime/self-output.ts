@@ -41,6 +41,11 @@ function redactSelfText(text: string, config: AgentGuardConfig): string {
       }
     } catch { /* Plain text still receives the bounded text redactor. */ }
   }
+  return redactTextPreservingSavedActivationUrl(text, config);
+}
+
+/** Keep only this installation's pending activation link visible to the user. */
+export function redactTextPreservingSavedActivationUrl(text: string, config: AgentGuardConfig): string {
   const activationUrl = config.agentJwt && config.agentRegisterUrl;
   const marker = randomMarker('AGENTGUARDLINK');
   const exampleMarker = randomMarker('AGENTGUARDEXAMPLE');
@@ -60,6 +65,30 @@ function redactSelfText(text: string, config: AgentGuardConfig): string {
       .replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
   } catch {
     return redactText(withExample).replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
+  }
+}
+
+/** Require a complete saved link before treating an installer result as owned output. */
+export function hasExactSavedActivationUrl(value: unknown, config: AgentGuardConfig): boolean {
+  const activationUrl = config.agentJwt && config.agentRegisterUrl;
+  if (!activationUrl || activationUrl.length > 2048 || /[\x00-\x1f\x7f]/.test(activationUrl)) return false;
+  try {
+    const url = new URL(activationUrl);
+    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return false;
+    const seen = new WeakSet<object>();
+    let visited = 0;
+    const contains = (item: unknown, depth: number): boolean => {
+      if (++visited > 1000 || depth > 16) return false;
+      if (typeof item === 'string') {
+        return protectExactActivationUrl(item, activationUrl, '[validated activation link]') !== item;
+      }
+      if (!item || typeof item !== 'object' || seen.has(item)) return false;
+      seen.add(item);
+      return Object.values(item).some((nested) => contains(nested, depth + 1));
+    };
+    return contains(value, 0);
+  } catch {
+    return false;
   }
 }
 
