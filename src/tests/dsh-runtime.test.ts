@@ -141,6 +141,9 @@ describe('DSH runtime Phase 2A observer', () => {
 
     const before = await protectDshToolCall(statusExec, dependencies);
     assert.equal(before, null, 'self commands bypass the DSH policy evaluator');
+    const unavailableConfig = { loadAgentGuardConfig: () => { throw new Error('config unavailable'); } };
+    assert.equal(await observeDshToolCall(statusExec, unavailableConfig), null);
+    assert.equal(await protectDshToolCall(statusExec, unavailableConfig), null);
 
     const after = await protectDshToolResult(statusExec, {
       isError: false,
@@ -149,52 +152,45 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(after, null);
   });
 
-  it('rewrites AgentGuard CLI results without blocking DSH shell tools', async () => {
-    const url = 'https://agentguard.example/activate?token=owned-dsh-link-123456';
-    const ownConfig: AgentGuardConfig = { ...config, agentJwt: 'agent.jwt.test', agentRegisterUrl: url };
+  it('keeps wrapped self-approval commands in the DSH pre-execute policy path', async () => {
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      evaluate: async () => ({ decision: decision('block'), policySource: 'default' as const }),
+      writeAudit() {},
+    };
+    for (const command of ['agentguard approve --action-id act_test',
+      'command agentguard approve --action-id act_test',
+      "sh -c 'agentguard approve --action-id act_test'"]) {
+      const exec = execution({ arguments: { command } });
+      assert.equal((await observeDshToolCall(exec, dependencies))?.evaluation.decision.decision, 'block');
+      assert.equal((await protectDshToolCall(exec, dependencies))?.evaluation.decision.decision, 'block');
+    }
+    assert.equal(await protectDshToolCall(execution({
+      arguments: { command: 'agentguard scan ./approve' },
+    }), dependencies), null);
+  });
+
+  it('preserves AgentGuard CLI results and downstream decisions', async () => {
     let evaluations = 0;
     const dependencies = {
-      loadAgentGuardConfig: () => ownConfig,
       evaluate: async () => { evaluations += 1; return { decision: decision('block'), policySource: 'default' as const }; },
       writeAudit() {},
     };
     const exec = execution({ arguments: { command: 'agentguard connect' } });
-    const result = { isError: false, content: [{ type: 'text', text: `${url}\napi_key=sk-dsh-secret-1234567890` }] };
+    const result = { isError: false, content: [{ type: 'text',
+      text: 'api_key=sk-dsh-secret-1234567890' }] };
     assert.equal(await protectDshToolCall(exec, dependencies), null);
-    const accept = async () => ({ kind: 'accept' as const });
     for (const hook of [createDshPostExecuteObserver(dependencies), createDshPostExecuteProtector(dependencies)]) {
-      const decisionResult = await hook(exec, result, accept);
-      assert.equal(decisionResult.kind, 'accept');
-      if (decisionResult.kind === 'accept') {
-        assert.ok(decisionResult.content?.[0]?.text?.toString().includes(url));
-        assert.match(String(decisionResult.content?.[0]?.text), /api_key=\[REDACTED\]/);
-      }
+      const accept = { kind: 'accept' as const, content: result.content };
+      assert.deepEqual(await hook(exec, result, async () => accept), accept);
+      const structured = { kind: 'accept' as const, value: { token: 'sk-dsh-value-secret-1234567890' } };
+      assert.deepEqual(await hook(exec, result, async () => structured), structured);
+      const block = { kind: 'block' as const, feedback: [{ type: 'text' as const, text: 'other policy' }] };
+      assert.deepEqual(await hook(exec, result, async () => block), block);
     }
-    const structured = await createDshPostExecuteProtector(dependencies)(exec, result,
-      async () => ({ kind: 'accept', value: { output: `${url}\napi_key=sk-dsh-value-secret-1234567890` },
-        additionalContexts: [{ role: 'user', content: 'downstream-context' }] }));
-    assert.equal(structured.kind, 'accept');
-    if (structured.kind === 'accept') {
-      assert.equal(structured.content, undefined);
-      assert.ok(JSON.stringify(structured.value).includes(url));
-      assert.doesNotMatch(JSON.stringify(structured.value), /dsh-value-secret/);
-      assert.equal(structured.additionalContexts?.length, 1);
-    }
-    const keyedValue = await createDshPostExecuteProtector(dependencies)(exec, result,
-      async () => ({ kind: 'accept' as const,
-        value: { token: 'sk-dsh-keyed-secret-1234567890', count: 4 } }));
-    assert.deepEqual(keyedValue, { kind: 'accept', value: { token: '[REDACTED]', count: 4 } });
     assert.equal(evaluations, 0);
     const compound = execution({ arguments: { command: 'agentguard status; echo secret' } });
-    assert.ok(await protectDshToolCall(compound, dependencies), 'compound calls remain protected');
-    const downstreamBlock = await createDshPostExecuteProtector(dependencies)(exec, result,
-      async () => ({ kind: 'block' as const, feedback: [{ type: 'text', text: 'other policy' }] }));
-    assert.equal(downstreamBlock.kind, 'block', 'AgentGuard does not undo another hook’s block');
-    const failedRedaction = await createDshPostExecuteProtector({
-      ...dependencies, loadAgentGuardConfig: () => { throw new Error('unavailable'); },
-    })(exec, result, accept);
-    assert.deepEqual(failedRedaction, { kind: 'accept', content: [{ type: 'text',
-      text: 'AgentGuard output could not be safely redacted; run the command in your terminal.' }] });
+    assert.ok(await protectDshToolCall(compound, dependencies));
   });
 
   it('attributes exact configured tool owners and preserves verified DSH call context', () => {

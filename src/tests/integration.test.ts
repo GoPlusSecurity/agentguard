@@ -205,7 +205,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       'llm_output',
       'model_call_ended',
       'model_call_started',
-      'tool_result_persist',
     ]);
     assert.equal(handlers['wrapStreamFn'], undefined);
     assert.equal(handlers['before_compaction'], undefined);
@@ -356,63 +355,15 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
       params: { command: 'agentguard status' } }), undefined);
   });
 
-  it('rewrites only correlated AgentGuard CLI results in OpenClaw-owned transcripts', async () => {
+  it('does not register a result rewrite hook for OpenClaw or QClaw', async () => {
     ctx = createTestContext();
-    const home = mkdtempSync(join(tmpdir(), 'agentguard-openclaw-own-output-'));
-    temporaryRoots.push(home);
-    const oldHome = process.env.AGENTGUARD_HOME;
-    process.env.AGENTGUARD_HOME = home;
-    const url = 'https://agentguard.example/activate?token=owned-openclaw-link-123456';
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ version: 1, level: 'balanced' }));
-    try {
-      const { api, handlers } = createMockApi();
-      registerOpenClawPlugin(api as never, {
-        skipAutoScan: true,
-        agentguardFactory: () => ctx.agentguard as never,
-      });
-      await handlers.before_tool_call({
-        toolName: 'exec', toolCallId: 'own-1', params: { command: 'agentguard connect' },
-      }, { sessionKey: 'sess-one' });
-      // `connect` saves the link after plugin registration. The sync result
-      // rewrite must load the current config rather than the startup snapshot.
-      writeFileSync(join(home, 'config.json'), JSON.stringify({
-        version: 1, level: 'balanced', agentJwt: 'agent.jwt.test', agentRegisterUrl: url,
-      }));
-      const original = { role: 'toolResult', content: [
-        { type: 'text', text: `${url}\napi_key=sk-own-secret-1234567890` },
-        { type: 'image', data: 'opaque' },
-      ] };
-      const event = { toolName: 'exec', toolCallId: 'own-1', message: original };
-      const rewrite = handlers.tool_result_persist(event, { sessionKey: 'sess-one' }) as {
-        message?: { content: Array<{ type: string; text?: string; data?: string }> };
-      };
-      assert.ok(rewrite?.message);
-      assert.ok(rewrite.message.content[0].text?.includes(url));
-      assert.match(rewrite.message.content[0].text || '', /api_key=\[REDACTED\]/);
-      assert.doesNotMatch(JSON.stringify(rewrite), /own-secret/);
-      assert.deepEqual(rewrite.message.content[1], original.content[1]);
-      assert.equal(handlers.tool_result_persist(event, { sessionKey: 'sess-one' }), undefined);
-      await handlers.before_tool_call({
-        toolName: 'exec', toolCallId: 'own-2', params: { command: 'agentguard status; cat ~/.env' },
-      }, { sessionKey: 'sess-one' });
-      assert.equal(handlers.tool_result_persist({ ...event, toolCallId: 'own-2' }, { sessionKey: 'sess-one' }), undefined);
-      await handlers.before_tool_call({
-        toolName: 'exec', toolCallId: 'own-3', params: { command: 'agentguard status' },
-      }, { sessionKey: 'sess-one' });
-      assert.equal(handlers.tool_result_persist({ ...event, toolCallId: 'own-3' }, { sessionKey: 'other-session' }), undefined);
-      const afterMismatch = handlers.tool_result_persist({ ...event, toolCallId: 'own-3' },
-        { sessionKey: 'sess-one' }) as { message?: { content: Array<{ text?: string }> } };
-      assert.match(afterMismatch.message?.content[0]?.text || '', /api_key=\[REDACTED\]/);
-      await handlers.before_tool_call({
-        toolName: 'exec', toolCallId: 'own-4', params: { command: 'command agentguard status' },
-      }, { sessionKey: 'sess-one' });
-      const missingContext = handlers.tool_result_persist({ ...event, toolCallId: 'own-4' },
-        {}) as { message?: { content: Array<{ text?: string }> } };
-      assert.match(missingContext.message?.content[0]?.text || '', /api_key=\[REDACTED\]/);
-    } finally {
-      if (oldHome === undefined) delete process.env.AGENTGUARD_HOME;
-      else process.env.AGENTGUARD_HOME = oldHome;
-    }
+    const { api, handlers } = createMockApi();
+    registerOpenClawPlugin(api as never, {
+      skipAutoScan: true, agentguardFactory: () => ctx.agentguard as never,
+    });
+    assert.equal(handlers.tool_result_persist, undefined);
+    assert.equal(await handlers.before_tool_call({ toolName: 'exec',
+      params: { command: 'agentguard connect' } }), undefined);
   });
 
   it('should allow AgentGuard CLI commands from OpenClaw args/cmd payloads', async () => {

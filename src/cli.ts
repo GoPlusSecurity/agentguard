@@ -31,7 +31,6 @@ import { SkillRegistry } from './registry/index.js';
 import type { TrustRecord } from './types/registry.js';
 import { resolveScanSource } from './scanner/source.js';
 import { formatProtectResult, protectAction, exitCodeForDecision } from './runtime/protect.js';
-import { redactAgentGuardSelfToolOutput } from './runtime/self-output.js';
 import { approvePendingApproval, listPendingApprovals } from './runtime/approvals.js';
 import { getDefaultEffectiveRuntimePolicy, loadCachedPolicy, saveCachedPolicy } from './runtime/policy.js';
 import type { RuntimeActionType, RuntimeAgentHost } from './runtime/types.js';
@@ -689,9 +688,9 @@ async function main() {
       }
     });
 
-  // Internal synchronous bridge for native hosts that rewrite tool results.
+  // Compatibility bridge for older native plugins; preserve own-command output.
   program.command('self-output', { hidden: true }).action(() => {
-    process.stdout.write(redactAgentGuardSelfToolOutput(readStdinIfAvailable(), ensureConfig()));
+    process.stdout.write(readStdinIfAvailable());
   });
 
   program

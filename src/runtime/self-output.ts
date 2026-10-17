@@ -2,93 +2,30 @@ import { randomBytes } from 'node:crypto';
 import type { AgentGuardConfig } from '../config.js';
 import { redactText } from './redaction.js';
 
-const PUBLIC_KEY_EXAMPLE = 'TYPESAFE_API_KEY=<key>';
-const SECRET_FIELD = /^(?:token|api[_-]?key|secret|password|passwd|authorization|access[_-]?key|client[_-]?secret|signature|sig|agentJwt)$/i;
-
-/** Locally sanitize AgentGuard-owned results without masking the saved JWT binding link. */
-export function redactAgentGuardSelfToolOutput(response: unknown, config: AgentGuardConfig): string {
-  const safe = redactAgentGuardSelfToolValue(response, config);
-  return typeof safe === 'string' ? safe : JSON.stringify(safe);
-}
-
-/** Preserve structured tool results so native hosts can accept the replacement. */
-export function redactAgentGuardSelfToolValue(response: unknown, config: AgentGuardConfig): unknown {
-  if (typeof response === 'string') return redactSelfText(response, config);
-  if (typeof response === 'number') {
-    const text = String(response);
-    return redactText(text) === text ? response : '[REDACTED]';
-  }
-  if (Array.isArray(response)) return response.map((item) => redactAgentGuardSelfToolValue(item, config));
-  if (response && typeof response === 'object') {
-    return Object.fromEntries(Object.entries(response).map(([key, value]) => [
-      key,
-      SECRET_FIELD.test(key) && typeof value === 'string' && value !== '<key>'
-        ? '[REDACTED]'
-        : redactAgentGuardSelfToolValue(value, config),
-    ]));
-  }
-  return response;
-}
-
-function redactSelfText(text: string, config: AgentGuardConfig): string {
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === 'object') {
-        const safe = redactAgentGuardSelfToolValue(parsed, config);
-        return JSON.stringify(safe) === JSON.stringify(parsed) ? text : JSON.stringify(safe);
-      }
-    } catch { /* Plain text still receives the bounded text redactor. */ }
-  }
-  return redactTextPreservingSavedActivationUrl(text, config);
-}
-
-/** Keep only this installation's pending activation link visible to the user. */
+const PUBLIC_KEY_EXAMPLES = ['TYPESAFE_API_KEY=<key>', 'AGENTGUARD_API_KEY=<your-key>'];
+/** Mask assistant display text while keeping the saved activation link visible. */
 export function redactTextPreservingSavedActivationUrl(text: string, config: AgentGuardConfig): string {
   const activationUrl = config.agentJwt && config.agentRegisterUrl;
   const marker = randomMarker('AGENTGUARDLINK');
-  const exampleMarker = randomMarker('AGENTGUARDEXAMPLE');
-  const withExample = text.replaceAll(PUBLIC_KEY_EXAMPLE, exampleMarker);
+  const examples = PUBLIC_KEY_EXAMPLES.map((example) => ({ example, marker: randomMarker('AGENTGUARDEXAMPLE') }));
+  const withExamples = examples.reduce((value, { example, marker: replacement }) =>
+    value.replaceAll(example, replacement), text);
+  const restoreExamples = (value: string): string => examples.reduce((restored, { example, marker: replacement }) =>
+    restored.replaceAll(replacement, example), value);
   if (!activationUrl || activationUrl.length > 2048 || /[\x00-\x1f\x7f]/.test(activationUrl))
-    return redactText(withExample).replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
+    return restoreExamples(redactText(withExamples));
   try {
     const url = new URL(activationUrl);
     if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) {
-      return redactText(withExample).replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
+      return restoreExamples(redactText(withExamples));
     }
     // The exact URL saved after registration is user-facing and must remain
     // clickable. A fresh per-call marker keeps every other credential subject
-    // to normal redaction, even elsewhere in the same result.
-    const protectedText = protectExactActivationUrl(withExample, activationUrl, marker);
-    return redactText(protectedText).replaceAll(marker, activationUrl)
-      .replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
+    // to normal redaction, even elsewhere in the same display message.
+    const protectedText = protectExactActivationUrl(withExamples, activationUrl, marker);
+    return restoreExamples(redactText(protectedText).replaceAll(marker, activationUrl));
   } catch {
-    return redactText(withExample).replaceAll(exampleMarker, PUBLIC_KEY_EXAMPLE);
-  }
-}
-
-/** Require a complete saved link before treating an installer result as owned output. */
-export function hasExactSavedActivationUrl(value: unknown, config: AgentGuardConfig): boolean {
-  const activationUrl = config.agentJwt && config.agentRegisterUrl;
-  if (!activationUrl || activationUrl.length > 2048 || /[\x00-\x1f\x7f]/.test(activationUrl)) return false;
-  try {
-    const url = new URL(activationUrl);
-    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return false;
-    const seen = new WeakSet<object>();
-    let visited = 0;
-    const contains = (item: unknown, depth: number): boolean => {
-      if (++visited > 1000 || depth > 16) return false;
-      if (typeof item === 'string') {
-        return protectExactActivationUrl(item, activationUrl, '[validated activation link]') !== item;
-      }
-      if (!item || typeof item !== 'object' || seen.has(item)) return false;
-      seen.add(item);
-      return Object.values(item).some((nested) => contains(nested, depth + 1));
-    };
-    return contains(value, 0);
-  } catch {
-    return false;
+    return restoreExamples(redactText(withExamples));
   }
 }
 

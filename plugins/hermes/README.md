@@ -38,9 +38,8 @@ Or copy this directory to `~/.hermes/plugins/agentguard/` manually.
 | `post_api_request` | Observes and correlates main-loop responses; never blocks them. |
 | `pre_tool_call`    | Evaluates the call; returns `{"action":"block","message":...}` to veto a dangerous action. |
 | `post_tool_call`   | Audit-only; never blocks.                                       |
-| `transform_tool_result` | Redacts AgentGuard CLI results before model context; preserves the saved JWT activation link. |
 | `on_session_start` | Best-effort background scan of installed skills (opt out: `AGENTGUARD_HERMES_AUTOSCAN=0`). |
-| `/agentguard`      | Slash command — `status`, `report` (default), or `checkup`.     |
+| `/agentguard`      | Slash command — `status`, `report` (default), or `checkup`; output passes through unchanged. |
 
 Tools evaluated (others pass through untouched): `terminal`, `execute_code`,
 `write_file`, `patch`, `skill_manage`, `read_file`, `web_search`, `web_extract`,
