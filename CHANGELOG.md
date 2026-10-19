@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.2.4] - 2026-10-19
 
 - AgentGuard command and documented installer results now pass through without post-tool blocking or redaction in Codex, Claude Code, OpenClaw, QClaw, Hermes, and DSH. Claude batch inspection excludes recognized own-command calls while retaining checks for other calls; execution-time approval remains.
 - Attribute installer results by their output signature in native Codex and Claude Code hooks, without a URL allowlist.
