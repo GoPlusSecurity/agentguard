@@ -173,7 +173,9 @@ describe('Agent template installers', () => {
     const configPath = join(dir, '.codex', 'hooks.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
 
-    assert.ok(existsSync(join(dir, '.codex', 'skills', 'agentguard', 'SKILL.md')));
+    const skillPath = join(dir, '.codex', 'skills', 'agentguard', 'SKILL.md');
+    assert.ok(existsSync(skillPath));
+    assert.match(readFileSync(skillPath, 'utf8'), /Run AgentGuard CLI commands.*in their own tool/s);
     assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-user-prompt.sh')));
     assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-pre-tool.sh')));
     assert.ok(existsSync(join(dir, '.codex', 'hooks', 'agentguard-post-tool.sh')));

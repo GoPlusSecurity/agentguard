@@ -43,7 +43,91 @@ export function isAgentGuardOwnedOutputCommand(command: string): boolean {
 /** The installer is attributed from its finished result, never from its URL alone. */
 export function isAgentGuardOwnedOutputResult(command: string, result: unknown): boolean {
   return isAgentGuardOwnedOutputCommand(command)
+    || isAgentGuardOwnedOutputSequence(command)
     || (isInstallerPipeline(command) && hasInstallerOutputSignature(result));
+}
+
+/** Every statement must be a verified AgentGuard invocation. */
+export function isAgentGuardOwnedOutputSequence(command: string): boolean {
+  return isAgentGuardOwnedOutputSequenceInner(command, 0);
+}
+
+function isAgentGuardOwnedOutputSequenceInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
+  const statements = splitShellStatements(command);
+  if (!statements) return false;
+  if (statements.length > 1) {
+    return statements.every((statement) => isAgentGuardOwnedOutputCommand(statement)
+      || isAgentGuardOwnedOutputSequenceInner(statement, depth + 1));
+  }
+  const wrapped = shellWrappedCommand(statements[0] || '');
+  return wrapped ? isAgentGuardOwnedOutputSequenceInner(wrapped, depth + 1) : false;
+}
+
+/** A separate CLI statement inside one shell call has no separate result provenance. */
+export function isMixedAgentGuardCliCommand(command: string): boolean {
+  return isMixedAgentGuardCliCommandInner(command, 0);
+}
+
+function isMixedAgentGuardCliCommandInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
+  const statements = splitShellStatements(command);
+  if (!statements) return false;
+  const isOwnStatement = (statement: string): boolean => isAgentGuardOwnedOutputCommand(statement)
+    || isAgentGuardOwnedOutputSequenceInner(statement, depth + 1);
+  if (statements.length > 1
+      && statements.some(isOwnStatement)
+      && statements.some((statement) => !isOwnStatement(statement))) return true;
+  return statements.some((statement) => {
+    const wrapped = shellWrappedCommand(statement);
+    return wrapped ? isMixedAgentGuardCliCommandInner(wrapped, depth + 1) : false;
+  });
+}
+
+function shellWrappedCommand(statement: string): string | null {
+  const tokens = shellTokens(statement);
+  let index = skipSafeAssignments(tokens, 0);
+  if (index === null) return null;
+  if (basename(tokens[index] || '') === 'env') {
+    index += 1;
+    while (tokens[index]?.startsWith('-')) index += 1;
+    index = skipSafeAssignments(tokens, index);
+    if (index === null) return null;
+  }
+  while (['command', 'builtin'].includes(basename(tokens[index] || ''))) index += 1;
+  return shellWrapperCommand(tokens, index);
+}
+
+function splitShellStatements(command: string): string[] | null {
+  const input = command.replace(/\\\r?\n/g, '');
+  const statements: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]!;
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (char === '"' || char === "'") {
+      if (!quote) quote = char;
+      else if (quote === char) quote = null;
+      continue;
+    }
+    // Here-doc bodies, comments, and nested shell expressions are not
+    // statements we can attribute safely from a flat command string.
+    if (!quote && ((char === '<' && input[index + 1] === '<')
+        || (char === '#' && (index === 0 || /[\s;&|()]/.test(input[index - 1]!)))
+        || (char === '$' && input[index + 1] === '(')
+        || char === '`' || char === '(' || char === ')')) return null;
+    if (quote || ![';', '\n', '&', '|'].includes(char)) continue;
+    if ((char === '&' || char === '|') && input[index + 1] !== char) continue;
+    statements.push(input.slice(start, index).trim());
+    if (char === '&' || char === '|') index += 1;
+    start = index + 1;
+  }
+  if (quote || escaped) return null;
+  statements.push(input.slice(start).trim());
+  return statements.filter(Boolean);
 }
 
 function isInstallerPipeline(command: string): boolean {
@@ -128,6 +212,7 @@ function isAgentGuardCliCommandInner(command: string, depth: number): boolean {
 
   let index = skipSafeAssignments(tokens, 0);
   if (index === null) return false;
+  if (!tokens[index]) return false;
   if (basename(tokens[index]) === 'env') {
     index += 1;
     while (tokens[index]?.startsWith('-')) index += 1;
@@ -157,6 +242,7 @@ function isStandaloneAgentGuardCliCommandInner(command: string, depth: number, o
 
   let index = skipSafeAssignments(tokens, 0);
   if (index === null) return false;
+  if (!tokens[index]) return false;
   if (basename(tokens[index]) === 'env') {
     index += 1;
     while (tokens[index]?.startsWith('-')) index += 1;

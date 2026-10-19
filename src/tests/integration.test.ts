@@ -42,6 +42,20 @@ describe('Integration: Claude Code evaluateHook', () => {
     assert.equal(result.decision, 'allow');
   });
 
+  it('allows only all-AgentGuard shell sequences through the shared adapter', async () => {
+    ctx = createTestContext('balanced');
+    const own = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'agentguard status && agentguard doctor' },
+    }, ctx.options);
+    const mixed = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'agentguard status && rm -rf /' },
+    }, ctx.options);
+    assert.equal(own.decision, 'allow');
+    assert.notEqual(mixed.decision, 'allow');
+  });
+
   it('should DENY rm -rf /', async () => {
     ctx = createTestContext('balanced');
     const result = await evaluateHook(ctx.claudeAdapter, {

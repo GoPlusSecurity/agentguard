@@ -3,6 +3,7 @@ import type { AgentGuardConfig } from '../config.js';
 import { redactText } from './redaction.js';
 
 const PUBLIC_KEY_EXAMPLES = ['TYPESAFE_API_KEY=<key>', 'AGENTGUARD_API_KEY=<your-key>'];
+const PUBLIC_KEY_EXAMPLE_INSPECTION_MARKER = '[AgentGuard public key example]';
 // The token charset deliberately stops at separators, so adjacent query
 // parameters or prose cannot become part of the exempt span.
 const ACTIVATION_URL = /https?:\/\/[^\s"'`<>()\[\]{}\\?,;!]+\/activate\?token=[A-Za-z0-9._~%+=-]+/g;
@@ -11,6 +12,13 @@ const ACTIVATION_INSPECTION_MARKER = '[AgentGuard activation URL excluded from i
 /** Replace complete activation URLs in an inspection copy, never in the host's result. */
 export function maskActivationUrlsForInspection(text: string): string {
   return replaceActivationUrls(text, () => ACTIVATION_INSPECTION_MARKER);
+}
+
+/** Static documentation placeholders are not credentials, even in wrapped tool results. */
+export function maskAgentGuardPublicOutputForInspection(text: string): string {
+  const withoutExamples = PUBLIC_KEY_EXAMPLES.reduce((value, example) =>
+    value.replaceAll(example, PUBLIC_KEY_EXAMPLE_INSPECTION_MARKER), text);
+  return maskActivationUrlsForInspection(withoutExamples);
 }
 
 /** Keep activation links in a verified result while applying its normal redactor. */

@@ -40,7 +40,7 @@ import {
 } from '../runtime/protect.js';
 import type { RuntimeActionType } from '../runtime/types.js';
 import type { AgentGuardConfig } from '../config.js';
-import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
+import { isAgentGuardOwnedOutputSequence, isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -589,7 +589,8 @@ export function registerOpenClawPlugin(
       const command = args && typeof args === 'object'
         ? (args as Record<string, unknown>).command ?? (args as Record<string, unknown>).cmd : undefined;
       if (normalized.actionType === 'shell' && typeof command === 'string'
-          && isStandaloneAgentGuardCliCommand(command)) return;
+          && (isStandaloneAgentGuardCliCommand(command)
+            || isAgentGuardOwnedOutputSequence(command))) return;
       const toolName = normalized.toolName;
       const pluginId = toolName ? getPluginIdFromTool(toolName) : null;
       if (runtimeProtectionEnabled) {

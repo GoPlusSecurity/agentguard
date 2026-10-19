@@ -7,9 +7,10 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardOwnedOutputResult,
+  isAgentGuardOwnedOutputSequence, isMixedAgentGuardCliCommand,
   isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
-import { maskActivationUrlsForInspection, redactTextPreservingSavedActivationUrl } from './self-output.js';
+import { maskAgentGuardPublicOutputForInspection, redactTextPreservingSavedActivationUrl } from './self-output.js';
 import {
   hasSensitivePublicSearchResult, isNativePublicSearchTool,
   isVisiblePublicSearchResult, inspectWithPublicSearchProvenance,
@@ -90,6 +91,9 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   const claudeHookEvent = pickClaudeHookEventFromAction(action);
   const selfApprovalAttempt = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
     && isAgentGuardApprovalCommand(action);
+  const mixedAgentGuardCommand = (codexHookEvent === 'PreToolUse' || claudeHookEvent === 'PreToolUse')
+    && action.actionType === 'shell' && !selfApprovalAttempt
+    && isMixedAgentGuardCliCommand(action.input);
   const selfOutput = nativeAgentGuardSelfOutput(action, options, codexHookEvent, claudeHookEvent);
   if (selfOutput !== undefined) return selfOutput;
   if (claudeHookEvent === 'PostToolBatch'
@@ -122,6 +126,19 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
     policySource = evaluation.policySource;
   }
   decision = enforceNativeHookDecision(action, decision, selfApprovalAttempt);
+  if (mixedAgentGuardCommand) {
+    const reason = {
+      code: 'AGENTGUARD_MIXED_COMMAND', severity: 'high' as const,
+      title: 'Separate AgentGuard CLI call required',
+      description: 'Run the AgentGuard CLI command in its own tool call, apart from other shell commands.',
+    };
+    decision = {
+      ...decision,
+      decision: 'block', policyDecision: 'block', riskScore: Math.max(60, decision.riskScore),
+      riskLevel: decision.riskLevel === 'critical' ? 'critical' : 'high',
+      reasons: decision.decision === 'block' ? [...decision.reasons, reason] : [reason],
+    };
+  }
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
     ? consumeApprovedApproval(approvalStorePath, action)
     : null;
@@ -222,7 +239,8 @@ function nativeAgentGuardSelfOutput(
 }
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
-  return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+  return action.actionType === 'shell'
+    && (isAgentGuardCliCommand(action.input) || isAgentGuardOwnedOutputSequence(action.input));
 }
 
 export function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {
@@ -727,7 +745,9 @@ function safeCodexReason(result: ProtectResult, approvalRequired = false): strin
   return (
     `AgentGuard ${approvalRequired ? 'approval required' : 'policy decision'}; ` +
     `action=${safeCodexActionId(result.decision.actionId)}; risk=${result.decision.riskLevel}; rules=${ruleIds}; reason=[REDACTED].` +
-    (approvalRequired ? ' Approve this action id explicitly outside the agent, then retry.' : '')
+    (approvalRequired ? ' Approve this action id explicitly outside the agent, then retry.' : '') +
+    (result.decision.reasons.some((reason) => reason.code === 'AGENTGUARD_MIXED_COMMAND')
+      ? ' Run AgentGuard CLI in a separate tool call; read other files separately, then retry.' : '')
   );
 }
 
@@ -844,10 +864,10 @@ function buildRuntimeAction(options: ProtectOptions): RuntimeAction {
   const nativePostToolEvent = codexHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUse'
     || claudeHookEvent === 'PostToolUseFailure';
-  // An activation link is safe to show after a tool has run. Do not exempt it
-  // from pre-tool or model-request checks, where the URL may be an egress target.
+  // Preserve activation links and literal CLI documentation examples in
+  // results. Pre-tool and model-request checks retain the original input.
   if (nativePostToolEvent || claudeHookEvent === 'MessageDisplay' || claudeHookEvent === 'Stop') {
-    actionInput = maskActivationUrlsForInspection(actionInput);
+    actionInput = maskAgentGuardPublicOutputForInspection(actionInput);
   }
   const nativeToolActionType = nativePostToolEvent
     ? mapToolToRuntimeAction(toolName, raw)
@@ -1379,18 +1399,18 @@ function projectClaudeBatchForInspection(
       const projected = { ...call };
       for (const key of ['tool_response', 'toolResponse', 'result', 'error', 'error_message',
         'stdout', 'stderr', 'output']) {
-        if (key in projected) projected[key] = maskActivationUrlsInValue(projected[key]);
+        if (key in projected) projected[key] = maskAgentGuardPublicOutputInValue(projected[key]);
       }
       return projected;
     }), suppressedCount };
 }
 
-function maskActivationUrlsInValue(value: unknown): unknown {
-  if (typeof value === 'string') return maskActivationUrlsForInspection(value);
-  if (Array.isArray(value)) return value.map(maskActivationUrlsInValue);
+function maskAgentGuardPublicOutputInValue(value: unknown): unknown {
+  if (typeof value === 'string') return maskAgentGuardPublicOutputForInspection(value);
+  if (Array.isArray(value)) return value.map(maskAgentGuardPublicOutputInValue);
   if (!isPlainRecord(value)) return value;
   return Object.fromEntries(Object.entries(value)
-    .map(([key, item]) => [key, maskActivationUrlsInValue(item)]));
+    .map(([key, item]) => [key, maskAgentGuardPublicOutputInValue(item)]));
 }
 
 function hasSensitiveClaudeBatchContent(responses: unknown): boolean {
