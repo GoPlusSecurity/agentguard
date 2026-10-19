@@ -22,6 +22,27 @@ const candidatesOf = (text: string) => {
 };
 
 describe('Numeric PII context', () => {
+  it('does not treat AgentGuard action timestamps as bank accounts', () => {
+    const actionId = 'act_local_1792392754751_83214'; // Timestamp happens to pass Luhn.
+    assert.equal(redactText(actionId), actionId);
+    assert.deepEqual(summarizeSensitiveData(actionId), []);
+
+    const card = '5284917302468138';
+    const mixed = `action=${actionId}; card_number=${card}`;
+    assert.equal(redactText(mixed), `action=${actionId}; [REDACTED:PII_BANK_ACCOUNT]`);
+    assert.ok(summarizeSensitiveData(mixed).some((item) => item.kind === 'bank_account'));
+    assert.match(redactText(`card_number=1792392754751`), /REDACTED:PII_BANK_ACCOUNT/);
+    assert.match(redactText(`other_${actionId}`), /REDACTED:PII_BANK_ACCOUNT/);
+    for (const labeled of [
+      `card_number=${actionId}`,
+      `{"bank_account":"${actionId}"}`,
+      `银行卡号: ${actionId}`,
+      JSON.stringify({ content: JSON.stringify({ bank_account: actionId }) }),
+    ]) {
+      assert.match(redactText(labeled), /REDACTED:PII_BANK_ACCOUNT/, labeled);
+    }
+  });
+
   it('excludes real decimal fractions but never globally exempts technical-looking keys', () => {
     const decimals = [
       '{"price":"0.110105199001010002"}', // Valid ID checksum inside a fractional price.

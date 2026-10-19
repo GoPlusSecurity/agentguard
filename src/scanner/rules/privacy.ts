@@ -33,6 +33,18 @@ export function isDecimalNumericContext(content: string, start: number, end: num
   return beforeDot === undefined || /\d/.test(beforeDot);
 }
 
+/** The 13-digit Date.now() component of our action ID is an event timestamp. */
+function isLocalActionIdTimestamp(content: string, start: number, end: number): boolean {
+  const prefix = 'act_local_';
+  if (end - start !== 13 || content.slice(start - prefix.length, start) !== prefix) return false;
+  const before = content[start - prefix.length - 1];
+  if (before !== undefined && /[A-Za-z0-9_]/.test(before)) return false;
+  // An explicit account field is stronger evidence than an ID-shaped value.
+  const preceding = content.slice(Math.max(0, start - prefix.length - 80), start - prefix.length);
+  if (/(?:bank[_-]?account|account[_-]?(?:number|no)|card[_-]?(?:number|no)|credit[_-]?card|debit[_-]?card|iban|收款账号|银行卡号?)(?:\\*["'])?\s*[:=]\s*(?:\\*["'])?\s*$/i.test(preceding)) return false;
+  return /^_\d{1,10}(?![A-Za-z0-9_])/.test(content.slice(end));
+}
+
 export interface PiiRedactionOptions {
   /** Only for a verified public WebSearch result, never for prompts or files. */
   skipBareNumericIdentifiers?: boolean;
@@ -197,7 +209,9 @@ export function redactPiiText(content: string, options: PiiRedactionOptions = {}
     isValidBankIdentifier(value, 'iban') ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
   if (!options.skipBareNumericIdentifiers) {
     redacted = redacted.replace(/(?<!\d)\d{12,19}(?!\d)/g, (value, offset: number, source: string) =>
-      !isDecimalNumericContext(source, offset, offset + value.length) && isValidBankIdentifier(value, 'card_number')
+      !isDecimalNumericContext(source, offset, offset + value.length)
+        && !isLocalActionIdTimestamp(source, offset, offset + value.length)
+        && isValidBankIdentifier(value, 'card_number')
         ? '[REDACTED:PII_BANK_ACCOUNT]' : value);
   }
 

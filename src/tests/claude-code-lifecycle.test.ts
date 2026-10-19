@@ -232,6 +232,34 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.doesNotMatch(mixed.text, /unrelated-status-secret/);
   });
 
+  it('does not block PostToolBatch for an approval action ID in audit output', async () => {
+    const fixture = lifecycleFixture();
+    const actionId = 'act_local_1792392754751_83214';
+    const call = (response: string) => ({
+      tool_name: 'Bash',
+      tool_input: { command: `grep -n "${actionId}" /tmp/audit.jsonl` },
+      tool_response: response,
+    });
+    const clean = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-approval-id', cwd: fixture.root,
+      tool_calls: [call(`AgentGuard policy decision; action=${actionId}; risk=medium`)],
+    });
+    assert.notEqual(clean.result.decision.decision, 'block');
+    assert.equal(clean.result.decision.ruleEvaluations?.find((rule) => rule.ruleId === 'PII_EGRESS')?.detected, false);
+
+    const sensitive = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-approval-id-sensitive', cwd: fixture.root,
+      tool_calls: [call(`AgentGuard policy decision; action=${actionId}; card_number=5284917302468138`)],
+    });
+    assert.equal(sensitive.result.decision.decision, 'block');
+
+    const disguised = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-approval-id-labeled', cwd: fixture.root,
+      tool_calls: [call(JSON.stringify({ bank_account: actionId }))],
+    });
+    assert.equal(disguised.result.decision.decision, 'block');
+  });
+
   it('passes all standalone AgentGuard results unchanged across native post hooks', async () => {
     const fixture = lifecycleFixture();
     for (const command of ['agentguard status', 'agentguard connect', 'agentguard scan ./skill',

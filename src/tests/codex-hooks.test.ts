@@ -371,6 +371,20 @@ describe('installed Codex native hooks', () => {
     assert.equal(auditEvent.metadata?.toolFailed, undefined);
   });
 
+  it('keeps an AgentGuard approval action ID visible in post-tool output', () => {
+    const fixture = installFixture();
+    const actionId = 'act_local_1792392754751_83214';
+    const run = fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse', session_id: 'sess_action_id',
+      turn_id: 'turn_action_id', cwd: fixture.project,
+      tool_name: 'Bash', tool_use_id: 'tool_action_id',
+      tool_input: { command: `grep -n "${actionId}" /tmp/audit.jsonl` },
+      tool_response: { output: `AgentGuard policy decision; action=${actionId}; risk=medium`, exit_code: 0 },
+    });
+    assert.equal(run.status, 0);
+    assert.equal(run.stdout.trim(), '');
+  });
+
   it('does not rescan agentguard status output in PostToolUse', () => {
     const fixture = installFixture();
     const run = fixture.run('agentguard-post-tool.sh', {
