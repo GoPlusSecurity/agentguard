@@ -37,6 +37,13 @@ subject to the normal privacy gate. Compound commands, unverified paths, and
 unrelated tools retain ordinary protection. The installer and `agentguard
 approve` still receive their normal checks before execution.
 
+For Codex and Claude Code, a pre-tool hook rejects a shell call that joins an
+AgentGuard CLI statement with other shell statements. It tells the agent to
+retry the CLI command in its own tool call. This also covers a new session in
+which the agent tries to read its skill documentation and run `agentguard
+status` in one Bash call. No file read from that combined call runs; separate
+file results keep their normal privacy checks.
+
 This intentionally means credentials or personal data printed by AgentGuard
 commands can reach the agent unchanged. AgentGuard also does not rewrite those
 results in OpenClaw, QClaw, Hermes, or DSH. Claude `MessageDisplay` protects
@@ -53,6 +60,12 @@ Pre-tool commands and model requests retain their normal egress checks.
 Local audit and Cloud previews keep the activation token masked or omit the
 link. A different site can imitate this URL shape, so the exception should
 not be treated as proof that the link came from AgentGuard.
+
+The literal documentation examples `TYPESAFE_API_KEY=<key>` and
+`AGENTGUARD_API_KEY=<your-key>` are also ignored by post-tool privacy checks.
+This keeps `agentguard status` usable when an agent wraps the shell command and
+the hook cannot attribute the result to the CLI. Real credentials elsewhere in
+the same result remain subject to normal protection.
 
 ## Public web-search results
 

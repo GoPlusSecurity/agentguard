@@ -621,6 +621,7 @@ const OPAQUE_URL_PATH_SEGMENT = /^(?=.{24,128}$)(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9
 const SAFE_MODEL_SWITCH_LABEL = /^[A-Za-z0-9._/-]{1,160}$/;
 const SAFE_REASON_TITLES: Readonly<Record<string, string>> = {
   ACTION_TYPE_REQUIRES_APPROVAL: 'Tool type requires approval',
+  AGENTGUARD_MIXED_COMMAND: 'Separate AgentGuard CLI call required',
   AGENT_SELF_APPROVAL: 'Agent approval command denied',
   CUSTOM_BLOCKED_COMMAND: 'Custom blocked command',
   CUSTOM_BLOCKED_DOMAIN: 'Custom blocked domain',

@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { installAgentTemplates } from '../installers.js';
-import { isAgentGuardOwnedOutputResult, isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
+import { isAgentGuardOwnedOutputResult, isMixedAgentGuardCliCommand,
+  isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 
 const installerCommand = `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash`;
 const installerOutput = 'AgentGuard Cloud — Local-first AI agent protection\n'
@@ -52,6 +53,17 @@ describe('installed Codex native hooks', () => {
     assert.equal(isStandaloneAgentGuardCliCommand('npx -y @goplus/agentguard init --yes'), true);
     assert.equal(isStandaloneAgentGuardCliCommand('npx @goplus/agentguard approve --action-id act_local_1'), false);
     assert.equal(isStandaloneAgentGuardCliCommand('npx @goplus/agentguard@1.2.4-beta.1 connect; echo extra'), false);
+  });
+
+  it('identifies a separate AgentGuard statement without matching quoted examples', () => {
+    assert.equal(isMixedAgentGuardCliCommand('cat guide.md &&\\\n agentguard status'), true);
+    assert.equal(isMixedAgentGuardCliCommand('agentguard status; cat guide.md'), true);
+    assert.equal(isMixedAgentGuardCliCommand('cat guide.md && agentguard status\n'), true);
+    assert.equal(isMixedAgentGuardCliCommand("bash -lc 'cat guide.md && agentguard status'"), true);
+    assert.equal(isMixedAgentGuardCliCommand("printf 'agentguard status; cat guide.md'"), false);
+    assert.equal(isMixedAgentGuardCliCommand('echo agentguard status && cat guide.md'), false);
+    assert.equal(isMixedAgentGuardCliCommand('agentguard status'), false);
+    assert.equal(isMixedAgentGuardCliCommand('cat guide.md && /tmp/agentguard status'), false);
   });
 
   it('attributes installer results by output signature without trusting a URL', () => {
@@ -393,6 +405,73 @@ describe('installed Codex native hooks', () => {
     assert.equal(run.stdout.trim(), '', 'a public placeholder needs no output rewrite');
     assert.equal(run.stderr.trim(), '');
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
+  });
+
+  it('keeps a wrapped status result visible without exempting real credentials', () => {
+    const fixture = installFixture();
+    const status = fixture.runCli('status');
+    assert.equal(status.status, 0);
+    assert.match(status.stdout, /TYPESAFE_API_KEY=<key>/);
+    const post = (output: string) => fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse', session_id: 'sess_wrapped_status',
+      turn_id: 'turn_wrapped_status', cwd: fixture.project,
+      tool_name: 'functions.exec', tool_use_id: 'tool_wrapped_status',
+      tool_input: { code: 'const result = await tools.exec_command({ cmd: "agentguard status" })' },
+      tool_response: { output, exit_code: 0 },
+    });
+    const clean = post(status.stdout);
+    assert.equal(clean.status, 0);
+    assert.equal(clean.stdout.trim(), '');
+    const mixed = post(`${status.stdout}\napi_key=sk-unrelated-status-secret-1234567890`);
+    assert.equal(mixed.status, 0);
+    assert.equal(JSON.parse(mixed.stdout).decision, 'block');
+    assert.doesNotMatch(mixed.stdout + mixed.stderr, /unrelated-status-secret/);
+  });
+
+  it('checks earlier file output when status shares one Bash result', () => {
+    const fixture = installFixture();
+    const status = fixture.runCli('status');
+    assert.equal(status.status, 0);
+    const command = 'cat /workspace/codex-tools.md &&\\\n'
+      + "printf '\\n--- AGENTGUARD ---\\n' &&\\\n"
+      + 'cat /workspace/agentguard/SKILL.md &&\\\n'
+      + "printf '\\n--- STATUS ---\\n' &&\\\n"
+      + 'agentguard status';
+    const pre = fixture.run('agentguard-pre-tool.sh', {
+      hook_event_name: 'PreToolUse', session_id: 'sess_compound_pre',
+      turn_id: 'turn_compound_pre', cwd: fixture.project,
+      tool_name: 'Bash', tool_use_id: 'tool_compound_pre',
+      tool_input: { command },
+    });
+    assert.equal(pre.status, 0);
+    const denial = JSON.parse(pre.stdout).hookSpecificOutput;
+    assert.equal(denial.permissionDecision, 'deny');
+    assert.match(denial.permissionDecisionReason, /separate tool call/);
+    assert.match(denial.permissionDecisionReason, /AGENTGUARD_MIXED_COMMAND/);
+    const standalone = fixture.run('agentguard-pre-tool.sh', {
+      hook_event_name: 'PreToolUse', session_id: 'sess_standalone_pre',
+      turn_id: 'turn_standalone_pre', cwd: fixture.project,
+      tool_name: 'Bash', tool_use_id: 'tool_standalone_pre',
+      tool_input: { command: 'agentguard status' },
+    });
+    assert.equal(standalone.status, 0);
+    assert.equal(standalone.stdout.trim(), '');
+    const post = (firstFile: string) => fixture.run('agentguard-post-tool.sh', {
+      hook_event_name: 'PostToolUse', session_id: 'sess_compound_status',
+      turn_id: 'turn_compound_status', cwd: fixture.project,
+      tool_name: 'Bash', tool_use_id: 'tool_compound_status',
+      tool_input: { command },
+      tool_response: { output: `${firstFile}\n--- AGENTGUARD ---\npublic skill text\n--- STATUS ---\n${status.stdout}`, exit_code: 0 },
+    });
+
+    const clean = post('public tool documentation');
+    assert.equal(clean.status, 0);
+    assert.equal(clean.stdout.trim(), '');
+
+    const sensitive = post('api_key=sk-file-secret-1234567890');
+    assert.equal(sensitive.status, 0);
+    assert.equal(JSON.parse(sensitive.stdout).decision, 'block');
+    assert.doesNotMatch(sensitive.stdout + sensitive.stderr, /file-secret/);
   });
 
   it('does not intercept saved, forged, or sensitive AgentGuard status output', () => {

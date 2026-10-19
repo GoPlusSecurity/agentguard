@@ -175,6 +175,44 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(existsSync(fixture.config.auditPath), false);
   });
 
+  it('asks for a separate status call before a mixed Bash command runs', async () => {
+    const fixture = lifecycleFixture();
+    const mixed = await runHook(fixture.config, {
+      hook_event_name: 'PreToolUse', session_id: 'sess-mixed-status-pre', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command: 'cat guide.md && agentguard status' },
+    });
+    assert.equal(mixed.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(mixed.output.hookSpecificOutput.permissionDecisionReason, /separate tool call/);
+    const standalone = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      rawInput: { hook_event_name: 'PreToolUse', session_id: 'sess-status-pre', cwd: fixture.root,
+        tool_name: 'Bash', tool_input: { command: 'agentguard status' } } });
+    assert.equal(standalone, null);
+  });
+
+  it('keeps wrapped status output through PostToolBatch and checks unrelated secrets', async () => {
+    const fixture = lifecycleFixture();
+    const output = 'Config: <agentguard-home>/config.json\n'
+      + 'Protection level: balanced\nCloud auth: connected via Agent JWT\n'
+      + 'Agent JWT: configured\nAgent account: bound\n'
+      + 'Optional: enhanced privacy detection is available but off.\n'
+      + '  export TYPESAFE_API_KEY=<key>        supply the key without writing it to disk\n'
+      + '  AGENTGUARD_API_KEY=<your-key> agentguard connect';
+    const call = (result: string) => ({ tool_name: 'functions.exec',
+      tool_input: { code: 'const result = await tools.exec_command({ cmd: "agentguard status" })' },
+      tool_response: result });
+    const clean = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-wrapped-status', cwd: fixture.root,
+      tool_calls: [call(output)],
+    });
+    assert.notEqual(clean.result.decision.decision, 'block');
+    const mixed = await runHook(fixture.config, {
+      hook_event_name: 'PostToolBatch', session_id: 'sess-wrapped-status-mixed', cwd: fixture.root,
+      tool_calls: [call(`${output}\napi_key=sk-unrelated-status-secret-1234567890`)],
+    });
+    assert.equal(mixed.result.decision.decision, 'block');
+    assert.doesNotMatch(mixed.text, /unrelated-status-secret/);
+  });
+
   it('passes all standalone AgentGuard results unchanged across native post hooks', async () => {
     const fixture = lifecycleFixture();
     for (const command of ['agentguard status', 'agentguard connect', 'agentguard scan ./skill',

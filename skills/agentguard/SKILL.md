@@ -89,6 +89,11 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 
 This skill is allowed to run `agentguard *`, so CLI commands and flags are available even when the skill has a higher-level workflow for the same area.
 
+Run each AgentGuard CLI command in its own tool call. Read documentation or
+other local files in separate calls, before or after the CLI call. If one Bash
+call combines file reads with `agentguard status`, the hook receives one merged
+result and must inspect the file content too.
+
 The skill's routed subcommands take priority over similarly named CLI commands. Do not route these through the packaged CLI unless the user explicitly prefixes the request with `/agentguard cli`: `scan`, `action`, `patrol`, `trust`, `report`, `config`, `checkup`, `hermes-hooks`. The sole internal exception is the patrol workflow's canonical collector: `patrol run` and locally scheduled patrols execute the existing `agentguard checkup --json` command as specified below.
 
 Use CLI passthrough for the CLI-only commands below, for `init` and `connect`, for explicit `/agentguard cli <args...>` requests, or for the targeted `checkup --against-advisory <id>` mode described below.

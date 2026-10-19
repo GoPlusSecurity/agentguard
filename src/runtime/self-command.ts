@@ -46,6 +46,59 @@ export function isAgentGuardOwnedOutputResult(command: string, result: unknown):
     || (isInstallerPipeline(command) && hasInstallerOutputSignature(result));
 }
 
+/** A separate CLI statement inside one shell call has no separate result provenance. */
+export function isMixedAgentGuardCliCommand(command: string): boolean {
+  return isMixedAgentGuardCliCommandInner(command, 0);
+}
+
+function isMixedAgentGuardCliCommandInner(command: string, depth: number): boolean {
+  if (depth > 2) return false;
+  const statements = splitShellStatements(command);
+  if (!statements) return false;
+  if (statements.length > 1
+      && statements.some((statement) => isAgentGuardOwnedOutputCommand(statement))) return true;
+  return statements.some((statement) => {
+    const tokens = shellTokens(statement);
+    let index = skipSafeAssignments(tokens, 0);
+    if (index === null) return false;
+    if (basename(tokens[index] || '') === 'env') {
+      index += 1;
+      while (tokens[index]?.startsWith('-')) index += 1;
+      index = skipSafeAssignments(tokens, index);
+      if (index === null) return false;
+    }
+    while (['command', 'builtin'].includes(basename(tokens[index] || ''))) index += 1;
+    const wrapped = shellWrapperCommand(tokens, index);
+    return wrapped ? isMixedAgentGuardCliCommandInner(wrapped, depth + 1) : false;
+  });
+}
+
+function splitShellStatements(command: string): string[] | null {
+  const input = command.replace(/\\\r?\n/g, '');
+  const statements: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]!;
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (char === '"' || char === "'") {
+      if (!quote) quote = char;
+      else if (quote === char) quote = null;
+      continue;
+    }
+    if (quote || ![';', '\n', '&', '|'].includes(char)) continue;
+    if ((char === '&' || char === '|') && input[index + 1] !== char) continue;
+    statements.push(input.slice(start, index).trim());
+    if (char === '&' || char === '|') index += 1;
+    start = index + 1;
+  }
+  if (quote || escaped) return null;
+  statements.push(input.slice(start).trim());
+  return statements.filter(Boolean);
+}
+
 function isInstallerPipeline(command: string): boolean {
   const match = /^curl[ \t]+-fsSL[ \t]+(?:"([^"]+)"|'([^']+)'|([^ \t]+))[ \t]*\|[ \t]*(.+)$/.exec(command.trim());
   if (!match) return false;

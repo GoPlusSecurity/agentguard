@@ -525,6 +525,11 @@ This Skill documents the AgentGuard workflow. It is not a security boundary.
 Enforcement comes from the synchronous native hooks in \`.codex/hooks.json\`
 after the user reviews and trusts them with \`/hooks\`.
 
+Run AgentGuard CLI commands such as \`agentguard status\` in their own tool
+call. Read documentation or local files in separate calls before or after the
+CLI call. A shell command that combines them has one merged result, so the
+hook must inspect the file content as well as AgentGuard's output.
+
 When a hook denies an action that requires approval, show the action id and
 redacted reason to the user. The user may approve it from their own terminal
 with \`agentguard approve --action-id <id> --once\`, then explicitly retry the
