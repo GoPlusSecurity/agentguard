@@ -13,7 +13,7 @@ import {
 } from '../runtime/public-search.js';
 import { redactText } from '../runtime/redaction.js';
 import { isAgentGuardApprovalCommand } from '../runtime/protect.js';
-import { isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
+import { isAgentGuardOwnedOutputSequence, isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 import { planDshEnforcement, type DshRuntimePhase } from './enforcement-plan.js';
 import {
   mergeDshPostDecisions,
@@ -238,7 +238,8 @@ export function buildDshRuntimeAction(
 }
 
 function isDshAgentGuardCliAction(action: RuntimeAction): boolean {
-  return action.actionType === 'shell' && isStandaloneAgentGuardCliCommand(action.input);
+  return action.actionType === 'shell'
+    && (isStandaloneAgentGuardCliCommand(action.input) || isAgentGuardOwnedOutputSequence(action.input));
 }
 
 export async function observeDshToolCall(

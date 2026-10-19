@@ -7,7 +7,7 @@ import { consumeApprovedApproval, writePendingApproval, type ApprovalRecord } fr
 import { flushEventSpool, spoolEvent, writeAuditLog } from './audit.js';
 import { evaluateRuntimeAction } from './decision.js';
 import { isAgentGuardCliCommand, isAgentGuardOwnedOutputCommand, isAgentGuardOwnedOutputResult,
-  isMixedAgentGuardCliCommand,
+  isAgentGuardOwnedOutputSequence, isMixedAgentGuardCliCommand,
   isStandaloneAgentGuardCliCommand } from './self-command.js';
 import { redactText, summarizeSensitiveData } from './redaction.js';
 import { maskAgentGuardPublicOutputForInspection, redactTextPreservingSavedActivationUrl } from './self-output.js';
@@ -127,15 +127,16 @@ export async function protectAction(options: ProtectOptions): Promise<ProtectRes
   }
   decision = enforceNativeHookDecision(action, decision, selfApprovalAttempt);
   if (mixedAgentGuardCommand) {
+    const reason = {
+      code: 'AGENTGUARD_MIXED_COMMAND', severity: 'high' as const,
+      title: 'Separate AgentGuard CLI call required',
+      description: 'Run the AgentGuard CLI command in its own tool call, apart from other shell commands.',
+    };
     decision = {
       ...decision,
       decision: 'block', policyDecision: 'block', riskScore: Math.max(60, decision.riskScore),
       riskLevel: decision.riskLevel === 'critical' ? 'critical' : 'high',
-      reasons: [{
-        code: 'AGENTGUARD_MIXED_COMMAND', severity: 'high',
-        title: 'Separate AgentGuard CLI call required',
-        description: 'Run the AgentGuard CLI command in its own tool call, apart from other shell commands.',
-      }],
+      reasons: decision.decision === 'block' ? [...decision.reasons, reason] : [reason],
     };
   }
   const approvedGrant = canEnforce && !postToolCall && decision.decision === 'require_approval'
@@ -238,7 +239,8 @@ function nativeAgentGuardSelfOutput(
 }
 
 function isAgentGuardRuntimeAction(action: RuntimeAction): boolean {
-  return action.actionType === 'shell' && isAgentGuardCliCommand(action.input);
+  return action.actionType === 'shell'
+    && (isAgentGuardCliCommand(action.input) || isAgentGuardOwnedOutputSequence(action.input));
 }
 
 export function isAgentGuardApprovalCommand(action: RuntimeAction): boolean {

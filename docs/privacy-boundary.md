@@ -33,8 +33,10 @@ markers can be imitated by another script; this is the accepted limit of
 attributing a merged shell result without a trusted process identity. In Claude Code,
 `PostToolBatch` excludes the whole recognized call from its inspection copy,
 while retaining the host's original result. Other calls in a mixed batch remain
-subject to the normal privacy gate. Compound commands, unverified paths, and
-unrelated tools retain ordinary protection. The installer and `agentguard
+subject to the normal privacy gate. A shell sequence made entirely of verified
+AgentGuard CLI calls is also AgentGuard-owned. Compound calls that include any
+other command, unverified paths, and unrelated tools retain ordinary protection.
+The installer and `agentguard
 approve` still receive their normal checks before execution.
 
 For Codex and Claude Code, a pre-tool hook rejects a shell call that joins an

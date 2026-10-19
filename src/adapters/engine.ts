@@ -7,7 +7,7 @@ import {
   getSkillTrustPolicy,
   isActionAllowedByCapabilities,
 } from './common.js';
-import { isAgentGuardCliCommand } from '../runtime/self-command.js';
+import { isAgentGuardCliCommand, isAgentGuardOwnedOutputSequence } from '../runtime/self-command.js';
 
 /**
  * Evaluate a hook event using the common AgentGuard decision engine.
@@ -125,5 +125,6 @@ export async function evaluateHook(
 function isAgentGuardHookCommand(adapter: HookAdapter, input: HookInput): boolean {
   if (adapter.mapToolToActionType(input.toolName) !== 'exec_command') return false;
   const command = input.toolInput.command;
-  return typeof command === 'string' && isAgentGuardCliCommand(command);
+  return typeof command === 'string'
+    && (isAgentGuardCliCommand(command) || isAgentGuardOwnedOutputSequence(command));
 }

@@ -189,6 +189,25 @@ describe('Claude Code native lifecycle hooks', () => {
     assert.equal(standalone, null);
   });
 
+  it('passes an all-AgentGuard command sequence through native hooks', async () => {
+    const fixture = lifecycleFixture();
+    const command = 'agentguard status && agentguard doctor';
+    const base = { session_id: 'sess-own-sequence', cwd: fixture.root,
+      tool_name: 'Bash', tool_input: { command } };
+    const pre = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      rawInput: { ...base, hook_event_name: 'PreToolUse' } });
+    const post = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      rawInput: { ...base, hook_event_name: 'PostToolUse',
+        tool_response: { stdout: 'api_key=sk-own-sequence-1234567890' } } });
+    const batch = await protectAction({ config: fixture.config, agentHost: 'claude-code',
+      rawInput: { hook_event_name: 'PostToolBatch', session_id: 'sess-own-sequence',
+        cwd: fixture.root, tool_calls: [{ ...base,
+          tool_response: 'api_key=sk-own-sequence-1234567890' }] } });
+    assert.equal(pre, null);
+    assert.equal(post, null);
+    assert.equal(batch, null);
+  });
+
   it('keeps wrapped status output through PostToolBatch and checks unrelated secrets', async () => {
     const fixture = lifecycleFixture();
     const output = 'Config: <agentguard-home>/config.json\n'

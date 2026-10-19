@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { installAgentTemplates } from '../installers.js';
-import { isAgentGuardOwnedOutputResult, isMixedAgentGuardCliCommand,
+import { isAgentGuardOwnedOutputResult, isAgentGuardOwnedOutputSequence, isMixedAgentGuardCliCommand,
   isStandaloneAgentGuardCliCommand } from '../runtime/self-command.js';
 
 const installerCommand = `curl -fsSL https://${['staging', 'example', 'invalid'].join('.')}/install.sh | bash`;
@@ -61,8 +61,17 @@ describe('installed Codex native hooks', () => {
     assert.equal(isMixedAgentGuardCliCommand('cat guide.md && agentguard status\n'), true);
     assert.equal(isMixedAgentGuardCliCommand("bash -lc 'cat guide.md && agentguard status'"), true);
     assert.equal(isMixedAgentGuardCliCommand("printf 'agentguard status; cat guide.md'"), false);
+    assert.equal(isMixedAgentGuardCliCommand("cat <<'EOF'\nagentguard status\nEOF"), false);
+    assert.equal(isMixedAgentGuardCliCommand('echo done # && agentguard status'), false);
+    assert.equal(isMixedAgentGuardCliCommand('echo $(printf done && agentguard status)'), false);
     assert.equal(isMixedAgentGuardCliCommand('echo agentguard status && cat guide.md'), false);
     assert.equal(isMixedAgentGuardCliCommand('agentguard status'), false);
+    assert.equal(isMixedAgentGuardCliCommand('agentguard status && agentguard doctor'), false);
+    assert.equal(isAgentGuardOwnedOutputSequence('agentguard status && agentguard doctor'), true);
+    assert.equal(isAgentGuardOwnedOutputSequence("sh -c 'agentguard status && agentguard doctor'"), true);
+    assert.equal(isMixedAgentGuardCliCommand("sh -c 'agentguard status && agentguard doctor' && cat guide.md"), true);
+    assert.equal(isAgentGuardOwnedOutputSequence('cat guide.md && agentguard status'), false);
+    assert.equal(isAgentGuardOwnedOutputSequence('a=agentguard; "$a" status'), false);
     assert.equal(isMixedAgentGuardCliCommand('cat guide.md && /tmp/agentguard status'), false);
   });
 
@@ -384,6 +393,21 @@ describe('installed Codex native hooks', () => {
     assert.equal(existsSync(join(fixture.home, 'audit.jsonl')), false);
   });
 
+  it('keeps a sequence of only AgentGuard commands usable', () => {
+    const fixture = installFixture();
+    const command = 'agentguard status && agentguard doctor';
+    const base = { session_id: 'sess_own_sequence', turn_id: 'turn_own_sequence',
+      cwd: fixture.project, tool_name: 'Bash', tool_use_id: 'tool_own_sequence',
+      tool_input: { command } };
+    const pre = fixture.run('agentguard-pre-tool.sh', { ...base, hook_event_name: 'PreToolUse' });
+    assert.equal(pre.status, 0);
+    assert.equal(pre.stdout.trim(), '');
+    const post = fixture.run('agentguard-post-tool.sh', { ...base, hook_event_name: 'PostToolUse',
+      tool_response: { output: 'api_key=sk-own-sequence-1234567890', exit_code: 0 } });
+    assert.equal(post.status, 0);
+    assert.equal(post.stdout.trim(), '');
+  });
+
   it('does not block the real status output when it contains documented key placeholders', () => {
     const fixture = installFixture();
     const status = fixture.runCli('status');
@@ -448,6 +472,16 @@ describe('installed Codex native hooks', () => {
     assert.equal(denial.permissionDecision, 'deny');
     assert.match(denial.permissionDecisionReason, /separate tool call/);
     assert.match(denial.permissionDecisionReason, /AGENTGUARD_MIXED_COMMAND/);
+    const dangerous = fixture.run('agentguard-pre-tool.sh', {
+      hook_event_name: 'PreToolUse', session_id: 'sess_compound_dangerous',
+      turn_id: 'turn_compound_dangerous', cwd: fixture.project,
+      tool_name: 'Bash', tool_use_id: 'tool_compound_dangerous',
+      tool_input: { command: 'rm -rf / && agentguard status' },
+    });
+    assert.equal(dangerous.status, 0);
+    const dangerousReason = JSON.parse(dangerous.stdout).hookSpecificOutput.permissionDecisionReason;
+    assert.match(dangerousReason, /AGENTGUARD_MIXED_COMMAND/);
+    assert.match(dangerousReason, /DESTRUCTIVE_COMMAND/);
     const standalone = fixture.run('agentguard-pre-tool.sh', {
       hook_event_name: 'PreToolUse', session_id: 'sess_standalone_pre',
       turn_id: 'turn_standalone_pre', cwd: fixture.project,

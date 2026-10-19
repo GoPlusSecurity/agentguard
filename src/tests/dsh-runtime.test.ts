@@ -152,6 +152,20 @@ describe('DSH runtime Phase 2A observer', () => {
     assert.equal(after, null);
   });
 
+  it('passes an all-AgentGuard shell sequence without scanning its result', async () => {
+    const statusExec = execution({ arguments: { command: 'agentguard status && agentguard doctor' } });
+    const dependencies = {
+      loadAgentGuardConfig: () => config,
+      fetchPolicyFor: () => undefined,
+      writeAudit() {},
+    };
+    assert.equal(await protectDshToolCall(statusExec, dependencies), null);
+    assert.equal(await protectDshToolResult(statusExec, {
+      isError: false,
+      content: [{ type: 'text', text: 'api_key=sk-own-sequence-1234567890' }],
+    }, dependencies), null);
+  });
+
   it('keeps wrapped self-approval commands in the DSH pre-execute policy path', async () => {
     const dependencies = {
       loadAgentGuardConfig: () => config,
